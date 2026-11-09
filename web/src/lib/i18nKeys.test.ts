@@ -305,12 +305,22 @@ test("the scan is looking at a real tree and resolving the bulk of it", () => {
   //     Both were reduced to ONE site each before this raise (a chip resolves its
   //     label once and sends that same string; the noun is resolved once and
   //     interpolated into both tenses), so the growth is the irreducible part only.
+  //   * 63 → 65 (card t_52429d6f), the two action buttons in app/sales/page.tsx
+  //     (the row cell and the detail drawer), each `t(a.labelKey as Key)` where
+  //     `a.labelKey` is the `label_key` the SERVER sends on a sale's
+  //     available_events. Which events exist was moved into the Go lifecycle
+  //     table precisely so the page stops guessing; the key therefore arrives on
+  //     the wire, and no static scan can name it. Paid for by
+  //     src/lib/saleActions.test.ts: it reads every `LabelKey:` out of
+  //     api/internal/lifecycle/sales.go and fails when one is missing from any of
+  //     the five locales — the same trade the chatProposal/chatsSteps sites make,
+  //     so a new button cannot ship as a raw key or a blank label.
   //
-  // 63 is MEASURED on the merged tree (main + this branch), not the sum guessed in
+  // 65 is MEASURED on the merged tree (main + this branch), not the sum guessed in
   // the card: the assertion below names tree.dynamic.length when it is exceeded.
   assert.ok(
-    tree.dynamic.length <= 63,
-    `${tree.dynamic.length} call sites are no longer statically resolved (ceiling 63). ` +
+    tree.dynamic.length <= 65,
+    `${tree.dynamic.length} call sites are no longer statically resolved (ceiling 65). ` +
       `The guard covers that many fewer keys than it did — see the dynamic list in src/lib/i18nKeys.ts:\n  ` +
       tree.dynamic.map((d) => `${rel(d.file)}:${d.line} ${d.expr.trim()}`).join("\n  "),
   );

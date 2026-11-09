@@ -49,6 +49,13 @@
      cannot be used for text. card t_524d186d: this is danger-coloured TEXT:
        white 6.42 | --jf-danger-bg 5.87 (the ⋯ menu item's hover) */
   --jf-danger-text: #bf000f;
+  /* The FILL a solid danger CTA is painted with, white label on top (6.52:1).
+     It is a separate name from --jf-danger-text because the two roles move in
+     OPPOSITE directions in dark: text gets LIGHTER (--jf-danger-text #fca5a5 on
+     a dark card) while a fill the white label sits on must get no lighter than
+     this (dark: #b91c1c, 6.47:1). Reusing one value for both made a danger
+     button in the dark palette a white label on #fca5a5 — 1.89:1, named by axe. */
+  --jf-danger-fill: #bf000f;
   --jf-danger-bg: #fef2f2;
   /* The "unsaved changes" dot was amber-500 (#f59e0b) = 2.15 on white, far
      below 4.5. amber-700: 5.02 on white, 4.72 on --jf-bg. */
@@ -150,6 +157,127 @@
      with" and would move with a dark theme, which would erase this glyph. */
   --jf-on-color: #ffffff;
 
+  /* ── the design-system layer (card t_f2e231d3) ───────────────────────────
+     Every token below is ADDITIVE: no existing `--jf-*` name changes value or
+     meaning, because `--jf-primary/bg/text/muted/border` are consumed across the
+     whole app. Three families live here:
+
+       1. SEMANTIC PAIRS for the new design direction (variant A) — the roles a
+          primitive needs and the app had no name for. Each pair is measured in
+          `.jf`-free terms in `src/lib/designTokenRatios.ts`, which the gallery at
+          /design renders and `designTokens.test.ts` recomputes from THIS file,
+          so a value changed here without re-measuring fails the unit suite.
+       2. THE SCALES (type, space, radius, shadow). Theme-invariant on purpose:
+          they are geometry, not colour, and declaring them twice would create
+          two sources for one step. The dark block below overrides COLOUR only.
+       3. The `@theme` block further down maps these names to Tailwind utilities
+          (`text-jf-read-*`, `p-jf-*`, `rounded-jf-*`, `shadow-jf-*`). The names
+          there differ from the legacy rename scale (`text-jf-4xs` … `text-jf-md`,
+          9-15px) because those utilities must keep their UNPAIRED line-height:
+          folding the new paired line-height into them would move every existing
+          line box, which is a redesign, not a token.
+
+     `--jf-surface-2` is the second surface (a card inside a card, a table's
+     striped row, a code block's backdrop). `--jf-border-strong` is the edge a
+     control needs to read as a control (3:1 is the WCAG 1.4.11 floor for a
+     graphical object; `--jf-border` is a divider, not an edge).
+     `--jf-success-bg` is the tint behind a success message; `--jf-success`
+     itself is a MARKER colour (white on it is 2.54:1 — never a text fill).
+     `--jf-info` is the informational accent the app had no token for
+     (everything informational was painted with the brand indigo, so "info" and
+     "selected" were the same colour). `--jf-code-bg` is the inline-code and
+     `<pre>` backdrop. */
+  --jf-surface-2: #f1f2f5;
+  --jf-border-strong: #c7ccd6;
+  --jf-success-bg: #ecfdf5;
+  --jf-warning: #d97706;
+  --jf-info: #1d4ed8;
+  --jf-code-bg: #f4f5f7;
+
+  /* Type scale. Each step carries its PAIRED line-height, so a primitive sets
+     one utility and cannot pick a size without the line box that belongs to it
+     (`--jf-text-md` at 16px on the 24px baseline grid). */
+  --jf-text-xs: 12px;
+  --jf-text-xs--lh: 16px;
+  --jf-text-sm: 14px;
+  --jf-text-sm--lh: 20px;
+  --jf-text-md: 16px;
+  --jf-text-md--lh: 24px;
+  --jf-text-lg: 18px;
+  --jf-text-lg--lh: 28px;
+  --jf-text-xl: 20px;
+  --jf-text-xl--lh: 28px;
+  --jf-text-2xl: 24px;
+  --jf-text-2xl--lh: 32px;
+  --jf-text-3xl: 30px;
+  --jf-text-3xl--lh: 36px;
+
+  /* Space scale: a 4px grid, step N = N x 4px. */
+  --jf-space-1: 4px;
+  --jf-space-2: 8px;
+  --jf-space-3: 12px;
+  --jf-space-4: 16px;
+  --jf-space-5: 20px;
+  --jf-space-6: 24px;
+  --jf-space-7: 28px;
+  --jf-space-8: 32px;
+  --jf-space-9: 36px;
+  --jf-space-10: 40px;
+  --jf-space-11: 44px;
+  --jf-space-12: 48px;
+
+  /* Radius. `full` is the pill (9999px, the value the switch and the avatar
+     already used inline). */
+  --jf-radius-sm: 4px;
+  --jf-radius-md: 8px;
+  --jf-radius-lg: 12px;
+  --jf-radius-xl: 16px;
+  --jf-radius-full: 9999px;
+
+  /* Elevation. Three steps, each a LAYERED shadow (a tight contact shadow plus
+     a wider ambient one) so a card at rest reads as raised without a visible
+     grey halo. The colour is the text colour at low alpha; the dark block
+     re-declares the same three with stronger alpha, because a 6% black shadow
+     on a #0f1115 page is invisible. */
+  --jf-shadow-1: 0 1px 2px rgba(23, 24, 28, 0.06);
+  --jf-shadow-2: 0 2px 8px rgba(23, 24, 28, 0.1);
+  --jf-shadow-3: 0 8px 24px rgba(23, 24, 28, 0.14);
+
+  /* ── INK BAND (card t_09f60795) ────────────────────────────────────────────
+     The landing hero's "stage": a dark panel the white order-form card sits
+     on (variant A, product-led). This is a BAND, not a theme role: it is a
+     fixed slab painted the same whichever theme wraps it, so it is declared
+     ONCE here, in `:root`, and deliberately NOT re-declared in the
+     `[data-theme="dark"]` block below. Its ink is measured against the band's
+     own two fills, never against the page, so a theme that moves `--jf-bg`
+     cannot move it — while a second declaration site would create two sources
+     for one colour. (The MOTION note below says why there is only one
+     `:root`.)
+
+     Every pairing is MEASURED and recorded in `src/lib/designTokenRatios.ts`
+     (`LIGHT_CONTRASTS`), which `designTokens.test.ts` recomputes from THIS
+     file — a value changed here without re-measuring fails the unit suite.
+     The light-theme tokens cannot be reused on the band: `--jf-text` on
+     `--jf-ink` is 1.08:1 (invisible) and `--jf-muted` on it is 3.94:1 (below
+     the 4.5:1 AA floor for the 12-14px text this band carries).
+
+       --jf-ink-text   #f2f5fb  17.48:1 on --jf-ink, 15.72:1 on --jf-ink-raised
+       --jf-ink-muted  #a6b0c3   8.75:1 on --jf-ink,  7.87:1 on --jf-ink-raised
+       --jf-ink-accent #a99dff   8.14:1 on --jf-ink   (the terminal's "you" cue
+                                 and the card's kicker line)
+       --jf-ink-ok     #7ee0b0  11.98:1 on --jf-ink   (the agent's reply line)
+       --jf-ink-border #232c3f   1.37:1 on --jf-ink   decorative hairline (not
+                                 text, not judged — 1.4.11 does not apply)
+     In the default (light) theme the order-form card inside the band paints
+     `--jf-surface`: --jf-text on it is 17.74:1, --jf-muted 4.83:1. */
+  --jf-ink: #0a0f1e;
+  --jf-ink-raised: #141b2c;
+  --jf-ink-border: #232c3f;
+  --jf-ink-text: #f2f5fb;
+  --jf-ink-muted: #a6b0c3;
+  --jf-ink-accent: #a99dff;
+  --jf-ink-ok: #7ee0b0;
+
   /* ── MOTION (card t_d5336ec6) ──────────────────────────────────────────────
      Declared HERE, in the one `:root`, because a second top-level `:root` block
      did not survive the production CSS pipeline. Measured on the built chunk
@@ -183,6 +311,71 @@
   --jf-stagger-cap: 100ms;
 }
 
+/* ── the dark theme (card t_f2e231d3) ────────────────────────────────────────
+   OPT-IN, not `prefers-color-scheme`. Every page in the app is designed and
+   measured against the light palette, and a media-query theme would repaint the
+   whole product for any visitor whose OS is in dark mode — a visual change no
+   card asked for and no page was measured in. `[data-theme="dark"]` is scoped:
+   put it on a wrapper and its subtree reads these values, so the /design gallery
+   can render the light and dark palettes side by side today and a future card can
+   turn the product dark by setting one attribute.
+
+   The block re-declares a role, never a usage: every name is one the light block
+   already owns, so a primitive written against `--jf-surface` works in both. The
+   ratios that hold each pair to AA are in `src/lib/designTokenRatios.ts`
+   (`DARK_CONTRASTS`) and are recomputed from THIS block by
+   `src/lib/designTokens.test.ts` — a pair that fails its floor here fails the
+   unit suite, not a reader's eyes. */
+[data-theme="dark"] {
+  --jf-bg: #0f1115;
+  --jf-surface: #171a21;
+  --jf-surface-2: #1f232c;
+  --jf-border: #2a2f3a;
+  --jf-border-strong: #3d4452;
+  --jf-text: #e9ebef;
+  --jf-text-secondary: #c6cbd4;
+  --jf-text-tertiary: #a8aeb9;
+  --jf-muted: #9aa2ae;
+  /* The fill keeps its light-theme value: white on it is 4.70:1, which the dark
+     background does not change (a fill/label pair is measured against the fill,
+     not the page). The STEPS that carry or sit on the brand (text, tint, the
+     interactive accent, the focus ring) move lighter, because the light-theme
+     values sit on a #0f1115 page at 3.5-4.2:1 — under AA for text. */
+  --jf-primary: #5e6ad2;
+  --jf-primary-hover: #616dd5;
+  --jf-primary-active: #454ea8;
+  --jf-primary-strong: #a5b4fc;
+  --jf-primary-on-tint: #c7d2fe;
+  --jf-muted-on-tint: #b4bac6;
+  --jf-accent: #8b93ff;
+  --jf-focus-ring: #8b93ff;
+  --jf-switch-off: #7b8494;
+  --jf-danger: #f87171;
+  --jf-danger-text: #fca5a5;
+  --jf-danger-fill: #b91c1c;
+  --jf-danger-bg: #2a1518;
+  --jf-success: #34d399;
+  --jf-success-bg: #0f2a22;
+  --jf-warning: #fbbf24;
+  --jf-warning-text: #fcd34d;
+  --jf-warning-bg: #2a2110;
+  --jf-warning-bg-hover: #3a2d14;
+  --jf-info: #93c5fd;
+  --jf-code-bg: #1b1f27;
+  --jf-bg-soft: #12151a;
+  --jf-chart-grid: #262b35;
+  --jf-chart-axis: #8b93a1;
+  /* 8-digit values composite against whatever is behind them, so the alpha is
+     halved here rather than the RGB inverted: a dark page needs LESS tint, not a
+     light one. */
+  --jf-primary-tint: #5e6ad233;
+  /* `--jf-on-color` is NOT overridden: it names the ink painted on a COLOURED
+     fill, and the fills above are still dark enough for white. */
+  --jf-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --jf-shadow-2: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --jf-shadow-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
 /* ── the type scale (card t_e2f3a553) ────────────────────────────────────────
    Typography was written as raw px in 250 places, in six ad-hoc sizes. These
    are the SAME six pixel values under a name, so the rendered page does not
@@ -204,6 +397,51 @@
   --text-jf-xs: 12px;
   --text-jf-sm: 13px;
   --text-jf-md: 15px;
+
+  /* The READING scale (card t_f2e231d3). These entries add utilities, they do
+     not redefine the six above: `text-jf-read-sm` is 14px/20px while
+     `text-jf-sm` stays 13px with NO paired line-height, which is what 250 legacy
+     call sites depend on. The value is not repeated here — each alias points at
+     the `--jf-text-*` token in `:root`, so there is one place to change a step
+     and the pair can never be half-updated. */
+  --text-jf-read-xs: var(--jf-text-xs);
+  --text-jf-read-xs--line-height: var(--jf-text-xs--lh);
+  --text-jf-read-sm: var(--jf-text-sm);
+  --text-jf-read-sm--line-height: var(--jf-text-sm--lh);
+  --text-jf-read-md: var(--jf-text-md);
+  --text-jf-read-md--line-height: var(--jf-text-md--lh);
+  --text-jf-read-lg: var(--jf-text-lg);
+  --text-jf-read-lg--line-height: var(--jf-text-lg--lh);
+  --text-jf-read-xl: var(--jf-text-xl);
+  --text-jf-read-xl--line-height: var(--jf-text-xl--lh);
+  --text-jf-read-2xl: var(--jf-text-2xl);
+  --text-jf-read-2xl--line-height: var(--jf-text-2xl--lh);
+  --text-jf-read-3xl: var(--jf-text-3xl);
+  --text-jf-read-3xl--line-height: var(--jf-text-3xl--lh);
+
+  /* Space, radius and elevation as utilities: `p-jf-4`, `gap-jf-2`,
+     `rounded-jf-lg`, `shadow-jf-2`. Same indirection as the text scale — the
+     value lives in `:root`. */
+  --spacing-jf-1: var(--jf-space-1);
+  --spacing-jf-2: var(--jf-space-2);
+  --spacing-jf-3: var(--jf-space-3);
+  --spacing-jf-4: var(--jf-space-4);
+  --spacing-jf-5: var(--jf-space-5);
+  --spacing-jf-6: var(--jf-space-6);
+  --spacing-jf-7: var(--jf-space-7);
+  --spacing-jf-8: var(--jf-space-8);
+  --spacing-jf-9: var(--jf-space-9);
+  --spacing-jf-10: var(--jf-space-10);
+  --spacing-jf-11: var(--jf-space-11);
+  --spacing-jf-12: var(--jf-space-12);
+  --radius-jf-sm: var(--jf-radius-sm);
+  --radius-jf-md: var(--jf-radius-md);
+  --radius-jf-lg: var(--jf-radius-lg);
+  --radius-jf-xl: var(--jf-radius-xl);
+  --radius-jf-full: var(--jf-radius-full);
+  --shadow-jf-1: var(--jf-shadow-1);
+  --shadow-jf-2: var(--jf-shadow-2);
+  --shadow-jf-3: var(--jf-shadow-3);
 }
 
 /* Third-party provider brand marks on the login page (card t_e2f3a553).
@@ -240,6 +478,20 @@ body {
   outline: 2px solid var(--jf-focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* The design-system controls are 8px (`--jf-radius-md`), but the rule above sets
+   `border-radius: 4px` and is UNLAYERED, so it outranks any Tailwind radius
+   utility on a focused element — the ring would snap the control's corners to 4px
+   at the moment it is focused. `.jf-control` (the shared class on Input,
+   Textarea, Select and Button) re-declares the radius at the SAME specificity from
+   a block that sits BELOW the rule above, exactly the way `.jf-switch` below
+   keeps its pill radius (card t_b73eee21). If this block is ever moved above the
+   global rule, a focused control renders with square-ish corners.
+   4px is still the radius for everything else (links, legacy buttons), which is
+   why this is scoped rather than changed globally. */
+.jf-control:focus-visible {
+  border-radius: var(--jf-radius-md);
 }
 
 /* utility: card */

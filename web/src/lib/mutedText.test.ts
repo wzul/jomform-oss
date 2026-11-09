@@ -383,8 +383,11 @@ const PALETTE = tailwindPalette();
 
 /** The app's own custom properties (`--jf-muted` & co) out of `globals.css`. */
 const GLOBALS_CSS = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+// `:root` only — `[data-theme="dark"]` re-declares the same names for the dark
+// palette, and last-wins over the whole file would read the LIGHT tree as dark.
+const GLOBALS_ROOT = GLOBALS_CSS.split('\n[data-theme="dark"] {')[0];
 const CSS_TOKENS = new Map<string, RGB>();
-for (const m of GLOBALS_CSS.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
+for (const m of GLOBALS_ROOT.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
   const rgb = parseHex(m[2]);
   if (rgb) CSS_TOKENS.set(m[1], rgb);
 }

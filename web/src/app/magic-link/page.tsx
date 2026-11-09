@@ -2,10 +2,10 @@
 
 // Magic-link sign-in page (issue #73): token from query param, calls
 // POST /v1/auth/magic-link/verify, redirects to dashboard on success.
-import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { Button, Card } from "../../components/ui";
 import { apiErr } from "../../lib/apiErr";
 import { resolvePostLogin } from "../../lib/postLogin";
 import { browserNextTarget } from "../../lib/nextTarget";
@@ -101,23 +101,23 @@ function MagicLinkForm() {
         <h1 className="text-xl font-semibold text-[var(--jf-text)]">{t("magic.title")}</h1>
       </div>
 
-      <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+      {/* Card t_8f20418d: the surface was a private `rounded-xl border bg-white
+          p-6 shadow-[…]` — Card is that decision made once (token fill, token
+          edge, token elevation). */}
+      <Card className="p-jf-6">
         {error ? (
           <div className="space-y-3">
             <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-jf-sm text-red-700">
               {error}
             </p>
-            <Link
-              href="/login"
-              className="block w-full rounded-md bg-[var(--jf-primary)] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
-            >
+            <Button as="a" href="/login" className="w-full">
               {t("magic.goLogin")}
-            </Link>
+            </Button>
           </div>
         ) : (
           <p className="text-center py-4 text-sm text-[var(--jf-muted)]">…</p>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

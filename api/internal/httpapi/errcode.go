@@ -39,6 +39,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 	"github.com/wzul/jomform/api/internal/mcpsrv"
 	"github.com/wzul/jomform/api/internal/objstore"
 )
@@ -587,9 +588,21 @@ func ErrCodeFor(msg string) string {
 
 // codeFor is the error path's own lookup: the specific code when one exists,
 // otherwise the class code for the status being written.
+//
+// A lifecycle refusal names its own stable code at the end of the message
+// ("… (lifecycle.illegalTransition)"), because that code belongs to the state
+// machine rather than to this door: REST, MCP and any future surface refuse the
+// same move, and the dashboard translates by code. Reading it off the message
+// keeps one source (the typed error in internal/lifecycle) instead of a second
+// table entry that could drift from it.
 func codeFor(status int, msg string) string {
 	if c := ErrCodeFor(msg); c != "" {
 		return c
+	}
+	for _, machine := range []string{lifecycle.CodeIllegalTransition, lifecycle.CodeTransitionRefused} {
+		if strings.Contains(msg, "("+machine+")") {
+			return machine
+		}
 	}
 	return classCode(status)
 }

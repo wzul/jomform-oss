@@ -182,6 +182,7 @@ HOW TO ANSWER
 - When proposing a change, read the object first with a read tool so the
   arguments you pass are real ids and real current values — a proposal built on a
   guessed id will fail when the user confirms, which wastes their decision.
+  available_events on the row decides which sale actions can succeed (enabled=false says why).
 - When propose_write is refused, the refusal names what was wrong with the
   arguments. Read it, correct the call and propose again. If you still cannot, say
   so in the user's language and tell them what you need from them — the exact name,

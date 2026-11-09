@@ -32,6 +32,9 @@ func New(deps *Deps, chipClient *chip.Client, decryptKey []byte, pay *payments.S
 		startedAt: time.Now(),
 	}
 	s.registerTools()
+	// The lifecycle table is also a resource, so a client can read it without
+	// spending a tool call (and agents can list it under resources/list).
+	s.registerLifecycleResource()
 	return s
 }
 
@@ -106,6 +109,14 @@ func (s *Server) registerTools() {
 		Name:        "get_sales_summary",
 		Description: "Sales summary: counts by status (including refunded), refunded_sen (total refunded) and revenue_sen (net value after refunds) — issue #518.",
 	}, s.salesSummary)
+
+	// The lifecycle table (card t_52429d6f). An agent can ask what a state
+	// accepts BEFORE it proposes an action, instead of learning the rule from a
+	// refusal. The answer comes from the same Go table the write paths apply.
+	addTool(s, &mcp.Tool{
+		Name:        "describe_lifecycle",
+		Description: "Describe an aggregate's declarative lifecycle table: every state, the events it accepts, the state each event lands in, whether a guard can refuse it, and the dashboard label key of a person's action. With id (a sale ref_code) the answer is that sale's current state plus available_events — the events it accepts right now, each with enabled and, when a guard refuses it, the English reason; an entry with an empty label_key is a gateway callback (pay, fail), not an action a caller can invoke. Use this BEFORE proposing or attempting a state change: the same table decides what the write endpoints accept, so an enabled=false event WILL be refused.",
+	}, s.describeLifecycle)
 
 	addTool(s, &mcp.Tool{
 		Name:        "confirm_sale",

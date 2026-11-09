@@ -101,6 +101,14 @@ const PAGES = [
   { name: "docs-guides-qr-table-ordering", path: "/docs/guides/qr-table-ordering" },
   { name: "docs-guides-tuition-class", path: "/docs/guides/tuition-class" },
   { name: "docs-guides-wedding-rsvp", path: "/docs/guides/wedding-rsvp" },
+  // Card t_f2e231d3: the design-system gallery. It is PUBLIC (no entry in the
+  // middleware matcher, like /brand), it is the manifest the primitive layer is
+  // read from, and it renders every state of every control — loading, disabled,
+  // error, the dark palette island — so it is the one page where a primitive's
+  // contrast or naming regression is visible to axe at all. A public page that no
+  // scan visits is a page that ships unnoticed; `app/design/` is not a docs route,
+  // so docsA11y.test.ts would not have added it.
+  { name: "design", path: "/design" },
 ];
 
 for (const page of PAGES) {

@@ -18,6 +18,7 @@ import (
 	"github.com/wzul/jomform/api/internal/customform"
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/textutil"
 	"github.com/wzul/jomform/api/internal/urlguard"
@@ -2114,6 +2115,17 @@ type saleRow struct {
 	RefundedSen    int64  `json:"refunded_sen"`
 	OutstandingSen int64  `json:"outstanding_sen"`
 	RefundStatus   string `json:"refund_status"`
+
+	// AvailableEvents is the server's answer to "what may I do with this sale":
+	// every event the lifecycle table accepts from its current state, in a
+	// stable order, each with the dashboard's label key and — when a guard
+	// refuses it — enabled=false plus the English reason. The dashboard builds
+	// its action buttons from THIS list instead of re-deriving the rule from
+	// `status`, which is how the "the UI offers an action the API refuses"
+	// class of bug stops being possible. Emitted for every sale row, as [] when
+	// the state accepts nothing, so an absent field can never be mistaken for
+	// "no restrictions".
+	AvailableEvents []lifecycle.AvailableEvent `json:"available_events"`
 }
 
 type itemRow struct {
@@ -2144,6 +2156,22 @@ func (h *RESTHandlers) latestEmailStatuses(ctx context.Context, sales []*dbstore
 	}
 	for ref, e := range latest {
 		out[ref] = e.EventType
+	}
+	return out
+}
+
+// saleAvailableEvents is the ONE place a sale row's available_events are
+// derived, so the list, the detail read and the dashboard bundle cannot answer
+// differently. A nil sale (or an unknown state) yields an empty list, never
+// nil: the JSON field must always be an array, because the UI treats a MISSING
+// field as "the server did not say" and renders no actions at all.
+func saleAvailableEvents(s *dbstore.Sale) []lifecycle.AvailableEvent {
+	if s == nil {
+		return []lifecycle.AvailableEvent{}
+	}
+	out := lifecycle.SalesMachine.Available(s)
+	if out == nil {
+		return []lifecycle.AvailableEvent{}
 	}
 	return out
 }
@@ -2186,6 +2214,10 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		RefundedSen:    s.RefundedSen,
 		OutstandingSen: s.OutstandingSen(),
 		RefundStatus:   s.RefundStatus(),
+		// The server's own answer to "what may this sale do next". Derived here,
+		// at the one place a sale becomes a row, so the list, the detail read and
+		// the dashboard bundle cannot disagree.
+		AvailableEvents: saleAvailableEvents(s),
 	}
 	// Shipping phase 2: a sale that carries a delivery fee also carries where the
 	// fee CAME FROM. Read from the stored record, never re-derived: the record is
@@ -2440,6 +2472,28 @@ func (h *RESTHandlers) listSales(w http.ResponseWriter, r *http.Request, actx *A
 	})
 }
 
+// getSale returns ONE sale, including available_events (the lifecycle table's
+// answer for this record). Additive read, same ownership rule as the write
+// handlers: a sale outside the caller's account is a 404, never another
+// account's row.
+//
+// It exists because the dashboard and an agent both need to re-read a single
+// record after an action (the list is paged and filtered), and because
+// "what may I do with this sale" should not require fetching a page of them.
+func (h *RESTHandlers) getSale(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
+	ref := r.PathValue("ref")
+	sale, err := h.Sales.ByRefCode(r.Context(), ref)
+	if err != nil || sale.AccountID != actx.Account.ID {
+		writeErr(w, http.StatusNotFound, "sale not found")
+		return
+	}
+	row := toSaleRow(sale, "")
+	if statuses := h.latestEmailStatuses(r.Context(), []*dbstore.Sale{sale}); statuses != nil {
+		row.EmailStatus = statuses[sale.RefCode]
+	}
+	respond(w, http.StatusOK, row)
+}
+
 // saleEmailStatus returns the per-sale receipt email delivery timeline
 // (issue #106): Sent → Delivered → Opened → (Clicked), with timestamps,
 // sourced from email_delivery_events correlated to this sale's ref. The
@@ -2497,6 +2551,14 @@ func (h *RESTHandlers) captureSale(w http.ResponseWriter, r *http.Request, actx 
 		AmountSen *int64 `json:"amount_sen,omitempty"`
 	}
 	_ = decodeJSON(r, &in)
+	// The table decides whether this sale accepts a capture at all (and its
+	// guard requires an uncaptured authorization), so an illegal move never
+	// reaches the gateway.
+	if _, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventCapture); lerr != nil {
+		recordPaymentFailure("capture")
+		writePaymentErr(w, r, lerr)
+		return
+	}
 	if err := h.Pay.CaptureSale(r.Context(), sale, in.AmountSen); err != nil {
 		recordPaymentFailure("capture")
 		writePaymentErr(w, r, err)
@@ -2525,12 +2587,20 @@ func (h *RESTHandlers) releaseSale(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
+	// A release only means something on an uncaptured authorization; the table
+	// says so, so the check is the guard rather than an `if` in this handler.
+	res, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventRelease)
+	if lerr != nil {
+		recordPaymentFailure("release")
+		writePaymentErr(w, r, lerr)
+		return
+	}
 	if err := h.Pay.ReleaseSale(r.Context(), sale); err != nil {
 		recordPaymentFailure("release")
 		writePaymentErr(w, r, err)
 		return
 	}
-	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleCancelled); err != nil {
+	if err := h.Sales.SetStatus(r.Context(), sale.ID, res.To); err != nil {
 		respondErr(w, r, err)
 		return
 	}
@@ -2671,8 +2741,15 @@ func (h *RESTHandlers) bulkCaptureSales(w http.ResponseWriter, r *http.Request, 
 	ok, failed := 0, 0
 	for _, sale := range sales {
 		res := result{RefCode: sale.RefCode}
-		if !sale.SkipCapture || sale.CapturedAt != nil || sale.ChipPurchaseID == "" {
-			res.Error = "not an authorization awaiting capture"
+		if _, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventCapture); lerr != nil {
+			// The per-row sentence is what a merchant reads in the result
+			// panel, so a guard refusal keeps its own wording instead of
+			// gaining the machine-code suffix.
+			if refused, ok := lerr.(*lifecycle.TransitionRefusedError); ok {
+				res.Error = refused.Reason
+			} else {
+				res.Error = lerr.Error()
+			}
 		} else if err := h.Pay.CaptureSale(r.Context(), sale, nil); err != nil {
 			recordPaymentFailure("bulk_capture")
 			res.Error = paymentErrText(err)
@@ -2706,9 +2783,20 @@ func (h *RESTHandlers) confirmSale(w http.ResponseWriter, r *http.Request, actx 
 		writeErr(w, http.StatusNotFound, "sale not found")
 		return
 	}
-	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleConfirmed); err != nil {
-		respondErr(w, r, err)
+	// The table decides which states accept a confirmation (pending for a bank
+	// transfer, paid once the CHIP payment settled) and treats re-confirming a
+	// confirmed sale as a no-op, so the endpoint keeps its 200 without a second
+	// write.
+	res, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventConfirm)
+	if lerr != nil {
+		writeErr(w, http.StatusBadRequest, lerr.Error())
 		return
+	}
+	if res.Changed {
+		if err := h.Sales.SetStatus(r.Context(), sale.ID, res.To); err != nil {
+			respondErr(w, r, err)
+			return
+		}
 	}
 	// Issue #92: audit sale confirm.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "sale.confirmed", map[string]any{"ref_code": ref, "sale_id": sale.ID})

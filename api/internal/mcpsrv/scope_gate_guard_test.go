@@ -185,6 +185,16 @@ type parsedPackage struct {
 	// reads a registry smaller than the one the server serves.
 	decls map[string][]*ast.FuncDecl
 
+	// methods holds the selector names that are METHODS of this package (a
+	// declaration with a receiver). A selector call is only an edge to a
+	// method: a package-level function is called UNQUALIFIED in Go, so
+	// `errors.New(...)` can never be a call to this package's New. Matching a
+	// selector on `decls` alone made exactly that mistake — every handler that
+	// formats an error with errors.New "reached" New, and so reached every sink
+	// New could reach (measured: 20 read tools reported as store writers the
+	// day New gained a registration sink).
+	methods map[string]bool
+
 	// regs is EVERY addTool / mcp.AddTool call site the parser saw — including
 	// the ones whose tool argument it could not resolve. A registration shape
 	// the parser does not understand must fail by name and file:line
@@ -214,11 +224,12 @@ func parsePackage(t *testing.T) *parsedPackage {
 	}
 	fset := token.NewFileSet()
 	pkg := &parsedPackage{
-		edges:  map[string]map[string]bool{},
-		sinks:  map[string]map[string]bool{},
-		origin: map[string]string{},
-		decls:  map[string][]*ast.FuncDecl{},
-		fset:   fset,
+		edges:   map[string]map[string]bool{},
+		sinks:   map[string]map[string]bool{},
+		origin:  map[string]string{},
+		decls:   map[string][]*ast.FuncDecl{},
+		methods: map[string]bool{},
+		fset:    fset,
 	}
 	// Pass 1: collect declaration names so a call can be classified as
 	// "reaches another function here" vs "reaches a store method".
@@ -236,6 +247,9 @@ func parsePackage(t *testing.T) *parsedPackage {
 				continue
 			}
 			pkg.decls[fd.Name.Name] = append(pkg.decls[fd.Name.Name], fd)
+			if fd.Recv != nil {
+				pkg.methods[fd.Name.Name] = true
+			}
 			if fd.Body == nil {
 				continue
 			}
@@ -282,8 +296,9 @@ func parsePackage(t *testing.T) *parsedPackage {
 						pkg.addEdge(self, fn.Name)
 					}
 				case *ast.SelectorExpr:
-					if method := fn.Sel.Name; known(method) {
-						// A method or package-level function of this package.
+					if method := fn.Sel.Name; known(method) && pkg.methods[method] {
+						// A METHOD of this package (selected on the server,
+						// a store or any other receiver).
 						pkg.addEdge(self, method)
 						return true
 					}
@@ -916,6 +931,33 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestSelectorEdgesFollowMethodsOnly pins the rule that keeps a name collision
+// from forging a call edge.
+//
+// WHY IT MATTERS. A package-level function is called UNQUALIFIED in Go, so a
+// selector call can only ever reach a METHOD of this package. The parser used to
+// accept any selector whose name matched a declaration, which made
+// `errors.New(...)` an edge to this package's `New`. While New reached no store
+// that was invisible; the moment it registered a resource template (a sink by
+// its "Add" verb, card t_52429d6f) every handler that formats an error — 20 of
+// the chat's READ tools — was reported as a store writer, and two guards failed
+// with a list of tools nobody had touched.
+//
+// The second assertion keeps this test from passing for the wrong reason: if the
+// parser stopped following `registerLifecycleResource` to the registrar at all,
+// the first assertion would hold while the graph had simply gone blind.
+func TestSelectorEdgesFollowMethodsOnly(t *testing.T) {
+	pkg := parsePackage(t)
+	if fns := pkg.reachableFuncs("getForm"); fns["registerLifecycleResource"] {
+		t.Errorf("getForm reaches registerLifecycleResource: a selector call was resolved to a " +
+			"package-level function, so `errors.New(...)` is being read as a call to New")
+	}
+	if isWrite, sinks := pkg.reachesWriteSink("registerLifecycleResource"); !isWrite {
+		t.Errorf("registerLifecycleResource reaches no sink (%v) — the assertion above would then "+
+			"hold because the call graph lost the edge, not because the edge rule is right", sinks)
+	}
 }
 
 // TestEveryToolRegistrationYieldsATool is the property the TypeScript guard got

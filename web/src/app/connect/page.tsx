@@ -14,6 +14,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { Button, Card } from "../../components/ui";
 import { apiErr } from "../../lib/apiErr";
 
 function ConnectForm() {
@@ -124,7 +125,7 @@ function ConnectForm() {
         <h1 className="text-xl font-semibold text-[var(--jf-text)]">{t("connect.title")}</h1>
       </div>
 
-      <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+      <Card className="p-jf-6">
         {done ? (
           <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-3 text-jf-sm text-emerald-700">
             {t("connect.success")}
@@ -152,19 +153,15 @@ function ConnectForm() {
               </p>
             )}
             {email ? (
-              <button
-                onClick={resend}
-                disabled={busy}
-                className="w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
-              >
+              <Button onClick={resend} disabled={busy} className="w-full">
                 {t("connect.resend")}
-              </button>
+              </Button>
             ) : (
               <p className="text-sm text-[var(--jf-muted)]">{t("connect.stale")}</p>
             )}
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

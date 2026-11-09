@@ -10,6 +10,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 	"github.com/wzul/jomform/api/internal/payments"
 )
 
@@ -107,6 +108,11 @@ func (s *Server) captureSaleMCP(
 	if err != nil || sale.AccountID != acc {
 		return nil, nil, errors.New("sale not found")
 	}
+	// The lifecycle table owns the rule (and its guard requires an uncaptured
+	// authorization), the same one the REST capture endpoint consults.
+	if _, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventCapture); lerr != nil {
+		return nil, nil, lerr
+	}
 	if err := pay.CaptureSale(ctx, sale, in.AmountSen); err != nil {
 		return nil, nil, err
 	}
@@ -131,10 +137,14 @@ func (s *Server) releaseSaleMCP(
 	if err != nil || sale.AccountID != acc {
 		return nil, nil, errors.New("sale not found")
 	}
+	res, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventRelease)
+	if lerr != nil {
+		return nil, nil, lerr
+	}
 	if err := pay.ReleaseSale(ctx, sale); err != nil {
 		return nil, nil, err
 	}
-	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleCancelled); err != nil {
+	if err := s.deps.Sales.SetStatus(ctx, sale.ID, res.To); err != nil {
 		return nil, nil, err
 	}
 	return nil, map[string]string{"status": "released", "ref_code": in.RefCode}, nil
@@ -233,7 +243,14 @@ func (s *Server) captureAllPendingMCP(
 	ok, failed := 0, 0
 	for _, sale := range sales {
 		res := captureAllResult{RefCode: sale.RefCode}
-		if err := pay.CaptureSale(ctx, sale, nil); err != nil {
+		if _, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventCapture); lerr != nil {
+			// Same per-row sentence the REST bulk capture shows.
+			if refused, ok := lerr.(*lifecycle.TransitionRefusedError); ok {
+				res.Error = refused.Reason
+			} else {
+				res.Error = lerr.Error()
+			}
+		} else if err := pay.CaptureSale(ctx, sale, nil); err != nil {
 			res.Error = err.Error()
 		} else if err := s.deps.Sales.MarkCaptured(ctx, sale.ID); err != nil {
 			res.Error = err.Error()

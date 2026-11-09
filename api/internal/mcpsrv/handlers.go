@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 	"github.com/wzul/jomform/api/internal/payments"
 	"github.com/wzul/jomform/api/internal/urlguard"
 )
@@ -347,6 +348,14 @@ type saleOut struct {
 	// dashboard would see an empty list for a form that has entries.
 	SubmissionID string         `json:"submission_id,omitempty"`
 	Data         map[string]any `json:"data,omitempty"`
+	// AvailableEvents is the lifecycle table's answer for this sale: what it
+	// accepts from its current state, with `enabled` and — when a guard refuses
+	// an action — the English reason. Same list the REST row carries, so an agent
+	// reading list_sales does not have to guess from `status` (and the in-app
+	// chat, which reads this tool, sees the server's own answer before it
+	// suggests anything). Always an array on a sale row; a response row has no
+	// lifecycle, so it carries an empty one.
+	AvailableEvents []lifecycle.AvailableEvent `json:"available_events"`
 }
 
 type listSalesIn struct {
@@ -436,6 +445,10 @@ func submissionSaleOut(sub *dbstore.Submission) saleOut {
 		CreatedAt:    sub.CreatedAt.UTC().Format(time.RFC3339),
 		SubmissionID: sub.ID,
 		Data:         sub.Data,
+		// A response has no lifecycle: an explicit empty list, never a missing
+		// field (a caller must be able to tell "nothing to do" from "the server
+		// did not answer").
+		AvailableEvents: []lifecycle.AvailableEvent{},
 	}
 }
 
@@ -449,6 +462,9 @@ func saleOutFromSale(sl *dbstore.Sale) saleOut {
 		CreatedAt:   sl.CreatedAt.UTC().Format(time.RFC3339),
 		RefundedSen: sl.RefundedSen, OutstandingSen: sl.OutstandingSen(),
 		RefundStatus: sl.RefundStatus(),
+		// The server's lifecycle answer travels with the row (card t_52429d6f):
+		// an agent planning an action reads it instead of guessing from status.
+		AvailableEvents: availableEventsOf(sl),
 	}
 	if len(sl.Items) > 0 {
 		o.Items = make([]saleItemOut, 0, len(sl.Items))
@@ -524,8 +540,16 @@ func (s *Server) confirmSale(ctx context.Context, _ *mcp.CallToolRequest, in con
 	if err != nil || sale.AccountID != acc {
 		return nil, nil, fmt.Errorf("sale not found")
 	}
-	if err := s.deps.Sales.SetStatus(ctx, sale.ID, dbstore.SaleConfirmed); err != nil {
-		return nil, nil, fmt.Errorf("db: %w", err)
+	// Same table as the REST door: `confirm` is defined from pending (a bank
+	// transfer) and paid (a settled CHIP payment), and re-confirming is a no-op.
+	res, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventConfirm)
+	if lerr != nil {
+		return nil, nil, lerr
+	}
+	if res.Changed {
+		if err := s.deps.Sales.SetStatus(ctx, sale.ID, res.To); err != nil {
+			return nil, nil, fmt.Errorf("db: %w", err)
+		}
 	}
 	return nil, map[string]string{"status": "confirmed", "ref_code": in.RefCode}, nil
 }

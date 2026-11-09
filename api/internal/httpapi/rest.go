@@ -449,6 +449,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /v1/rest/sales/{ref}/refund", h.authed(h.refundSale))
 	mux.Handle("POST /v1/rest/sales/bulk-capture", h.authed(h.bulkCaptureSales))
 	mux.Handle("GET /v1/rest/sales", h.authed(h.listSales))
+	mux.Handle("GET /v1/rest/sales/{ref}", h.authed(h.getSale))
 	mux.Handle("GET /v1/rest/sales/{ref}/email-status", h.authed(h.saleEmailStatus))
 	// Issue #194: email delivery status view — account-scoped, paginated,
 	// filterable by form/sale/status.

@@ -57,7 +57,11 @@ Parity checklist (dashboard → MCP):
   `upsert_form`; same validation, same per-workspace uniqueness, same temporary
   301 for the old URL)
 - Sales: list/summary/confirm → `list_sales`, `get_sales_summary`,
-  `confirm_sale`
+  `confirm_sale`, `describe_lifecycle`
+  (describe_lifecycle is the sales lifecycle TABLE served to agents, and with
+  an id it answers that sale's own available_events; it exists so an agent can
+  plan an action before proposing one. The same table is the MCP resource
+  jomform://lifecycle/sales.)
 - Shipping by zone (the Form Settings → Shipping tab: workspace zone sets, their
   state/district/postcode rules and their rate rows with a weight band and a
   free-shipping threshold) → `get_shipping_rates`, `set_shipping_rates`.

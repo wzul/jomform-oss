@@ -132,7 +132,10 @@ const css = srcAt("app/globals.css");
 /** `--jf-*` colour tokens declared in `:root` of globals.css. */
 function jfTokens(): Map<string, RGB> {
   const out = new Map<string, RGB>();
-  for (const m of css.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
+  // `:root` only — `[data-theme="dark"]` re-declares the same names, and
+  // last-wins over the whole file would measure the light tree against them.
+  const root = css.split('\n[data-theme="dark"] {')[0];
+  for (const m of root.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
     const rgb = hexToRgb(m[2]);
     if (rgb) out.set(m[1], rgb);
   }

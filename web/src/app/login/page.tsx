@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useI18n } from "../../components/i18n";
+import { Button, Card, Checkbox, CodeInput, Field, Input } from "../../components/ui";
 import { resolvePostLogin } from "../../lib/postLogin";
 import { browserNextTarget } from "../../lib/nextTarget";
 import { b64url, fromB64url } from "../../lib/webauthn";
@@ -498,7 +499,7 @@ export default function Login() {
           </p>
         </div>
 
-        <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+        <Card className="p-jf-6">
           {/* issue #313: the default (magic) view is the single email-first
               screen — it handles BOTH login and signup, so no login/register
               tabs. The login/register tab semantics only matter once the user
@@ -547,16 +548,16 @@ export default function Login() {
                       : t("login.loginDone")}
               </div>
               {mode !== "login" && (
-                <button
+                <Button
                   type="button"
                   onClick={() => {
                     setMode("login");
                     setDone(false);
                   }}
-                  className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
+                  className="mt-1 w-full"
                 >
                   {mode === "forgot" || mode === "magic" ? t(mode === "magic" ? "login.passwordlessBack" : "login.forgotBack") : t("login.backToLogin")}
-                </button>
+                </Button>
               )}
             </div>
           ) : step === 2 ? (
@@ -570,30 +571,24 @@ export default function Login() {
               className="space-y-3"
             >
               <div>
-                <input
+                <CodeInput
                   ref={codeRef}
                   name="totp_code"
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  autoComplete="one-time-code"
-                  maxLength={6}
                   disabled={busy}
                   placeholder="000000"
                   aria-label={t("login.totpTitle")}
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-3 text-center font-mono text-2xl tracking-[0.5em] text-[var(--jf-text)] outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                 />
               </div>
               {/* Issue #63: trusted-device opt-in, default checked — server
                   mints jf_trust on a successful code only. */}
               <label className="flex cursor-pointer items-start gap-2 text-jf-sm text-[var(--jf-muted)]">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={totpRemember}
                   disabled={busy}
                   onChange={(e) => setTotpRemember(e.target.checked)}
-                  className="mt-0.5 accent-[var(--jf-primary)]"
+                  className="mt-0.5"
                 />
                 <span>{t("login.totpRemember")}</span>
               </label>
@@ -604,22 +599,25 @@ export default function Login() {
                 {emailCodeSent ? (
                   <p className="text-jf-xs text-[var(--jf-muted)]">{t("login.emailCodeSent")}</p>
                 ) : (
+                  // Card t_8f20418d: the hover colour was `--jf-accent` (#7170ff),
+                  // which axe reads at 3.84:1 on the card's white surface for
+                  // this 12px label — below the 4.5 AA floor. The design system's
+                  // rule is that `--jf-primary` and its accent are FILLS; text
+                  // uses `--jf-primary-strong` (#4f46e5, 6.3:1 on white). Resting
+                  // colour unchanged.
                   <button
                     type="button"
                     disabled={busy || !cred.email}
                     onClick={requestEmailCode}
-                    className="text-jf-xs text-[var(--jf-muted)] hover:text-[var(--jf-accent)] hover:underline disabled:opacity-50"
+                    className="text-jf-xs text-[var(--jf-muted)] hover:text-[var(--jf-primary-strong)] hover:underline disabled:opacity-50"
                   >
                     {t("login.emailCodeLink")}
                   </button>
                 )}
               </div>
-              <button
-                disabled={busy || code.length !== 6}
-                className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
-              >
+              <Button type="submit" disabled={busy || code.length !== 6} className="mt-1 w-full">
                 {busy ? "…" : t("login.totpSubmit")}
-              </button>
+              </Button>
               <button
                 type="button"
                 onClick={backToCredentials}
@@ -650,9 +648,8 @@ export default function Login() {
                 </div>
               )}
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("login.email")}</label>
-                <input
+              <Field id="login-email" label={t("login.email")}>
+                <Input
                   ref={emailRef}
                   name="email"
                   type="email"
@@ -660,30 +657,26 @@ export default function Login() {
                   defaultValue={cred.email}
                   autoComplete="email"
                   placeholder={t("login.emailPh")}
-                  className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                 />
-              </div>
+              </Field>
               {mode !== "forgot" && mode !== "magic" && (
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                    {mode === "register" ? t("login.pwRegister") : t("login.password")}
-                  </label>
+                <Field
+                  id="login-password"
+                  label={mode === "register" ? t("login.pwRegister") : t("login.password")}
+                  hint={mode === "register" ? t("login.pwOptional") : undefined}
+                >
                   {/* Issue #303: password is OPTIONAL on signup. Leaving it
                       blank assigns a random UUID server-side; the user can set
                       a real password later. It stays required only for login. */}
-                  <input
+                  <Input
                     name="password"
                     type="password"
                     required={mode !== "register"}
                     defaultValue={cred.password}
                     minLength={mode === "register" ? 0 : 1}
                     placeholder={mode === "register" ? t("login.pwRegisterPh") : "••••••••••"}
-                    className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
                   />
-                  {mode === "register" && (
-                    <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">{t("login.pwOptional")}</p>
-                  )}
-                </div>
+                </Field>
               )}
 
               {mode === "login" && (
@@ -691,11 +684,9 @@ export default function Login() {
                   {/* Issue #62: remember me — unchecked (default) = browser
                       session cookie + 24h server TTL; checked = 14 days. */}
                   <label className="flex cursor-pointer items-center gap-2 text-jf-sm text-[var(--jf-muted)]">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={remember}
                       onChange={(e) => setRemember(e.target.checked)}
-                      className="accent-[var(--jf-primary)]"
                     />
                     <span>{t("login.remember")}</span>
                   </label>
@@ -741,12 +732,9 @@ export default function Login() {
                 </div>
               )}
 
-              <button
-                disabled={busy}
-                className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
-              >
+              <Button type="submit" disabled={busy} className="mt-1 w-full">
                 {busy ? "…" : mode === "login" ? t("login.submitLogin") : mode === "register" ? t("login.submitRegister") : mode === "magic" ? t("login.continue") : t("login.forgotSubmit")}
-              </button>
+              </Button>
             </form>
           )}
 
@@ -772,16 +760,17 @@ export default function Login() {
               fail. */}
           {step === 1 && mode !== "forgot" && passkeySupported && (
             <div className="mt-3 border-t border-[var(--jf-border)] pt-3">
-              <button
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={passkeyLogin}
                 disabled={busy}
                 data-testid="passkey-login"
-                className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-jf-sm font-medium text-[var(--jf-text)] transition-colors hover:border-[var(--jf-accent)]/60 hover:bg-indigo-50 disabled:opacity-60"
+                className="w-full"
               >
                 <span aria-hidden="true" className="text-base leading-none">🔑</span>
                 {t("login.passkey")}
-              </button>
+              </Button>
             </div>
           )}
 
@@ -794,20 +783,22 @@ export default function Login() {
             <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
               <div className="space-y-2">
                 {socialProviders.map((p) => (
-                  <a
+                  <Button
                     key={p.id}
+                    as="a"
+                    variant="secondary"
                     href={`/api/auth/oauth/${p.id}`}
-                    className="flex w-full items-center justify-center gap-2 rounded-md border border-[var(--jf-border)] bg-white py-2 text-jf-sm font-medium text-[var(--jf-text)] transition-colors hover:border-[var(--jf-accent)]/60 hover:bg-indigo-50"
+                    className="w-full"
                   >
                     {/* Issue #292: provider logo (decorative) rendered left of the text */}
                     <ProviderLogo id={p.id} />
                     {t("login.continueWith", { provider: p.name })}
-                  </a>
+                  </Button>
                 ))}
               </div>
             </div>
           )}
-        </div>
+        </Card>
 
         <p className="mt-6 text-center text-xs text-[var(--jf-text-tertiary)]">
           {t("login.termsNote")}

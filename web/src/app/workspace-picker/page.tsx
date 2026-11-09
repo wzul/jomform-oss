@@ -24,6 +24,7 @@ import { useI18n, type Key } from "../../components/i18n";
 import type { WorkspaceRow } from "../../components/session";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { createWorkspace, enterWorkspace } from "../../lib/workspace";
+import { Button, Card, Field, Input } from "../../components/ui";
 import { translateApiErr } from "../../lib/apiErr";
 import { pickerCopyKeys, pickerMode } from "../../lib/workspacePickerState";
 import { addressLabel, workspaceAddressLabel } from "../../lib/deployment";
@@ -240,7 +241,7 @@ export default function WorkspacePickerPage() {
           </p>
         </div>
 
-        <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+        <Card className="p-jf-6">
           {/* Issue #503: the four states are now distinct and explicit —
               loading / error (+ retry) / empty / list. */}
           {mode === "loading" ? (
@@ -252,13 +253,9 @@ export default function WorkspacePickerPage() {
               <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
                 {loadError}
               </p>
-              <button
-                type="button"
-                onClick={() => void load()}
-                className="rounded-md border border-[var(--jf-border)] px-3 py-1.5 text-xs font-medium text-[var(--jf-text)] transition-colors hover:bg-slate-50"
-              >
+              <Button type="button" variant="secondary" size="sm" onClick={() => void load()}>
                 {t("common.retry")}
-              </button>
+              </Button>
             </div>
           ) : mode === "ask" ? (
             /* Ask-first onboarding (Wan's decision, 2026-09-20): a user with no
@@ -276,50 +273,35 @@ export default function WorkspacePickerPage() {
               <p className="text-jf-sm leading-relaxed text-[var(--jf-muted)]">
                 {t("workspace.askBody")}
               </p>
-              <div>
-                <label htmlFor="ask-ws-name" className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                  {t("workspace.name")}
-                </label>
-                <input
-                  id="ask-ws-name"
+              <Field id="ask-ws-name" label={t("workspace.name")}>
+                <Input
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   required
                   autoFocus
                   disabled={busy}
-                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50 disabled:opacity-50"
                 />
-              </div>
-              <div>
-                <label htmlFor="ask-ws-slug" className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">
-                  {t("workspace.slug")}
-                </label>
-                <input
-                  id="ask-ws-slug"
+              </Field>
+              <Field
+                id="ask-ws-slug"
+                label={t("workspace.slug")}
+                hint={newSlug && workspaceAddressLabel(newSlug, deployment) ? t("workspace.askHost", { host: workspaceAddressLabel(newSlug, deployment) }) : undefined}
+              >
+                <Input
                   value={newSlug}
                   onChange={(e) => setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
                   required
                   disabled={busy}
-                  className="min-h-11 w-full rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm text-[var(--jf-text)] outline-none focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50 disabled:opacity-50"
                 />
-                {newSlug && workspaceAddressLabel(newSlug, deployment) && (
-                  <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">
-                    {t("workspace.askHost", { host: workspaceAddressLabel(newSlug, deployment) })}
-                  </p>
-                )}
-              </div>
+              </Field>
               {createError && (
                 <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
                   {createError}
                 </p>
               )}
-              <button
-                type="submit"
-                disabled={busy}
-                className="min-h-11 w-full rounded-md bg-[var(--jf-primary)] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-50"
-              >
+              <Button type="submit" disabled={busy} className="w-full">
                 {busy ? "…" : t("workspace.create")}
-              </button>
+              </Button>
             </form>
           ) : (
             <>
@@ -373,13 +355,9 @@ export default function WorkspacePickerPage() {
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2 sm:justify-end">
-                        <button
-                          type="button"
-                          onClick={() => enter(s.slug)}
-                          className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
-                        >
+                        <Button type="button" size="sm" onClick={() => enter(s.slug)}>
                           {t("workspace.enter")}
-                        </button>
+                        </Button>
                       </div>
                     </li>
                   );
@@ -387,7 +365,7 @@ export default function WorkspacePickerPage() {
               </ul>
             </>
           )}
-        </div>
+        </Card>
 
         {/* Issue #503: a genuinely empty list is still a dead end without an
             action — offer a re-check, plus the inline "?" docs link AGENTS.md

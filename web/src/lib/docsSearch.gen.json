@@ -1,0 +1,522 @@
+{
+ "generatedBy": "web/scripts/docsNav.mjs — run `npm run docs:nav`",
+ "docs": [
+  {
+   "path": "/docs",
+   "title": "Overview & features",
+   "description": "Every JomForm feature in one line, grouped by category: start here, sales & payments, forms & fields, storefront, email, growth, security and developer guides.",
+   "layer": "Learn",
+   "section": "Start here",
+   "order": 0,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 docs.title",
+    "text-xl font-semibold text-slate-900 docs.gsTitle",
+    "mt-12 text-xl font-semibold text-slate-900 docs.featuresTitle",
+    "text-base font-semibold uppercase tracking-wide text-[var(--jf-primary)]",
+    "mt-12 text-xl font-semibold text-slate-900 docs.faqTitle",
+    "text-sm font-semibold text-slate-900",
+    "text-sm font-semibold text-slate-900"
+   ],
+   "text": "JomForm Docs — Overview & features Every JomForm feature in one line, grouped by category: start here, sales & payments, forms & fields, storefront, email, growth, security and developer guides. Workspaces (your account's tenant) A workspace holds your forms, products, sales and payment account, and owns its own address ({slug}.jomform.com or your domain). With none, the dashboard asks you to create one. Renaming a workspace Rename a workspace's name or its public address; the old address keeps redirecting. Deleting a workspace Reversible, not destructive: a typed slug confirmation sends it to the Trash, even a full workspace. Restoring is one click; deleting for good is a second step that refuses one with sales. Activity log (audit trail) Every action in this workspace, newest first, including the destructive ones — a deletion leaves no other trace. Append-only. Sales Track every sale: reference code, status, buyer, amount, payment method and date. Confirm bank transfers, capture or release authorisations, refund, and export CSV. One list for sales and responses Without a form filter the Sales page is one merged list: every sale and every response, newest first, with one combined count. Responses (response-only forms) A form can collect answers instead of payments. Its entries are stored as responses, shown on the same Sales page, with a drawer holding every value. Form analytics (the per-form counter) The per-form counter counts the rows that form actually recorded: responses for a response form, sales in every status for a payment form. Never both. Partial refunds Refund a paid sale in full or in part: the sale records how much was returned and keeps the balance refundable until zero. Subscriptions Charge customers automatically monthly or yearly, for a fixed number of payments or indefinitely. A late payment follows the schedule mode; a declined card is retried three times. Realtime notifications & the order screen beep The Sales page follows your workspace's realtime stream; the switch beside the Live pill beeps when something arrives. Per workspace, so it survives a reload. Order forms Build order and response forms with a drag-and-drop builder — fields, products, images — and publish to your workspace URL or a custom domain. Custom HTML forms Give a form your own HTML body instead of builder blocks: it is sanitized and rendered in a sandboxed iframe, "
+  },
+  {
+   "path": "/docs/builder",
+   "title": "The form builder",
+   "description": "How the JomForm form builder works: the field palette, the canvas, editing a block's settings on desktop and on a phone, and the per-block actions.",
+   "layer": "Learn",
+   "section": "Start here",
+   "order": 1,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 The form builder",
+    "mt-8 text-xl font-semibold text-slate-900 The three areas",
+    "mt-8 text-xl font-semibold text-slate-900 Adding a field",
+    "mt-8 text-xl font-semibold text-slate-900 Editing a block&apos;s settings",
+    "mt-8 text-xl font-semibold text-slate-900 What each setting does",
+    "mt-8 text-xl font-semibold text-slate-900 When a text block holds a sentence",
+    "mt-8 text-xl font-semibold text-slate-900 When a rule&apos;s field no longer exists",
+    "url-fields mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What a website field accepts",
+    "mt-8 text-xl font-semibold text-slate-900 Reordering, duplicating, removing",
+    "mt-8 text-xl font-semibold text-slate-900 The canvas preview is drawn, not interactive",
+    "mt-8 text-xl font-semibold text-slate-900 Form mode and everything else"
+   ],
+   "text": "JomForm Docs — the form builder How the JomForm form builder works: the field palette, the canvas, editing a block's settings on desktop and on a phone, and the per-block actions. The form builder The builder is where a form&apos;s fields are laid out. It is the same surface for a form and for one of your own templates (see templates ). mt-8 text-xl font-semibold text-slate-900 The three areas The three areas On a desktop (≥768px) the builder is three columns: the field palette on the left (every field type, grouped Standard / Advanced / Pricing), the canvas in the middle (the fields in the order a buyer sees them), and the panel on the right, which edits whichever block is selected. mt-8 text-xl font-semibold text-slate-900 Adding a field Adding a field Drag a palette item onto the canvas, or tap it — tapping appends the field to the end. On a phone the palette lives behind the Add tab; adding a field returns you to the canvas with the new block highlighted, so you can add several fields in a row without leaving the canvas. mt-8 text-xl font-semibold text-slate-900 Editing a block&apos;s settings Editing a block&apos;s settings Every block has settings: its label/text, description, placeholder, CSS class, inline style, whether it is required, its validation message, and — for the field types that need one — a choices editor, a product picker or a conditional-logic rule. Which settings appear depends on the field type. On a desktop , tap a block on the canvas and its settings appear in the right-hand panel. On a phone , tap a block on the canvas and the settings panel replaces the canvas. The row at the top of the panel — ← Canvas next to the block&apos;s type — returns you to the canvas. The block stays highlighted after you close the panel, so you can see where you were, and tapping it again reopens its settings. The mobile tab bar has two tabs, and Canvas . There is no separate settings tab: editing a block is a tap on the block itself. mt-8 text-xl font-semibold text-slate-900 What each setting does What each setting does Every one of these reaches the published form. Where a setting appears depends on the field type, and each one shows up like this: Label / text — the field&apos;s own label. The text block is a single-line answer field: its label is the text you type, and it is the palette&apos;s only short-answer field. Description — helper text printe"
+  },
+  {
+   "path": "/docs/guides",
+   "title": "Screenshot guides",
+   "description": "Step-by-step setup guides for JomForm. Every step has its own screenshot from the running product, with the control you touch at that step boxed in red.",
+   "layer": "Learn",
+   "section": "Start here",
+   "order": 2,
+   "headings": [
+    "text-2xl font-bold text-slate-900 sm:text-3xl Screenshot guides",
+    "text-lg font-semibold text-slate-900 underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+   ],
+   "text": "Screenshot guides — JomForm Docs Step-by-step setup guides for JomForm. Every step has its own screenshot from the running product, with the control you touch at that step boxed in red. Screenshot guides Each guide below walks one setup from the settings page to the live form. Every step has its own screenshot, captured from the running product, with the control you touch at that step marked in red — so you can follow it beside your own dashboard. screenshots — one per step ← Back to the docs index"
+  },
+  {
+   "path": "/docs/guides/affiliate-programme",
+   "title": "Affiliate programme — setup guide",
+   "description": "Give someone a link, and the sales that arrive through it are attributed to them with a commission on every paid sale. Every screenshot here was captured from the running product; the red box marks…",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 3,
+   "headings": [
+    "1. Create the affiliate",
+    "2. Hand over the link",
+    "How the commission is counted",
+    "Notes"
+   ],
+   "text": "Give someone a link, and the sales that arrive through it are attributed to them with a commission on every paid sale. Every screenshot here was captured from the running product; the red box marks the control you touch at that step. What this does: an affiliate is a code in a workspace. A sale that arrives with that code attached is attributed to the affiliate, and the commission you set here is computed on the paid sale — not on the form view, not on an abandoned checkout. 1. Create the affiliate Settings → Affiliates . Fill Code (the short code that goes in the link — SITI here), Name (who it belongs to), Commission % (10 here) and press Add affiliate . The code is unique inside the workspace; a second SITI is refused with code already exists . 2. Hand over the link The new row carries the affiliate's own link: https://<workspace .jomform.com/?aff=SITI . Anything a visitor buys after opening that URL is attributed to SITI, and 10% of the paid amount is her commission. The code is per workspace, so the same person promoting two workspaces has two links. How the commission is counted - Only paid sales count. A commission exists because a payment settled; an unpaid order, a refused card or a form response with no product contributes nothing. - The sale records the code, not the money. Each sale carries the affiliate code that brought it in, and the commission is the affiliate's rate applied to that sale — so the row above is the one place the percentage lives. - Cancelling a card never revokes anything on the affiliate side. Attribution follows the sale record, not the card token. Notes - One code per promotion, not per person. A merchant tracking two channels (a WhatsApp group and an Instagram bio) uses two codes, and each channel gets its own commission line. - Driving this from an agent: the same three operations exist as MCP tools ( create affiliate , list affiliates , set affiliate commission ), and they return the same referral url the tab shows."
+  },
+  {
+   "path": "/docs/guides/club-membership",
+   "title": "Club membership — setup guide",
+   "description": "One membership, one fee that repeats, and nobody has to remember to pay next year. Every screenshot here was captured from the running product; the red box marks the control you touch at that step.",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 4,
+   "headings": [
+    "1. Create the plan as a Subscription product",
+    "2. Check the plan in the catalogue",
+    "3. Sell it from a payment form",
+    "4. Publish and hand out the link",
+    "5. What the member does",
+    "Notes"
+   ],
+   "text": "One membership, one fee that repeats, and nobody has to remember to pay next year. Every screenshot here was captured from the running product; the red box marks the control you touch at that step. What this does: a membership is a single Subscription product — monthly or yearly — sold from any payment form. The member pays once with a card at checkout; the card is saved, and the same card is charged every period after that. There is no spreadsheet of who has paid and no bank transfer to reconcile. 1. Create the plan as a Subscription product Products → Product name (here Keahlian Kelab 2026 ), Price (RM) 240.00, then change Type to Subscription and set Billing period to Yearly (or Monthly for a monthly club). Billing count Infinite (recurring) means it renews until cancelled; Next charge date From the day it succeeds starts the cycle on the first successful payment. 2. Check the plan in the catalogue The row reads Subscription · Yearly · RM240.00 . That one row is the whole plan — every member of the club is sold this same product, so a price change is a single edit here. 3. Sell it from a payment form Forms → New form → Blank form , then add Product under PRICING FIELDS , Name and Email . Select the Product block and pick the plan in BLOCK SETTINGS → Product . A Section block under the email is worth the thirty seconds it costs: it renders as prose (a Note block would render an input the member has to fill), so it can tell the member the fee renews. 4. Publish and hand out the link Publish makes the form live and the banner gives you the address ( …/f/keahlian-kelab-2026 ). Copy link is what goes to the members — one link for the whole club, no per-member form. 5. What the member does The member ticks the plan, sees RM240.00 , fills Full name and Email , reads the renewal note and presses Proceed to Payment once. That is the last time they type a card number: the card is saved at that payment and charged every year after it. Notes - Cancelling stops the next charge, not the card. Cancelling a membership ends future charges and leaves the saved card alone — a member who rejoins does not re-enter it. - Members and recurring plans live under Subscriptions in the sidebar, where a due charge can be retried or a plan cancelled. The same actions exist over MCP if you drive JomForm from an agent. - Yearly vs monthly is a product setting, not a form setting. The same form can sell a monthly plan and a yearly plan as two products — put both Product blocks on the form and let the member pick."
+  },
+  {
+   "path": "/docs/guides/design-with-mcp",
+   "title": "Design with an AI agent (MCP) — setup guide",
+   "description": "JomForm speaks the Model Context Protocol. Connect your AI agent once and it can drive the store with plain language — add products, edit forms, read sales, refund an order. Every screenshot here was…",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 5,
+   "headings": [
+    "1. Open the connect page and copy the server URL",
+    "2. Paste it into your MCP client",
+    "3. Authorize",
+    "4. Pick the scope",
+    "5. Ask for what you want",
+    "Notes"
+   ],
+   "text": "JomForm speaks the Model Context Protocol. Connect your AI agent once and it can drive the store with plain language — add products, edit forms, read sales, refund an order. Every screenshot here was captured from the running product; the red box marks the control you touch at that step. 1. Open the connect page and copy the server URL The MCP page ( /mcp on your JomForm address) is the whole setup, and it prints the one thing you need: https://mcp.jomform.com/mcp . The /mcp path is required — mcp.jomform.com without it fails. Press Copy . 2. Paste it into your MCP client Claude Desktop reads its servers from claude desktop config.json ; the page prints the exact entry ( {\"mcpServers\": {\"jomform\": {\"type\": \"http\", \"url\": \"https://mcp.jomform.com/mcp\"}}} ). Any other client that supports a remote MCP server over HTTP takes the same URL instead. Restart the client after saving. 3. Authorize The client fetches the server, finds the OAuth 2.1 (PKCE) endpoints itself and opens a JomForm login / authorize page. Sign in and grant access. There is no API key to copy and no token to rotate — the grant is the credential. 4. Pick the scope The client asks for a scope and the grant is enforced on every tool call: scope what the agent can do --- --- read look at forms, products, sales and analytics; every tool that creates, updates, deletes, archives, cancels or refunds is refused with a scope error readwrite do all of that and change the store — add a product, edit a form, refund a sale A client that asks for no scope gets readwrite . A read-only grant cannot upgrade itself: it is refused on the tool that mints API keys, so it can never manufacture a wider credential. 5. Ask for what you want That is the whole interface from here on. \"add product RM25\" , \"how many sales today?\" , \"refund order JF-xxxx\" , \"show my product inventory\" — the agent calls the matching tool and answers. The same plain language works for forms, prices and analytics, and a tool that would change something is a call the scope above has to allow. Notes - Discovery is automatic. The server advertises protected-resource metadata at /.well-known/oauth-protected-resource and authorization-server metadata at /.well-known/oauth-authorization-server ; an unauthenticated call to /mcp answers 401 with a WWW-Authenticate header pointing at the metadata. - Connecting from Canva (or any agent that is not a coding client): it needs to allow a remote MCP server with HTTP OAuth. Where the client has no JSON config, paste the server URL into the field it calls remote MCP server / MCP connection . - The agent acts inside one workspace. Tools take a workspace, so the same connection can drive every workspace your account can manage — and nothing outside them."
+  },
+  {
+   "path": "/docs/guides/donations",
+   "title": "Collect donations — setup guide",
+   "description": "A step-by-step guide to taking donations with a JomForm payment form. Every screenshot below was captured from the running product; the red box marks the one control you touch at that step.",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 6,
+   "headings": [
+    "1. Connect CHIP Collect in Settings",
+    "2. Add your first donation amount in Products",
+    "3. Add the other amounts",
+    "4. Start from the Donation template",
+    "5. Point each Product block at one amount",
+    "6. Publish",
+    "7. Copy the donation link",
+    "8. What the donor sees",
+    "Notes"
+   ],
+   "text": "A step-by-step guide to taking donations with a JomForm payment form. Every screenshot below was captured from the running product; the red box marks the one control you touch at that step. What this does: a donation is a normal payment form, and an amount is a product . There are two shapes of donation product: - Fixed denominations — one product per amount you accept ( Donation RM10 , Donation RM50 , Donation RM100 ), and the donor ticks the one they want. Steps 2–8 below walk this shape. - Pay what you want — a single product set to Pay what you want (donation) : the form shows the donor an amount field instead of a price, and the amount is checked against the limits you set. See the first two Notes. Either way the money lands in the same sale list and receipt flow as any other paid form. 1. Connect CHIP Collect in Settings Settings → CHIP . Paste the Brand ID and Secret Key from the CHIP Merchant Portal and save; the mode is auto-detected from the key ( sk test … = Test, sk live … = Live), and this is what turns the form's pay button into a working payment. 2. Add your first donation amount in Products Products → type the name ( Donation RM10 ), the price ( 10.00 ), leave Type on One-time , then Add product — the price you type is exactly what the donor pays for that tier. 3. Add the other amounts Repeat step 2 for Donation RM50 and Donation RM100 ; each tier is its own product, and the price cell is the amount a donor gives when they pick that tier. 4. Start from the Donation template Forms → New form opens the template gallery → Use template on Donation , which gives you a payment form already carrying a product block, name, email and an optional message. 5. Point each Product block at one amount Add one Product block per amount — the quickest is the block's ⋯ → Duplicate menu on the block the template gave you ( Pricing Fields → Product in the palette also inserts one) — then select a block and choose its tier in the Product dropdown; the buyer sees that product's name and price on the form (a pay-what-you-want product shows the amount field instead — see Notes). 6. Publish Publish writes the form and puts it live; until you click it the toolbar shows the unsaved state and the form stays a draft that no one else can open. 7. Copy the donation link The green Your form is live banner confirms the publish and holds the donor URL — Copy link (or Open form ) is what you paste into WhatsApp, a poster QR code, or your website. 8. What the donor sees The donor ticks one amount (RM50 here), the total updates to RM50.00 , and Quantity lets them give a multiple of a tier; after filling name and email they proceed to payment. Notes - A product's price can be fixed or chosen by the donor. A product's type is one time , subscription or custom amount . The tiers in steps 2–3 are one time products — one price each. A custom amount product ( Pay what you want (donation) ) has no fixed asking price: the form renders an amount field instead of a price, and the server checks the amount the donor typed against that product's Minimum amount (never below RM1.00), its optional Maximum amount and its optional Suggested amount before it prices the sale. An amount outside those limits is refused with a readable reason and nothing is charged; an accepted one becomes the line item's price, and the sale appears under Sales with that amount. The price stored on such a product is for display only — the suggested amount when one is set, else the minimum. - Where each shape lives. The Products page add row in step 2 creates One-time products — that is the fixed-denomination walkthrough in steps 2–8. The pay-what-you-want type is chosen on the product editor page ( /products/new , or /products/<id /edit ). - A new amount later. For a fixed tier: step 2 plus one more Product block in the builder, then Publish again. For a pay-what-you-want product: a change to that product's minimum, maximum or suggested amount. - Nothing can be charged until step 1 is done. On a workspace with no CHIP credentials the pay button answers \"We could not start the payment, so nothing was charged\" with an order reference, and that order shows up under Sales as failed — the donation is never silently collected as a free response. - Each donation is an order from the first click. The order appears under Sales with its reference ( JF-… ), the donor's name and email, what they picked and the amount; once CHIP confirms the payment the order moves to paid and the donor is emailed the workspace's receipt."
+  },
+  {
+   "path": "/docs/guides/payment-fees",
+   "title": "Payment fees — merchant setup guide",
+   "description": "A step-by-step guide to passing the CHIP processing fee to the buyer. Every screenshot below was captured from the running product; the red box marks the control you touch at that step.",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 7,
+   "headings": [
+    "1. Open Settings → Payment fees",
+    "2. Tick the payment methods you want to charge for",
+    "3. Enter your rate",
+    "4. Acknowledge the disclosure",
+    "5. Save",
+    "6. What your buyer sees",
+    "Notes"
+   ],
+   "text": "A step-by-step guide to passing the CHIP processing fee to the buyer. Every screenshot below was captured from the running product; the red box marks the control you touch at that step. What this does: you set your acquirer rate per payment method. JomForm adds the fee on top of the price and grosses the total up, so you still receive the full asking amount. The buyer sees the fee, the method and the final total before paying. 1. Open Settings → Payment fees Settings is in the left sidebar. The Payment fees tab sits between e-Invoice and Webhooks . Only workspace admins and owners see it. 2. Tick the payment methods you want to charge for One row per method: FPX , Card , e-Wallet , DuitNow QR . Ticking a row is what enables the fee for that method — a method with no tick is passed through at cost. 3. Enter your rate - Fixed (sen) — a flat fee in sen. 100 = RM1.00. - Percent (basis points) — 100 = 1%, 200 = 2%, 140 = 1.4%. You may use one or both. The rate you type is the rate the buyer pays; the total is grossed up so the fee comes out of the buyer's side, not yours. 4. Acknowledge the disclosure Enabling a method requires this tick: it records that the fee is passed to the buyer and is subject to acquirer and card-issuer rules. JomForm stores who acknowledged and when. 5. Save Saving is immediate: the green Payment fees saved. banner confirms it, and the rate label on the row ( Card 2.00% ) is the rate your buyers will now be charged. No reload is needed. 6. What your buyer sees On the order form the buyer picks a method, and the summary shows the fee line and the final total before they proceed. With RM100.00 at 2%: Line Amount --- --- Subtotal RM100.00 Processing fee — Card 2.00% RM2.04 Total RM102.04 The fee is RM2.04, not RM2.00 : charging a flat 2% of RM100 would leave you with RM99.96 after CHIP takes its 2%, so the total is solved backwards ( 100 / (1 − 0.02) = 102.04 ). You receive the full RM100.00; the buyer covers the RM2.04. Rounding is capped so you never lose more than 1 sen. Notes - The rate is snapshotted on each sale: changing your rate later does not alter past sales or receipts. - SST is not added on top of these rates in this version; if your acquirer quotes a rate inclusive of SST, enter the all-in figure. - Card acceptance is at your own risk as the merchant; the acknowledgement in step 4 records that."
+  },
+  {
+   "path": "/docs/guides/qr-table-ordering",
+   "title": "QR table ordering — setup guide",
+   "description": "A QR code on the table, a menu that opens in the diner's browser, and the order arrives with the table number attached. Every screenshot below was captured from the running product; the red box marks…",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 8,
+   "headings": [
+    "1. Add every dish as a product",
+    "2. Check the catalogue",
+    "3. Start from the F&B template",
+    "4. One Product block per dish",
+    "5. Turn the form into a menu",
+    "6. Generate the table QR",
+    "7. What the diner scans into",
+    "Notes"
+   ],
+   "text": "A QR code on the table, a menu that opens in the diner's browser, and the order arrives with the table number attached. Every screenshot below was captured from the running product; the red box marks the control you touch at that step. What this does: each dish is a product . A form in payment mode holds one Product block per dish, and the Restaurant menu switch makes that form's own URL render a menu page instead of the plain form. The QR code is just that URL with ?table=N on the end, so the order always knows which table it came from. 1. Add every dish as a product Products → fill Product name , Price (RM) and press Add product . Leave Stock blank for ∞ (unlimited) and keep Type on One-time . Repeat once per dish — one product per line item on the menu. 2. Check the catalogue The list is now the source of truth for the menu: Nasi Lemak RM12.00, Char Kway Teow RM14.00, Teh Tarik RM3.50 and Roti Bakar RM5.00. The PRICE (RM) column is exactly what the diner pays, so fix a price here rather than in the form. 3. Start from the F&B template Forms → New form → F&B Order + Payment → Use template . The template arrives as a payment form (a Section intro, one Product block, then Name / Email / Phone / Special instructions), which is the shape a menu checkout needs. 4. One Product block per dish In the builder, click Product under PRICING FIELDS once per dish. With a Product block selected, BLOCK SETTINGS → Product is the dropdown that binds the block to the dish, and Text / label is the name the diner sees. Four dishes → four Product blocks. 5. Turn the form into a menu Form Settings → Restaurant menu → Enable restaurant menu. The screen itself says what the switch does: the menu is served at this form's own URL and lists only the products this form's product blocks reference; the workspace home page is never affected. The same panel holds the optional Best-seller product , the Categories list ( + Add category ), the optional extra checkout fields, and a Menu preview that counts the items (4 here). Press Save . 6. Generate the table QR Form Settings → General → QR code (table ordering) : type the table number, press Generate QR , and the panel shows the code plus the URL it encodes — …/f/f-b-order-payment?table=7 . One code per table; print it, or download it and put it on the table card. Nothing else has to change between tables. 7. What the diner scans into The guest gets the restaurant name, a Best Seller filter, a search box, the category row and a row per dish with its price and a + button. The Table 7 banner at the top came from the QR link, not from the diner, so the order that follows is already tied to the table. Notes - The form has to be published. The menu is the published form's public page; a draft shows the normal form (or nothing) instead. - Changing a price is a Products change, not a form change. The menu reads the live product, so a price fix in Products shows up on the next page load — no republish needed for the price itself. - A dish with no Product block never appears. The menu is built from the blocks, so a product that exists in the catalogue but has no block is simply not on the menu."
+  },
+  {
+   "path": "/docs/guides/tuition-class",
+   "title": "Tuition / class registration — setup guide",
+   "description": "A registration form that takes a one-time fee today and a monthly class fee after that. Every screenshot here was captured from the running product; the red box marks the control you touch at that…",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 9,
+   "headings": [
+    "1. Make the monthly fee a Subscription product",
+    "2. Add the one-time registration fee",
+    "3. Start from the Tuition Class Registration template",
+    "4. Bind both fees to the form",
+    "5. Publish and copy the link",
+    "6. What the parent sees",
+    "Notes"
+   ],
+   "text": "A registration form that takes a one-time fee today and a monthly class fee after that. Every screenshot here was captured from the running product; the red box marks the control you touch at that step. What this does: a tuition class needs two different amounts — a registration fee paid once, and a monthly fee that repeats. JomForm products carry both shapes: One-time and Subscription . The form holds one Product block per fee, so the parent sees both lines on the same page and one checkout covers them. 1. Make the monthly fee a Subscription product Products → Product name + Price (RM) , then switch Type from One-time to Subscription . The row expands into the recurring controls: Billing period ( Monthly here), Trial days , Billing count ( Infinite (recurring) or Fixed N times ), and Next charge date ( From the day it succeeds (drifts if late) , or keep the original dates and collect/skip missed months). 2. Add the one-time registration fee Add the registration fee with Type left on One-time . The list now shows the two shapes side by side — One-time RM50.00 and Subscription · Monthly RM150.00 — and that difference is the whole tuition story: one charge to confirm the seat, one charge that repeats every month. 3. Start from the Tuition Class Registration template Forms → New form → Tuition Class Registration → Use template . The template arrives as a payment form with a Section intro ( pay the registration fee to confirm your seat ), one Product block, Student name , Parent email , Parent phone and Subject / level . 4. Bind both fees to the form Select the Product block, then BLOCK SETTINGS → Product picks the fee it sells — here Yuran pendaftaran (sekali) . Press Product once more under PRICING FIELDS and bind the second block to Yuran bulanan — Kelas Matematik . Text / label is what the parent reads, so name the blocks after the fee, not after the template. 5. Publish and copy the link Publish puts the form live and the green banner hands you the address ( …/f/tuition-class-registration ). Copy link is what goes into the class WhatsApp group or the school's page. 6. What the parent sees The parent gets the intro line, the Registration fee RM50.00 line, the student's details, the Yuran bulanan — Kelas Matematik RM150.00 line, a Total and one Proceed to Payment button. Each fee is its own checkbox with a Quantity , so a family enrolling two children ticks 2 on the registration fee without touching the monthly one. Notes - A subscription product is still just a product. The same block can sell it from any form in the workspace; the recurring behaviour comes from the product row, not from the form. - Billing count decides whether it ever stops. Infinite (recurring) charges until cancelled; Fixed N times stops after N charges — useful for a 10-month programme. - The total is zero until a fee is ticked. Both fee blocks start unchecked, which is why the page shows Total RM0.00 on load — tick a fee and the amount and the payment step follow."
+  },
+  {
+   "path": "/docs/guides/wedding-rsvp",
+   "title": "Wedding page + RSVP form — setup guide",
+   "description": "A step-by-step guide to putting a wedding page and an RSVP form online with JomForm. Every screenshot below was captured from the running product; the red box marks the control you touch at that step.",
+   "layer": "Learn",
+   "section": "Screenshot guides",
+   "order": 10,
+   "headings": [
+    "1. Start a new form",
+    "2. Choose Blank form",
+    "3. Set Form mode to Response form",
+    "4. Add the questions and mark the required ones",
+    "5. Publish",
+    "6. Copy the public link",
+    "7. Set the theme colour",
+    "8. What the guest sees",
+    "9. Read the replies",
+    "Notes"
+   ],
+   "text": "A step-by-step guide to putting a wedding page and an RSVP form online with JomForm. Every screenshot below was captured from the running product; the red box marks the control you touch at that step. What this does: an RSVP collects answers, not money, so the form runs in response mode: the couple gets a page with a title, a short invitation line and the questions they need answered — who is coming, how many guests, and a message. The form has its own public link, so it can go straight into a WhatsApp invitation, and it can sit behind a full landing page (see the Notes). 1. Start a new form Forms → New form . Every form in JomForm starts here; the list on this page holds the drafts and the published forms of the workspace you are in (its name is at the top right — Panduan Demo here). 2. Choose Blank form New form opens the template gallery. There is no wedding template in it, so start from Blank form — the gallery's other cards (Event Registration, Donation, F&B Order + Payment, Tuition Class Registration, …) are for the other showcases. A blank form gives you an empty canvas and the full field palette. 3. Set Form mode to Response form In the builder, the right-hand panel has FORM MODE at the bottom. Pick Response form — Collect responses only — no products, no payment. Leave it on Payment form and the form will expect a product to sell; an RSVP has nothing to sell. 4. Add the questions and mark the required ones Click a field in the palette on the left to add it to the form. For an RSVP: Block Label used here Notes --- --- --- Section We are getting married — join us for dinner and dancing A heading, not a question Name Full name Required by default Email Email Required by default Radio buttons Will you join us on 12 December 2026? Edit the two choices in Choices Number Number of guests (including you) Optional — only an attending guest answers it Note Message to the couple Free-form message Select a block and its settings appear in the right-hand panel: Text / label , Description, Placeholder, an Advanced disclosure, and Required . Tick Required on the question that must be answered — here the attendance radio — so the guest cannot submit without it. (A Text block that reads like a sentence offers Treat as intro line and becomes a heading; use Section for that from the start.) 5. Publish Save & publish in the top bar writes the form and puts it live in one step. Until you click it the toolbar shows • unsaved and the form stays a draft that nobody else can open. 6. Copy the public link The green Your form is live banner confirms the publish and holds the guest URL — Copy link (or Open form ) is what you paste into the invitation, a poster QR code, or your website. 7. Set the theme colour The form's look lives in Form Settings , not in the builder: open it from the form's row in Forms (or the Form Settings → button at the bottom of the builder's right panel). Under General , Theme color (primary) is the colour of the page's buttons and accents — the PREVIEW panel next to it shows a sample product in that colour. The same tab carries Status ( Draft / Private / Published / Unlisted ), Logo URL (https) , Custom JS and Allow embedding (iframe) ; press Save at the bottom and the page answers Saved ✓ . 8. What the guest sees Anyone with the link gets the title, the invitation line, the five fields and one Submit button in the theme colour you chose. The labels marked required carry (required) , and the guest never sees the dashboard. 9. Read the replies There is no separate inbox: Submission at the top of Form Settings opens Sales filtered to this form — Responses (this form) — and each RSVP is one row with its Received time, the Buyer 's name and email, the answers, and a View action that opens the full reply. Export CSV downloads every reply in the filter. Notes - A full page in front of the form is optional. Settings → Storefront turns the workspace's home page into a landing page (hero, subtitle, body, image, logo and a CTA button that points at the form), for when you want the couple's story and photos on a page of their own rather than just the form. The design-with-MCP guide walks that page. - The slug can change without breaking invitations. Saving a new slug moves the form to the new URL and the old address keeps working through a temporary redirect, so a link already sent still lands on the form."
+  },
+  {
+   "path": "/docs/workspaces",
+   "title": "Workspaces & deleting one",
+   "description": "What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires.",
+   "layer": "Product docs",
+   "section": "Workspaces",
+   "order": 11,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Workspaces",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "Workspaces — JomForm Docs What a workspace owns, its public address, its currency and exchange rates, how you create one, and what moving one to the Trash (and deleting it for good) requires. What a workspace is Renaming a workspace Deleting a workspace The storefront footer and its legal links Workspace currency & exchange rates Workspaces A workspace is the tenant everything you build lives in. This page covers what it owns, its public address, its currency and exchange rates, how you get one, and exactly what moving one to the Trash — or deleting it for good — requires. See the reserved workspace names for the addresses you cannot claim, and the sales guide for the history a delete refuses to discard."
+  },
+  {
+   "path": "/docs/activity",
+   "title": "Activity log",
+   "description": "The per-workspace audit trail: every recorded action in your workspace, newest first, filterable by event type and date. What it records, what it never records, how long rows are kept, and how the same data is read over the REST API and MCP.",
+   "layer": "Product docs",
+   "section": "Workspaces",
+   "order": 12,
+   "headings": [
+    "mt-2 text-2xl font-semibold tracking-tight Activity log",
+    "text-lg font-semibold tracking-tight"
+   ],
+   "text": "Activity log — JomForm Docs The per-workspace audit trail: every recorded action in your workspace, newest first, filterable by event type and date. What it records, what it never records, how long rows are kept, and how the same data is read over the REST API and MCP. What the activity log is Reading and filtering it What it does not record How long rows are kept The same data over the REST API and MCP JomForm Docs mt-2 text-2xl font-semibold tracking-tight Activity log Activity log Every action recorded in the workspace you have selected — including the destructive ones — newest first, filterable by event type and date. Append-only, and readable over REST and MCP as well as here. Related: the MCP tool reference (list_events) and the REST API reference (GET /v1/rest/events)."
+  },
+  {
+   "path": "/docs/sales",
+   "title": "Sales, responses & analytics",
+   "description": "The Sales page: every sale and every response in one list, per-form counts, partial refunds, and the realtime notifications and order-screen beep.",
+   "layer": "Product docs",
+   "section": "Sales & payments",
+   "order": 13,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Sales, responses &amp; analytics",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "Sales, responses & analytics — JomForm Docs The Sales page: every sale and every response in one list, per-form counts, partial refunds, and the realtime notifications and order-screen beep. Sales One list for sales and responses Responses (response-only forms) Form analytics (the per-form counter) Partial refunds Realtime notifications & the order screen beep Sales, responses &amp; analytics What the Sales page shows, how a response-only form fits into it, what the per-form counter counts, how a partial refund behaves, and how the realtime stream and the order-screen beep work."
+  },
+  {
+   "path": "/docs/subscriptions",
+   "title": "Subscriptions & recurring billing",
+   "description": "How JomForm recurring billing works: billing periods, a fixed number of charges, the next-charge schedule modes, the retry ladder, failed-card recovery, and the notifications a merchant receives.",
+   "layer": "Product docs",
+   "section": "Sales & payments",
+   "order": 14,
+   "headings": [
+    "text-2xl font-semibold text-slate-900 Subscriptions &amp; recurring billing",
+    "text-lg font-semibold text-slate-900",
+    "text-sm font-semibold text-amber-900 What recurring billing requires"
+   ],
+   "text": "Subscriptions & recurring billing — JomForm Docs How JomForm recurring billing works: billing periods, a fixed number of charges, the next-charge schedule modes, the retry ladder, failed-card recovery, and the notifications a merchant receives. How a subscription is created Billing period A fixed number of charges Next charge date — what happens when a payment is late When a charge fails Recovering a failed subscription What you are told Managing subscriptions Subscriptions &amp; recurring billing Charge customers automatically on a schedule — monthly or yearly, for as long as the plan runs or for a fixed number of payments. This page covers the billing period, how a fixed-term plan ends, what happens when a payment is late or fails, and how a subscription recovers. What recurring billing requires A card that can be charged again later. The card is saved at checkout; without that there is nothing to charge on the next period. Your gateway account configured with valid credentials — recurring charges use the same credentials as the first payment."
+  },
+  {
+   "path": "/docs/shipping",
+   "title": "Shipping by zone",
+   "description": "Charge a delivery fee per delivery zone: workspace-managed zones (state, district or postcode range) with rate rows, weight bands and a free-shipping threshold, resolved from the buyer's address at checkout into sales.shipping_sen.",
+   "layer": "Product docs",
+   "section": "Sales & payments",
+   "order": 15,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Shipping by zone",
+    "mt-8 text-xl font-semibold text-slate-900 Setting it up",
+    "text-base font-semibold text-slate-900",
+    "zones mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Zones and rate sources",
+    "no-match mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 An address outside every zone",
+    "weights mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Weight bands and the free-shipping threshold",
+    "what-lands-on-the-sale mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What lands on the sale",
+    "text-base font-semibold text-slate-900",
+    "mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Managing it with an agent (MCP)",
+    "font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]",
+    "couriers mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Courier quotes (Lalamove, EasyParcel)",
+    "courier-mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Connecting a courier with an agent (MCP)",
+    "font-mono text-sm font-semibold text-slate-900 [overflow-wrap:anywhere]"
+   ],
+   "text": "Shipping by zone — JomForm Docs Charge a delivery fee per delivery zone: workspace-managed zones (state, district or postcode range) with rate rows, weight bands and a free-shipping threshold, resolved from the buyer's address at checkout into sales.shipping_sen. 1. Create a zone set Open Form Settings → Shipping. A zone set is a named group of delivery zones; a form's shipping block points at one set, so several forms can share the same rates instead of retyping them. Give it a name and tick Default if it is the set you want offered first. To remove a set you no longer want, press Delete on it and save: a set a form's shipping block still points at is refused with the name of that form, so re-point the block first. Removing your LAST set is allowed — the account simply charges no managed rates until you add one again, which is the empty state the tab shows. 2. Add your zones A zone is a region with a name and at least one match rule: a list of states, a postcode range, or a list of districts (a city). A state entry can be any Malaysian state in any spelling — Johor, Pulau Pinang, Penang, KL, Melaka, Malacca — or the region tokens peninsular / east_malaysia, which expand to the whole group so you do not have to list thirteen states. Any ONE rule matching is enough. Give a narrow zone a LOWER priority number so a postcode exception is tested before the broad state zone it sits inside. The zone ticked as the fallback is used only when nothing else matches (see step 5). 3. Price each zone Every zone needs at least one rate row: a price in ringgit (stored as integer sen), an optional name (Standard, Express) and an optional weight band in grams. Rows are tried in order (Sort, then cheapest), so with no weight the first row is the fee. Leave the band empty and the rate applies to every parcel; give a band and a declared parcel weight picks the row whose band contains it — a weight outside every band refuses the order rather than charging an unrelated price. 4. Point a form's shipping block at the set In the form builder, select the shipping block and set its rate source to Managed zones, then pick the zone set. Map the buyer's address: choose which of the form's own blocks carries the state, the district/city and the postcode (add a select or text block for the state if the form has none). With no mapping the submission's client envelope is used, which is what an"
+  },
+  {
+   "path": "/docs/payment-fees",
+   "title": "Processing fees paid by the buyer",
+   "description": "Set your own acquirer rate per CHIP payment method (fixed sen and/or basis points). The fee is grossed up so you receive the full asking amount, and the buyer sees the method, the fee and the final total before paying.",
+   "layer": "Product docs",
+   "section": "Sales & payments",
+   "order": 16,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Processing fees paid by the buyer",
+    "mt-8 text-xl font-semibold text-slate-900 Setting it up",
+    "text-base font-semibold text-slate-900",
+    "gross-up mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Why the total is not &ldquo;price plus percentage&rdquo;",
+    "what-lands-on-the-sale mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 What lands on the sale",
+    "text-base font-semibold text-slate-900",
+    "mcp mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Managing it with an agent (MCP)",
+    "font-mono text-sm font-semibold text-slate-900"
+   ],
+   "text": "Processing fees paid by the buyer — JomForm Docs Set your own acquirer rate per CHIP payment method (fixed sen and/or basis points). The fee is grossed up so you receive the full asking amount, and the buyer sees the method, the fee and the final total before paying. 1. Decide whether you may pass the fee on Passing a card surcharge to the buyer is restricted by card-network and acquirer rules, and by consumer law in Malaysia the price shown must be the price paid. That is your call as the merchant: JomForm does not block the feature, it makes the disclosure explicit. The acknowledgement below is the record that you took that decision. 2. Type your own rate per payment method Open Settings → Payment fees. Every CHIP payment method has its own row: FPX, Card, e-Wallet and DuitNow QR. Each accepts a fixed amount in sen (RM1.00 = 100) and/or a percentage in basis points (100 = 1%, 140 = 1.4%, 200 = 2%). Both are optional and can be combined: RM1 fixed plus 1.4% is a valid rate. The rate is the one YOUR acquirer charges you — JomForm does not guess it, and nothing is filled in for you. 3. Tick the acknowledgement \"I understand this processing fee is passed on to the buyer and is subject to acquirer/card-issuer rules.\" The sentence is served by the API and recorded with your account, the time, and who accepted it. Until it is ticked, no fee reaches a buyer even if the rates are saved — the checkout simply charges the plain price. 4. Pick which forms carry the fee A workspace-wide rate applies to every published payment form. A single form can opt out: set its fee override to off (Form Settings, or PUT /v1/rest/forms/{id}/fee-override), and that form charges no fee while the rest of the workspace keeps its rates. The override is per form, not per buyer, so the same form behaves the same way for everyone. 5. Watch what the buyer sees On the checkout page the buyer chooses the payment method. The page shows the items subtotal, a separate processing-fee row naming the method and its rate, and the final total — before the Proceed to Payment button. If only one method carries a rate it is preselected, so there is no extra click. With more than one, the buyer must choose, and an order that names none is refused rather than priced with a guess. The total is grossed up, not added to CHIP charges its fee on the amount the buyer actually pays, not on your price. Adding \"pri"
+  },
+  {
+   "path": "/docs/customize",
+   "title": "Design → AI agent → MCP",
+   "description": "Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS.",
+   "layer": "Product docs",
+   "section": "Forms & fields",
+   "order": 17,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 [overflow-wrap:anywhere] Design → AI agent → MCP customization",
+    "mt-8 text-xl font-semibold text-slate-900 The flow",
+    "text-base font-semibold text-slate-900",
+    "menu mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 The restaurant menu (QR ordering)",
+    "product-images mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Product images on forms",
+    "brand-colour mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Your brand colour on the public form",
+    "builder mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Building an order form",
+    "publishing mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Publishing a form",
+    "domains mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Custom domains",
+    "form-url-slug mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Form URLs and slugs (rename a form)",
+    "menu-basket mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 The menu basket (multi-item ordering)",
+    "text-base font-semibold text-slate-900",
+    "mt-8 text-xl font-semibold text-slate-900 MCP tools used",
+    "affiliate-marketing mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Affiliate marketing (referral links &amp; commission)",
+    "mt-5 text-base font-semibold text-slate-900 Create an affiliate link",
+    "mt-5 text-base font-semibold text-slate-900 Set the commission",
+    "mt-5 text-base font-semibold text-slate-900 How a sale is attributed",
+    "mt-5 text-base font-semibold text-slate-900 Read an affiliate&apos;s sales",
+    "mt-5 text-base font-semibold text-slate-900 REST endpoints",
+    "templates mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Templates (save a form &amp; reuse it)",
+    "mt-5 text-base font-semibold text-slate-900 Edit a template&apos;s fields and design",
+    "mt-5 text-base font-semibold text-slate-900 A template never lands in another merchant&apos;s gallery by accident",
+    "language mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Language: dashboard vs. your forms",
+    "mt-5 text-base font-semibold text-slate-900 Choosing your customers&apos; language",
+    "mt-5 text-base font-semibold text-slate-900 Which language your emails use",
+    "workspace-address mt-8 scroll-mt-6 text-xl font-semibold text-slate-900 Your workspace address, and names that are reserved",
+    "mt-8 text-xl font-semibold text-slate-900 Image URLs must be https://",
+    "mt-8 text-xl font-semibold text-slate-900 Example prompt for your agent"
+   ],
+   "text": "Design → AI agent → MCP customization — JomForm Docs Design your form or landing page in a tool like Canva, then use an AI agent (e.g. Claude) connected to the JomForm MCP to apply that design and customize it with CSS and JS. 1. Design your interface in a design tool Sketch your form or landing page in any design tool (Canva, Figma, etc.). Export the assets you need — a logo, a hero image, brand colours, and a font. JomForm keeps authority over prices and the payment flow, so you design the look and feel, not the checkout logic. 2. Connect an AI agent to the JomForm MCP Point any MCP client (Claude, Cursor, etc.) at the server URL https://mcp.jomform.com/mcp. It registers itself via OAuth 2.1 — no API keys needed. The agent can then read and change your workspace through the MCP tools. 3. Upload your media Use upload_media to upload your design assets (logo, hero image, and code assets like css/js/html/svg/woff2). Images are optimised and served immediately; code assets are scanned before being served. An SVG must be a well-formed XML document: a browser renders it as XML, so a file with text before the <svg> tag (for example a /* */ banner) is refused rather than stored as a broken image. 4. Apply the theme and landing page Use set_form_theme to apply your brand colours (primary, background, text, card_background), font, logo, layout and spacing to a form. Use product_image_size (small|medium|large|hidden) and product_image_layout (thumbnail-left|image-top) to control the product photo on the form — image-top gives a restaurant menu-card look with the photo above the name. Use set_workspace_landing_page to customise your workspace storefront with a hero, subtitle, body, image, theme colours, logo and call-to-action buttons. 5. Add a restaurant menu (QR ordering) Use set_menu_page (issue #497: the menu is a PER-FORM setting, so it takes a form_id) to turn a form into a clean restaurant menu. Add Product blocks to the form for the items the menu sells — the menu lists ONLY the products the form references, so unrelated account products can never appear — then set enabled, categories ([{name, product_ids}]), and best_seller_ids (a list of product IDs shown as the Best Seller section). The menu is served at that form's own URL; the workspace home page is never affected and stays your normal landing page / form listing. Use a separate menu form per outlet or me"
+  },
+  {
+   "path": "/docs/custom-forms",
+   "title": "Custom HTML forms",
+   "description": "The fully-custom HTML response form: what the sanitizer keeps, how the field-registration contract works, the field types and what the server enforces on submit.",
+   "layer": "Product docs",
+   "section": "Forms & fields",
+   "order": 18,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Custom HTML forms",
+    "mt-8 text-xl font-semibold text-slate-900 A custom form is a response form",
+    "mt-8 text-xl font-semibold text-slate-900 What happens to the HTML",
+    "mt-8 text-xl font-semibold text-slate-900 Register the fields",
+    "mt-8 text-xl font-semibold text-slate-900 Field types",
+    "mt-8 text-xl font-semibold text-slate-900 Submit, storage and what the buyer sees",
+    "mt-8 text-xl font-semibold text-slate-900 Clearing a custom form",
+    "mt-8 text-xl font-semibold text-slate-900 Where to read next"
+   ],
+   "text": "JomForm Docs — custom HTML forms The fully-custom HTML response form: what the sanitizer keeps, how the field-registration contract works, the field types and what the server enforces on submit. Custom HTML forms A custom HTML form is a response-only form whose body is HTML supplied by an AI agent or by you, instead of the blocks the builder lays out. It is the custom_html section of the form&apos;s config: html is the markup and fields is the field-registration contract. The MCP tool upsert_form takes the two as top-level arguments (custom_html, custom_fields) and is the practical way to write one; a REST create or update can carry the same section inside a raw config map. There is no dashboard editor for this form type today, so the write surfaces are the only way in, and a form with no html in its custom_html section renders through the block renderer as usual. The dashboard&apos;s forms list still offers Edit on a custom form and opens the block editor, but that editor cannot change or remove the body: its save carries the custom_html section forward untouched, and the blocks it writes back are not rendered while the section carries html. mt-8 text-xl font-semibold text-slate-900 A custom form is a response form A custom form is a response form The custom_html section and the form&apos;s mode are two statements of one fact, so you only have to write one of them. A form that carries an enabled section is a response-only form — it collects answers, it never takes payment — and the write surfaces store mode: &quot;response&quot; beside the section for you. That holds for upsert_form&apos;s custom_html and custom_fields arguments and for a raw config map on a REST create or update alike, so a raw config whose custom_html has a body and no mode key is stored as a response form rather than as a payment form: the buyer gets your markup, not the builder or payment layout. Writing mode: &quot;payment&quot; next to an enabled section does not win — the section is the form&apos;s body, and the payment renderer cannot paint it, so the stored mode becomes response. The reverse direction is unaffected: a config with no section, or with an empty html, is stored exactly as you sent it, so setting mode is the only thing that makes an ordinary form a response form. A form already stored with an enabled section and no mode key (written before this rule, or cloned from an o"
+  },
+  {
+   "path": "/docs/variations",
+   "title": "Variation products",
+   "description": "Sell one product in several options: per-variation price, stock and image, plus a per-variation subscription cycle (monthly/yearly, trial days, charge count) that falls back to the product's.",
+   "layer": "Product docs",
+   "section": "Forms & fields",
+   "order": 19,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Variation products",
+    "text-xl font-semibold text-slate-900"
+   ],
+   "text": "Variation products — JomForm Docs Sell one product in several options: per-variation price, stock and image, plus a per-variation subscription cycle (monthly/yearly, trial days, charge count) that falls back to the product's. What a variation is Price, stock and image A subscription cycle on a variation What happens at checkout Managing variations from an AI agent Variation products Sell one product in several options — sizes, colours, formats — each with its own price, stock and image, and each able to carry its own subscription cycle."
+  },
+  {
+   "path": "/docs/embed",
+   "title": "Embed on your site",
+   "description": "Embed a JomForm form on any website with an iframe. Auto-height via postMessage, the merchant listener snippet, and the 640px fallback.",
+   "layer": "Product docs",
+   "section": "Storefront & pages",
+   "order": 20,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Embed a form on your site",
+    "mt-8 text-xl font-semibold text-slate-900 1. Paste the embed snippet",
+    "mt-8 text-xl font-semibold text-slate-900 2. Auto-height (recommended)",
+    "mt-8 text-xl font-semibold text-slate-900 The message contract",
+    "mt-8 text-xl font-semibold text-slate-900 Sandboxed iframes",
+    "mt-8 text-xl font-semibold text-slate-900 CORS",
+    "mt-8 text-xl font-semibold text-slate-900 Private forms and cookies",
+    "mt-8 text-xl font-semibold text-slate-900 Why not the plain form URL?"
+   ],
+   "text": "Embed a form on your site — JomForm Docs Embed a JomForm form on any website with an iframe. Auto-height via postMessage, the merchant listener snippet, and the 640px fallback. Embed a form on your site Drop a JomForm form into any website with an iframe . The embed renders the full form (fields, validation and payment) and submits straight into your form&apos;s submissions and sales. The buyer is taken to the top frame for CHIP checkout and the thank-you page — so payment works inside the embed. Use the embed URL below — not the form&apos;s ordinary public URL. The public URL is same-origin only: it answers X-Frame-Options: SAMEORIGIN , so a browser refuses to frame it on your site and shows an empty or broken frame. The embed URL is the one that is allowed to be framed from your domain. mt-8 text-xl font-semibold text-slate-900 1. Paste the embed snippet 1. Paste the embed snippet Turn on Allow embedding (iframe) in the form&apos;s settings, then paste this on your page. Replace your-workspace and your-form-slug with your workspace slug and the form&apos;s slug. With embedding switched off, that address answers 403 instead of rendering the form — the setting is what makes the iframe work, so turn it on before you paste. mt-8 text-xl font-semibold text-slate-900 2. Auto-height (recommended) 2. Auto-height (recommended) A fixed height causes inner scrollbars on longer forms. The embedded form posts its height to your page on load, on resize and whenever its content changes (conditional fields, product selection, the confirmation message after submit). Add this 3-line listener so the iframe grows and shrinks with the form — no inner scrollbars: Without the listener nothing breaks: the iframe keeps whatever height you set in CSS ( 640px in the snippet above), and longer forms scroll inside the frame. mt-8 text-xl font-semibold text-slate-900 The message contract The message contract Field Meaning The form only posts when it is actually inside a frame — a direct visit to the form URL is unaffected. mt-8 text-xl font-semibold text-slate-900 Sandboxed iframes Sandboxed iframes Plain iframes like the snippet above work as-is. If you add a sandbox attribute, include allow-forms allow-scripts allow-same-origin allow-top-navigation so the form can submit and the buyer can reach CHIP checkout in the top frame. mt-8 text-xl font-semibold text-slate-900 CORS CORS No COR"
+  },
+  {
+   "path": "/docs/email",
+   "title": "Email & notifications",
+   "description": "Receipt emails and per-form notification rules: how a form overrides the workspace, the default notification every new form starts with, dynamic placeholders, and delivery tracking.",
+   "layer": "Product docs",
+   "section": "Email",
+   "order": 21,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Email &amp; notifications",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "Email & notifications — JomForm Docs Receipt emails and per-form notification rules: how a form overrides the workspace, the default notification every new form starts with, dynamic placeholders, and delivery tracking. Receipt emails and notification rules Dynamic placeholders Delivery tracking Email &amp; notifications Receipts and notifications: how a form overrides the workspace&apos;s email settings, what a new form starts with, the placeholders you can use, and how delivery is tracked. Related: the placeholders reference , the email suppression list and the MCP tool reference for the email settings tools."
+  },
+  {
+   "path": "/docs/placeholders",
+   "title": "Placeholders reference",
+   "description": "Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}.",
+   "layer": "Product docs",
+   "section": "Email",
+   "order": 22,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Placeholders reference",
+    "mt-8 text-xl font-semibold text-slate-900 Recipient placeholders",
+    "mt-8 text-xl font-semibold text-slate-900 Subject & body placeholders",
+    "mt-8 text-xl font-semibold text-slate-900 Example"
+   ],
+   "text": "Placeholders reference — JomForm Docs Every dynamic placeholder you can use in JomForm emails and notifications: {admin_email}, {{ref_code}}, {{amount}}, {{items}}, {{buyer_name}}, {{form_url}}, {{date}}, {{table_number}} and any {{field_id}}. Placeholders reference JomForm emails and notifications support dynamic placeholders. When an email is sent, each placeholder is replaced with the real value for that sale or submission. There are two kinds: tokens used as recipients , and tokens used inside the subject and body. mt-8 text-xl font-semibold text-slate-900 Recipient placeholders Recipient placeholders Used in the Send to field of a notification rule. A recipient is either a literal email address, , or a submitted field value. Placeholder Meaning mt-8 text-xl font-semibold text-slate-900 Subject & body placeholders Subject & body placeholders Used in the subject and body of receipt emails and notification rules. mt-8 text-xl font-semibold text-slate-900 Example Example response form gets a different default notification, because a response has no sale: its rule fires on response.submitted and uses only placeholders that carry a value for a submission — and . A placeholder with no value is sent as an empty string, so check the reference above before using a sale placeholder in a notification that runs on a response form."
+  },
+  {
+   "path": "/docs/ses-reputation",
+   "title": "Email suppression list",
+   "description": "How JomForm's email suppression list works: which addresses are never mailed, why each one was added, and how to remove a false positive.",
+   "layer": "Product docs",
+   "section": "Email",
+   "order": 23,
+   "headings": [
+    "text-2xl font-semibold text-slate-900 Email suppression list",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "Email suppression list — JomForm Docs How JomForm's email suppression list works: which addresses are never mailed, why each one was added, and how to remove a false positive. What the suppression list is What gets added automatically What the reason codes mean Removing an address Addresses that can never receive mail Related protections Email suppression list Every address JomForm will not send email to, why it was added, and how to take one off the list. This is what protects the sending identity that every receipt, notification and login link on the platform relies on."
+  },
+  {
+   "path": "/docs/spam-detection",
+   "title": "AI spam detection",
+   "description": "How JomForm's AI spam detection works, what happens to a flagged entry, and how to turn it off for one workspace from the dashboard or over MCP.",
+   "layer": "Product docs",
+   "section": "Security",
+   "order": 24,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 AI spam detection",
+    "text-xl font-semibold text-slate-900"
+   ],
+   "text": "AI spam detection — JomForm Docs How JomForm's AI spam detection works, what happens to a flagged entry, and how to turn it off for one workspace from the dashboard or over MCP. How AI spam detection works What a flagged entry actually means Turning AI spam detection off (per workspace) Configuring it over MCP Reviewing and clearing flagged entries AI spam detection JomForm reviews form entries for spam with an AI judge running in the background. This page explains what the judge does, what a flagged entry means for your data, and how to turn the judge off for a workspace — from the dashboard or over MCP. See also the MCP tool reference for the exact tool signatures, and the Settings page in your dashboard for the switch itself."
+  },
+  {
+   "path": "/docs/security",
+   "title": "Trusted devices (2FA)",
+   "description": "How a trusted device skips the 2FA code for 30 days, how to see every trusted device, and why revoking one is immediate.",
+   "layer": "Product docs",
+   "section": "Security",
+   "order": 25,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 Trusted devices &amp; 2FA",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "Trusted devices (2FA) — JomForm Docs How a trusted device skips the 2FA code for 30 days, how to see every trusted device, and why revoking one is immediate. Two-factor authentication (2FA) Trusted devices Sessions that need a fresh code Passkeys (sign in without a password) Trusted devices &amp; 2FA What a trusted device is, how long it lasts, how to see and revoke every one of them, and which sessions still need a fresh code. See the MCP tool reference for the exact tool signatures, and Profile → Security in the dashboard for the list itself."
+  },
+  {
+   "path": "/docs/chat",
+   "title": "In-app assistant",
+   "description": "What JomForm's built-in chat assistant can and cannot do: it answers questions about how JomForm works and about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself.",
+   "layer": "Product docs",
+   "section": "In-app & support",
+   "order": 26,
+   "headings": [
+    "mt-2 text-2xl font-semibold tracking-tight In-app assistant",
+    "text-lg font-semibold tracking-tight"
+   ],
+   "text": "In-app assistant — JomForm Docs What JomForm's built-in chat assistant can and cannot do: it answers questions about how JomForm works and about your own forms, sales and products, it can file a feedback report, and it can prepare a small reversible change for you to confirm — it can never apply a change by itself. What the assistant is It speaks the language you write in: or What it knows about JomForm What it cannot do Confirming a proposed change What it may propose Filing feedback from the conversation Formatting in the answer While it is answering Limits and cost Your data in the conversation Your conversations are kept, and signing out does not delete them When it does not know JomForm Docs mt-2 text-2xl font-semibold tracking-tight In-app assistant In-app assistant The built-in chat: it answers questions about how JomForm works and about your own data, it files feedback for you, and it can prepare a small reversible change for you to confirm. It cannot apply a change by itself — by design, and enforced on the server. Related: in-app feedback and the MCP tool reference (submit_feedback, the tool that files a report). The proposal lane (propose_write) is not an MCP tool and is not in that reference — it runs in-app and its confirmation is a signed-in person&apos;s click."
+  },
+  {
+   "path": "/docs/feedback",
+   "title": "In-app feedback",
+   "description": "How JomForm's in-app feedback works: file a report or feature request from the dashboard, follow the conversation in the thread, and triage the queue as a platform admin.",
+   "layer": "Product docs",
+   "section": "In-app & support",
+   "order": 27,
+   "headings": [
+    "text-2xl font-semibold text-slate-900 In-app feedback",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "In-app feedback — JomForm Docs How JomForm's in-app feedback works: file a report or feature request from the dashboard, follow the conversation in the thread, and triage the queue as a platform admin. What in-app feedback is Where a thread lives What the statuses mean How you hear about a reply Rate limits and what protects the queue Formatting in a thread For platform admins: triage In-app feedback A direct line to the JomForm team from inside the dashboard: file a bug or a feature request, follow the reply in the same thread, and — for platform admins — triage the whole queue."
+  },
+  {
+   "path": "/docs/api",
+   "title": "REST API reference",
+   "description": "The JomForm REST API: create a key, make your first call, and the full endpoint reference. Server-to-server only — the API sends no CORS headers and does not answer browser preflight requests.",
+   "layer": "Reference",
+   "section": "Reference",
+   "order": 28,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 REST API",
+    "text-lg font-semibold text-slate-900 Start in 5 minutes",
+    "text-sm font-semibold text-slate-900",
+    "text-lg font-semibold text-slate-900 Authentication",
+    "text-lg font-semibold text-slate-900 Scopes",
+    "text-lg font-semibold text-slate-900 Errors",
+    "text-lg font-semibold text-slate-900 Rate limits",
+    "text-lg font-semibold text-slate-900 No CORS — server-to-server only",
+    "text-lg font-semibold text-slate-900 Endpoint reference",
+    "text-sm font-semibold uppercase tracking-wide text-[var(--jf-primary)]",
+    "text-lg font-semibold text-slate-900 Versioning &amp; changelog",
+    "text-lg font-semibold text-slate-900 Building and testing against the API"
+   ],
+   "text": "REST API reference — JomForm Docs The JomForm REST API: create a key, make your first call, and the full endpoint reference. Server-to-server only — the API sends no CORS headers and does not answer browser preflight requests. Start in 5 minutes Authentication Scopes Errors Rate limits No CORS Endpoint reference Versioning & changelog Building and testing against the API REST API The JomForm REST API lets your own server create forms, read sales and responses, manage products, subscriptions, webhooks and domains. It is served from and currently exposes operations , every one of them listed on this page. A machine-readable OpenAPI 3.1 contract for the same surface is published at . It is generated from the API&apos;s own route table and checked against it on every test run, so it cannot drift from the endpoints you actually have. On this page Sign in and open Settings → API keys , then create a key. Choose readwrite if it needs to create or change anything. The raw key is shown once ; copy it then. You can also create one over the API itself with POST /v1/rest/keys Export it in your shell — the API never takes a key in the query string, and this page never prints a real one: Make your first call. Every example on this page is executed against a live server by the test suite, so these commands are known to work. Expect HTTP , and a body containing That run is the whole flow: authenticate, create a form, publish it, read it back, read the records it produced. Send the key as a bearer token: A key belongs to a workspace (account), not to a person. Everything it reads and writes is that workspace&apos;s data. The dashboard also accepts a browser session cookie on these same routes. A script should use a key. The same key drives the MCP server. There is one credential for both surfaces — create it once and use it for /v1/rest/* and for MCP (see the MCP tool reference ). A missing or revoked key is answered with 401 before any workspace is resolved, so a broken client fails loudly rather than reading data it should not. A key carries a scope that decides what it may do at all, independently of who created it: readonly — read only. It is refused on every write with 403 , and also on the reads whose handler writes anyway — an editor flow that saves through a write gate, or a value minted on first use. Those are the routes below; the list comes from the contract, so i"
+  },
+  {
+   "path": "/docs/mcp",
+   "title": "MCP tool reference",
+   "description": "Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in the api/internal/mcpsrv package.",
+   "layer": "Reference",
+   "section": "Reference",
+   "order": 29,
+   "headings": [
+    "text-3xl font-bold tracking-tight text-slate-900 MCP tool reference",
+    "text-lg font-semibold text-slate-900 OAuth discovery",
+    "text-lg font-semibold text-slate-900 Structured output",
+    "text-lg font-semibold text-slate-900 OAuth connector scopes",
+    "text-lg font-semibold text-slate-900 API-key scopes",
+    "text-lg font-semibold text-slate-900"
+   ],
+   "text": "MCP tool reference — JomForm Docs Every MCP tool JomForm exposes to AI agents: name, purpose, inputs and outputs. Kept in sync with the tool registry in the api/internal/mcpsrv package. MCP tool reference Every tool JomForm exposes to connected AI agents via the Model Context Protocol. Connect any MCP client to https://mcp.jomform.com/mcp and agents discover these tools automatically. This page lists the whole registry — the api/internal/mcpsrv package at this release — and a guard fails the build if the two drift apart in either direction. tools across categories. OAuth discovery The connector authenticates with OAuth 2.1 (authorization code + PKCE, no API keys). A client discovers how to authenticate from the server itself: An unauthenticated request to is refused with 401 and a WWW-Authenticate: Bearer resource_metadata=&quot;…&quot; header naming the protected-resource metadata URL. The client fetches /.well-known/oauth-protected-resource (RFC 9728). It names the protected resource ( ), the authorization server ( https://mcp.jomform.com ), the scopes read and readwrite ) and that the bearer token is presented in the Authorization header. It then fetches the authorization-server metadata at /.well-known/oauth-authorization-server (RFC 8414) for the authorize, token, revoke and registration endpoints. It registers itself dynamically, opens the authorize URL in the browser (you log in and grant access), and exchanges the code for an access token — sending the resource parameter on both the authorize and token requests. JomForm validates it: a value that is not this MCP endpoint is rejected and no token is issued. Every later call to /mcp carries the access token as a Bearer credential. Structured output Tool results are returned as structured content, and every tool declares the shape of that result in its outputSchema . All tools declare an object schema, which is what makes the server usable with a client that validates tools/list strictly. Every listing tool therefore wraps its array in an object: the records are under items , and paginated listings also carry page limit total . So list_products returns , not a bare array. Batch tools report their summary next to the per-item outcomes: capture_all_pending_sales . Single-record tools return their fields at the top level of the object. OAuth connector scopes A connector authenticates with OAuth 2.1, and th"
+  }
+ ]
+}

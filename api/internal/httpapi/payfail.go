@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 )
 
 // chipPaymentUnavailableStatus is the status the buyer's /order call answers
@@ -65,11 +66,18 @@ const salePaymentUnavailableMessage = "the payment could not be started — plea
 // SetStatus is logged and the response still goes out (a phantom pending row is
 // a smaller failure than a buyer staring at a dead form).
 func (h *PublicHandlers) answerChipPurchaseFailed(w http.ResponseWriter, r *http.Request, sale *dbstore.Sale) {
-	if err := h.Sales.SetStatus(r.Context(), sale.ID, dbstore.SaleFailed); err != nil {
+	// The lifecycle table owns the rule that a fresh sale may fail; Apply also
+	// answers the impossible case (a sale already past pending) instead of this
+	// handler assuming it.
+	if res, lerr := lifecycle.SalesMachine.Apply(sale, lifecycle.SaleEventFail); lerr != nil {
+		slog.Error("chip_failure_mark_sale_failed",
+			"err", fmt.Sprintf("%+v", lerr), "sale", sale.RefCode)
+	} else if err := h.Sales.SetStatus(r.Context(), sale.ID, res.To); err != nil {
 		slog.Error("chip_failure_mark_sale_failed",
 			"err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
+	} else {
+		sale.Status = res.To
 	}
-	sale.Status = dbstore.SaleFailed
 	writeJSON(w, chipPaymentUnavailableStatus, map[string]string{
 		"status":   "payment_error",
 		"ref_code": sale.RefCode,

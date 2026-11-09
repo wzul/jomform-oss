@@ -16,6 +16,11 @@
 #   Q. the tag-pinned release tree is SEEDED before it ships, and the dependency set
 #      is chosen by the per-tree record (reuse) — with `--ship-only` recovering a
 #      genuine ship failure
+#   Q6. an unshippable cut is REFUSED before it tags (exit 7) and never reaches the mirror
+#   Q7. a ship that returned 0 but prod did not receive exits 5, and the mirror is not reached
+#   Q8. control: a verified ship does reach the mirror
+#   R. build-and-ship performs the server half and PROVES it (or refuses before building);
+#      a build-only run still works and never claims a ship
 #
 # Everything runs in throwaway repos: no network, no real remote, no docker, no ship.
 set -o pipefail
@@ -53,8 +58,10 @@ CUT="$HERE/cut-release.sh"
 SYNC="$HERE/sync-oss.sh"
 # deploy/web_modules.sh is the SEEDER the release path needs (see section Q): without it
 # cut-release cannot give its tag-pinned worktree a web/node_modules, so a missing one is
-# a broken release path, not a skipped case.
-for f in "$RRT" "$CUT" "$SYNC" "$HERE/web_modules.sh"; do
+# a broken release path, not a skipped case. deploy/release_scope.sh is the RULE that says
+# whether a diff owes an image at all (section S); without it both release tools refuse to
+# run, so a missing one is likewise a broken release path.
+for f in "$RRT" "$CUT" "$SYNC" "$HERE/web_modules.sh" "$HERE/release_scope.sh"; do
   [ -f "$f" ] || { echo "$PROG: missing $f" >&2; exit 1; }
 done
 
@@ -125,7 +132,8 @@ DROP_TAGS
 git tag -a v1.0.0 -m "Release v1.0.0"
 git push -q origin v1.0.0
 printf 'feature\n' >> README.md
-git commit -q -am "feat: something worth releasing"
+mkdir -p api && printf 'package api\n' > api/feature.go
+git add -A && git commit -q -m "feat(api): something worth releasing"
 git push -q origin main
 BEFORE=$(git tag --list | wc -l | tr -d ' ')
 OUT=$(bash "$CUT" --dry-run 2>&1); RC=$?
@@ -245,7 +253,7 @@ printf '%s\n' "$OUT" | sed 's/^/    /'
 [ $RC -eq 1 ] && ok "no commits since the tag -> not due" || bad "expected exit 1, got $RC"
 grep -q 'nothing on' <<<"$OUT" && ok "says there is nothing to release" || bad "empty window not explained"
 
-printf 'one\n' >> README.md && git commit -q -am "fix: one commit" && git push -q origin main
+mkdir -p api && printf 'one\n' > api/one.go && git add -A && git commit -q -m "fix(api): one commit" && git push -q origin main
 OUT=$(RELEASE_MIN_COMMITS=5 RELEASE_MAX_AGE_HOURS=0 bash "$DUE" 2>&1); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 [ $RC -eq 1 ] && ok "1 commit, threshold 5 -> not due" || bad "expected exit 1, got $RC"
@@ -267,11 +275,56 @@ grep -qi 'forced' <<<"$OUT" && ok "says it was forced" || bad "forced reason mis
 # Its dedupe is verified by reading the code path, not by poking the real kanban.
 
 
+# K2 — THE DEFECT THIS CARD EXISTS FOR. A window of deploy/-only commits is "due" on the
+# arithmetic (6 commits >= 5) and was released four times in eight (v1.25.0, v1.25.1,
+# v1.27.2, v1.27.4) — each taking GitHub's "Latest" badge with no image behind it. The
+# schedule now asks whether the diff owes anything at all.
+drop_tags_keep_main() { DROP_TAGS; git push -q origin main 2>/dev/null || true; }
+drop_tags_keep_main
+git tag -a v1.9.0 -m "Release v1.9.0" && git push -q origin v1.9.0
+mkdir -p deploy
+for i in 1 2 3 4 5 6; do
+  printf 'tooling %s\n' "$i" >> deploy/release-tooling.txt
+  git add -A && git commit -q -m "chore(deploy): tooling change $i"
+done
+git push -q origin main
+OUT=$(RELEASE_MIN_COMMITS=1 RELEASE_MAX_AGE_HOURS=0 bash "$DUE" 2>&1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 1 ] && ok "a deploy/-only window is NOT due, however many commits it holds" \
+  || bad "expected exit 1, got $RC (the schedule would cut a version for deploy/ again)"
+grep -q 'owe no image' <<<"$OUT" && ok "says the window owes no image" || bad "the no-image reason is not stated"
+grep -qi 'scope: deploy/' <<<"$OUT" && ok "names the paths that made it plumbing" || bad "the scope is not named"
+grep -q 'ride along with the next real release' <<<"$OUT" && ok "says the commits are kept for the next real release" \
+  || bad "the commits' fate is not stated"
+
+# The control: --force is an explicit decision (Wan said "release now") and still files.
+OUT=$(RELEASE_MIN_COMMITS=0 RELEASE_MAX_AGE_HOURS=0 bash "$DUE" --force 2>&1); RC=$?
+[ "$RC" -eq 0 ] && ok "control: --force is still DUE on a tooling-only window" || bad "expected exit 0, got $RC"
+
+# No regression: one api/ commit in the same window makes it a release again.
+printf 'package api\n' > api/real.go && git add -A && git commit -q -m "fix(api): a real change (#1234)"
+git push -q origin main
+OUT=$(RELEASE_MIN_COMMITS=1 RELEASE_MAX_AGE_HOURS=0 bash "$DUE" 2>&1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "an api/ commit makes the window due again (no regression)" || bad "expected exit 0, got $RC"
+grep -q 'this window owes an image' <<<"$OUT" && ok "says the window owes an image" || bad "the image debt is not reported"
+grep -qi 'scope:.*api/' <<<"$OUT" && ok "names api/ as the reason" || bad "the scope is not named"
+
+# And a web/ commit alone is enough too: the frontend is a shipped artefact.
+drop_tags_keep_main
+git tag -a v1.9.1 -m "Release v1.9.1" && git push -q origin v1.9.1
+mkdir -p web && printf 'export const y = 1;\n' > web/another.tsx && git add -A && git commit -q -m "fix(web): a frontend change"
+git push -q origin main
+OUT=$(RELEASE_MIN_COMMITS=1 RELEASE_MAX_AGE_HOURS=0 bash "$DUE" 2>&1); RC=$?
+[ "$RC" -eq 0 ] && ok "a web/-only window is DUE" || bad "expected exit 0, got $RC"
+grep -qi 'scope:.*web/' <<<"$OUT" && ok "names web/ as the reason" || bad "the scope is not named"
+
+
 echo "== L. the repair path re-cuts the SAME version (--tag), never a new one"
 DROP_TAGS
 git push -q origin main 2>/dev/null || true
 git tag -a v1.5.0 -m "Release v1.5.0" && git push -q origin v1.5.0
-printf 'repair\n' >> README.md && git commit -q -am "fix: needs re-cutting" && git push -q origin main
+printf 'repair\n' > api/repair.go && git add -A && git commit -q -m "fix(api): needs re-cutting" && git push -q origin main
 OUT=$(bash "$CUT" --dry-run --tag v1.5.0 2>&1); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 [ $RC -eq 4 ] && ok "a tag that still exists is never silently moved (exit 4)" || bad "expected exit 4, got $RC"
@@ -396,6 +449,27 @@ grep -q '^TITLE: release: cut the next release' <<<"$OUT" && ok "prints the card
 grep -q 'cut-release.sh --yes' <<<"$OUT" && ok "prints the body a lane can file" || bad "no body printed"
 [ ! -s "$FL" ] && ok "--print-card never touches the board" || bad "--print-card called the board"
 
+# N6 — THE CARD ITSELF. A deploy/-only window must not even CREATE the card that leads to a
+# version cut: filing it and refusing it later would cost a deploy-lane run to discover.
+reset_fake
+git push -q origin main 2>/dev/null || true
+git tag -a v1.7.5 -m "Release v1.7.5" && git push -q origin v1.7.5
+printf 'tooling only\n' >> deploy/release-tooling.txt
+git add -A && git commit -q -m "chore(deploy): tooling only (#1700)"
+git push -q origin main
+OUT=$( unset HERMES_DELEGATED_CHILD_CONTEXT; PATH="$S/bin:$PATH" FAKE_LOG="$FL" FAKE_STATE="$FB" \
+       bash "$DUE" --file-card 2>&1 ); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 1 ] && ok "a deploy/-only window files NO card (exit 1)" || bad "expected exit 1, got $RC"
+! grep -q 'ARGV .* create ' "$FL" && ok "…create was never called" \
+  || bad "it filed a release card for a tooling-only window"
+grep -q 'owe no image' <<<"$OUT" && ok "…and says why nothing was filed" || bad "no reason printed"
+# The control: --force is the explicit "release now", and it does file.
+reset_fake
+OUT=$(due_open); RC=$?
+[ "$RC" -eq 0 ] && grep -q 'ARGV .* create ' "$FL" && ok "control: --force files the card anyway" \
+  || bad "control: --force did not file (rc=$RC)"
+
 
 echo "== O. build-and-ship cannot be told a version that contradicts the tag"
 BS="$S/ship"; mkdir -p "$BS/deploy" "$BS/api"
@@ -492,14 +566,38 @@ cat > "$S/bin/gh" <<'GH'
 #!/usr/bin/env bash
 echo "gh-stub $*"
 GH
-chmod +x "$S/bin/gh"
+# The ssh stub answers the ONE question deploy/ship_proof.sh asks — "which version is the
+# running <service> container?" — without a network, and records that it was asked. Cases
+# that must NOT reach the server (a refused cut, a failed ship) assert it was never called.
+# STUB_LIVE_VERSION is the version this fixture world says prod is running: v1.1.0 unless a
+# case says otherwise, because a case where the answer is the OLD version is how
+# "the ship returned 0 but prod never got it" is reproduced.
+cat > "$S/bin/ssh" <<'SSH'
+#!/usr/bin/env bash
+last=""
+for a in "$@"; do last=$a; done
+printf 'ssh-arg: %s\n' "$last" >> "${SSH_STUB_LOG:-/dev/null}"
+printf '%s\n' "${STUB_LIVE_VERSION-v1.1.0}"
+if [ "${SSH_STUB_FAIL:-0}" != 0 ]; then exit "$SSH_STUB_FAIL"; fi
+exit 0
+SSH
+chmod +x "$S/bin/gh" "$S/bin/ssh"
 
 qfixture() {   # $1 = sandbox dir -> sets QD, QTREE, QDEPS, QGATE
   QD=$1
   QGATE="$1.gate"
   rm -rf "$QD" "$QD.git-origin" "$QD.donor2" "$QGATE"
+  rm -f "$QD.ssh.log"
   mkdir -p "$QD/deploy" "$QD/web" "$QGATE"
-  cp "$HERE/cut-release.sh" "$HERE/web_modules.sh" "$QD/deploy/"
+  cp "$HERE/cut-release.sh" "$HERE/web_modules.sh" "$HERE/ship_proof.sh" "$HERE/release_scope.sh" "$QD/deploy/"
+  # The mirror is a STUB here: the release path must be unable to reach it on an unshipped
+  # tree, and "SYNC STUB RAN" in the output is how a case proves it did or did not.
+  cat > "$QD/deploy/sync-oss.sh" <<'SYNCSTUB'
+#!/usr/bin/env bash
+printf 'SYNC STUB RAN: %s\n' "$*"
+exit 0
+SYNCSTUB
+  chmod +x "$QD/deploy/sync-oss.sh"
   printf 'node_modules/\n' > "$QD/.gitignore"
   printf '{"name":"web","lockfileVersion":3}\n' > "$QD/web/package-lock.json"
   # The WITNESS is the ship. Its three assertions ARE the acceptance: it ran in the
@@ -508,6 +606,13 @@ qfixture() {   # $1 = sandbox dir -> sets QD, QTREE, QDEPS, QGATE
   # dirty-tree guard would still pass.
   cat > "$QD/deploy/build-and-ship.sh" <<'WITNESS'
 #!/usr/bin/env bash
+# REQUIRE_SHIP is how cut-release says "this run is a deploy". A cut that hands the ship a
+# build-only run is the v1.27.3 defect: the child builds, exits 0, and the caller reads that
+# as "prod has it". Deleting `REQUIRE_SHIP=1` from either call site turns section Q RED here.
+if [ "${REQUIRE_SHIP:-0}" != 1 ]; then
+  echo "WITNESS FAIL: cut-release did not pass REQUIRE_SHIP=1 — this is a build-only run and it must never be read as a ship" >&2
+  exit 1
+fi
 printf 'SHIP image=%s version=%s cwd=%s\n' "${IMAGE:-jomform-api}" "${VERSION_OVERRIDE:-none}" "$PWD"
 case "$PWD" in
   */release-tree.*/tree) ;;
@@ -597,12 +702,24 @@ REC
 qcut() {      # $1 = webdeps the witness must see; rest = extra env assignments for the child
   local want=$1; shift
   ( cd "$QD" && env PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+      SSH_HOST=stub-deploy-host SSH_STUB_LOG="$QD.ssh.log" \
       EXPECT_WEBDEPS="$want" "$@" \
       bash deploy/cut-release.sh --yes --no-oss 2>&1 )
 }
 qshiponly() {  # $1 = webdeps the witness must see
   ( cd "$QD" && env PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+      SSH_HOST=stub-deploy-host SSH_STUB_LOG="$QD.ssh.log" \
       EXPECT_WEBDEPS="$1" bash deploy/cut-release.sh --yes --ship-only --no-oss 2>&1 )
+}
+# qcutmirror — the same cut with the MIRROR ENABLED (it is a stub that prints SYNC STUB RAN).
+# Used only by the cases that assert the mirror cannot be reached.
+qcutmirror() {  # <flags for cut-release> <extra env assignments...>
+  local flags=$1; shift
+  # shellcheck disable=SC2086  # flags is a literal we control ("--no-ship", "", ...)
+  ( cd "$QD" && env PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+      SSH_HOST=stub-deploy-host SSH_STUB_LOG="$QD.ssh.log" \
+      EXPECT_WEBDEPS="$QDEPS" "$@" \
+      bash deploy/cut-release.sh --yes $flags 2>&1 )
 }
 
 # Q1 — a record for the tagged tree names a dependency set that exists on the host in a
@@ -630,6 +747,20 @@ if qfixture "$QREPO"; then
   grep -q 'test environment:' <<<"$OUT" \
     && ok "the test environment is loaded before gating (the fingerprint depends on it)" \
     || bad "the test env file was not loaded"
+  # THE POST-SHIP ASSERTION RAN. "the ship returned 0" is not the acceptance criterion any
+  # more: cut-release asks the server and says so, once per image.
+  [ "$(grep -c 'verified: prod runs v1.1.0' <<<"$OUT")" -eq 1 ] \
+    && ok "the API ship is confirmed against prod, not against the child's exit code" \
+    || bad "cut-release did not verify the API image on prod"
+  grep -q "verified: prod's web container runs v1.1.0" <<<"$OUT" \
+    && ok "the web ship is confirmed against prod too" || bad "the web image was not verified on prod"
+  # ...and the question was actually ASKED OF BOTH SERVICES. The say() above is printed
+  # unconditionally, so without this the API half could be deleted while the web half still
+  # caught a bad prod (and every case above stayed green).
+  grep -q "ps -q 'api'" "$QD.ssh.log" 2>/dev/null \
+    && ok "the API proof asked prod which container is running" || bad "prod was never asked about api"
+  grep -q "ps -q 'web'" "$QD.ssh.log" 2>/dev/null \
+    && ok "the web proof asked prod which container is running" || bad "prod was never asked about web"
 else
   bad "section Q fixture could not be built"
 fi
@@ -709,6 +840,432 @@ else
   bad "section Q fixture could not be built"
 fi
 
+# Q6 — THE v1.27.3 DEFECT, REPRODUCED. Nothing in this environment sets SSH_HOST, so a cut
+# that must ship cannot reach prod. It must REFUSE (exit 7) BEFORE tagging, build nothing,
+# and never reach the mirror — instead of exiting 0, printing "shipped"/"mirrored"/"RELEASED",
+# and letting the public repo advertise a release prod never received.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$( cd "$QD" && env -u SSH_HOST -u REMOTE_BUILD_HOST \
+           PATH="$S/bin:$PATH" PREFLIGHT_RESULT_DIR="$QGATE" TEST_ENV_FILE="$QENV" \
+           EXPECT_WEBDEPS="$QDEPS" bash deploy/cut-release.sh --yes 2>&1 ); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 7 ] && ok "an unshippable cut exits 7" || bad "expected exit 7, got $RC"
+  grep -q 'REFUSING to cut v1.1.0' <<<"$OUT" && ok "names the refusal and the version" \
+    || bad "the refusal is not explained"
+  grep -q 'neither SSH_HOST' <<<"$OUT" && ok "says what is missing" || bad "the missing setting is not named"
+  grep -q 'NOTHING was tagged' <<<"$OUT" && ok "says nothing was tagged" || bad "tag state not stated"
+  git -C "$QD" rev-parse --verify --quiet refs/tags/v1.1.0 >/dev/null \
+    && bad "an unshippable release was tagged anyway" || ok "no tag was created"
+  ! grep -q '^SHIP image=' <<<"$OUT" && ok "nothing was built or shipped" || bad "the ship ran without a server"
+  ! grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "the mirror was never reached" || bad "an unshipped tree was mirrored"
+  ! grep -q 'RELEASED v1.1.0' <<<"$OUT" && ok "never claims RELEASED" || bad "claims RELEASED without shipping"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q7 — THE CHILD SAYS OK, PROD SAYS NO. This is the shape that actually happened: the ship
+# returned 0 (there it was a skipped scp; here it is a recreate that left the old image), and
+# the release claimed success. cut-release must ask prod itself and stop before the mirror.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$(qcutmirror "" STUB_LIVE_VERSION=v1.0.0); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 5 ] && ok "a ship that prod did not receive exits 5" || bad "expected exit 5, got $RC"
+  grep -q 'SHIP NOT PROVEN for v1.1.0' <<<"$OUT" && ok "says the ship is not proven" \
+    || bad "the unproven ship is not reported"
+  grep -q "labelled version=v1.0.0" <<<"$OUT" && ok "names what prod is actually running" \
+    || bad "does not say what prod runs"
+  ! grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "the mirror was never reached" || bad "mirrored a tree prod did not receive"
+  ! grep -q 'RELEASED' <<<"$OUT" && ok "never claims RELEASED" || bad "claims RELEASED without an unproven ship"
+  git -C "$QD" rev-parse --verify --quiet refs/tags/v1.1.0 >/dev/null \
+    && ok "the tag survives the unproven ship (it is the record of the decision)" \
+    || bad "the tag was removed by an unproven ship"
+else
+  bad "section Q fixture could not be built"
+fi
+
+# Q8 — the control for Q6/Q7: the SAME fixture, the SAME flags, prod actually running the new
+# tag -> the release completes and the mirror IS reached. Without this the two refusals above
+# could be satisfied by a script that never mirrors anything.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$(qcutmirror ""); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "a verified ship reaches RELEASED with the mirror enabled" \
+    || bad "expected exit 0, got $RC"
+  grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "a SHIPPED tree is mirrored" || bad "the mirror was not reached on a good ship"
+  grep -q 'RELEASED v1.1.0' <<<"$OUT" && ok "reports RELEASED" || bad "never reached RELEASED"
+else
+  bad "section Q fixture could not be built"
+fi
+
+
+# ============================================================================
+# R. build-and-ship: the ship path, and the proof that makes it a ship
+#
+# The v1.27.3 defect had two halves: cut-release never required a ship, and
+# build-and-ship printed "SSH_HOST not set — skipping scp" as an INFO line and exited 0, so
+# even a caller that looked at the exit code was told the build succeeded and nothing more.
+# Section Q covers the caller (cut-release refuses, and cannot reach the mirror). This section
+# covers the callee, on the SHIPPED bytes with docker/ssh/scp stubbed:
+#
+#   R1  --ship with no reachable server -> exit 7 BEFORE the gate and BEFORE any build.
+#   R2  --ship with a server -> it performs load + tag :latest + recreate ITSELF and exits 0,
+#       saying the running container carries the tag.
+#   R3  the recreate leaves the OLD image running -> exit 7 and it names what prod runs.
+#       This is the assertion biting: without it, R2's "success" is just a command that ran.
+#   R4  control: WITHOUT --ship the same tree still builds and exits 0, and never tags or
+#       recreates anything — a build-only run must stay possible and must never look like a
+#       ship (this is what DEPLOY.md's documented usage relies on).
+# ============================================================================
+echo "== R. build-and-ship: a ship is performed and PROVEN (or refused)"
+RWS="$S/shipws"
+RBIN="$RWS/bin"
+rm -rf "$RWS" "$S/shipws-state"
+mkdir -p "$RWS/deploy" "$RWS/api" "$RWS/compose" "$RBIN" "$S/shipws-state"
+cp "$HERE/build-and-ship.sh" "$HERE/require-release-tag.sh" "$HERE/ship_proof.sh" "$RWS/deploy/"
+: > "$RWS/api/Dockerfile"
+cat > "$RBIN/docker" <<'DOCKER'
+#!/usr/bin/env bash
+set -uo pipefail
+log=${DOCKER_STUB_LOG:-/dev/null}
+state=${DOCKER_STUB_STATE:?}
+printf 'docker %s\n' "$*" >>"$log"
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  build)
+    ver=""; tag=""
+    while [ $# -gt 0 ]; do
+      case "${1:-}" in
+        --build-arg) case "${2:-}" in VERSION=*) ver=${2#VERSION=} ;; esac; shift 2 ;;
+        --tag) tag=${2:-}; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    mkdir -p "$state/images" "$state/labels"
+    printf 'id-%s\n' "$ver" > "$state/images/$tag"
+    printf '%s\n' "$ver" > "$state/labels/id-$ver"
+    ;;
+  image)   # image inspect --format FMT <ref>
+    ref=${!#}
+    [ -f "$state/images/$ref" ] || { printf 'no such image: %s\n' "$ref" >&2; exit 1; }
+    cat "$state/images/$ref"
+    ;;
+  save)    # save <ref> -> bytes on stdout; gzip accepts an empty stream
+    ;;
+  load)    # the tag lives inside the tarball, which this stub cannot read: recorded only
+    ;;
+  tag)
+    src=${1:-}; dst=${2:-}
+    [ -f "$state/images/$src" ] || { printf 'no such image: %s\n' "$src" >&2; exit 1; }
+    cp "$state/images/$src" "$state/images/$dst"
+    ;;
+  compose)
+    sub=${1:-}
+    [ $# -gt 0 ] && shift
+    svc=${!#}
+    case "$sub" in
+      ps)
+        [ -f "$state/running/$svc" ] && printf 'ctr-%s\n' "$svc"
+        ;;
+      up)
+        # STUB_STALE=1 is "compose said OK and nothing changed" — the failure mode a bare
+        # exit code cannot see (issue #576 shipped a web container exactly that way).
+        if [ "${STUB_STALE:-0}" != 1 ]; then
+          mkdir -p "$state/running"
+          cp "$state/images/${STUB_LATEST_REF:-jomform-api:latest}" "$state/running/$svc" 2>/dev/null \
+            || printf 'unknown\n' > "$state/running/$svc"
+        fi
+        ;;
+    esac
+    ;;
+  inspect)  # inspect --format FMT ctr-<svc>
+    ref=${!#}
+    id=$(cat "$state/running/${ref#ctr-}" 2>/dev/null || printf 'missing')
+    cat "$state/labels/$id" 2>/dev/null || printf '\n'
+    ;;
+esac
+exit 0
+DOCKER
+# ssh runs the remote command HERE, so "the server" is the same docker stub. That is what
+# makes the load/tag/recreate/proof sequence observable without a network or a container.
+cat > "$RBIN/ssh" <<'SSH'
+#!/usr/bin/env bash
+last=""
+for a in "$@"; do last=$a; done
+exec bash -c "$last"
+SSH
+cat > "$RBIN/scp" <<'SCP'
+#!/usr/bin/env bash
+printf 'scp %s\n' "$*" >> "${DOCKER_STUB_LOG:-/dev/null}"
+exit 0
+SCP
+chmod +x "$RBIN/docker" "$RBIN/ssh" "$RBIN/scp"
+(
+  cd "$RWS" || exit 1
+  git init -q .
+  git config user.name "Release Selftest"
+  git config user.email "selftest@users.noreply.github.com"
+  git add -A
+  git commit -q -m "ship sandbox"
+  git tag -a v1.0.0 -m "Release v1.0.0"
+) >/dev/null 2>&1
+
+rship() {   # <logfile> <args for build-and-ship> <extra env assignments...>
+  local log=$1; shift
+  local sargs=$1; shift
+  : > "$log"
+  # shellcheck disable=SC2086  # sargs is a literal we control ("--ship" or "")
+  ( cd "$RWS" && env PATH="$RBIN:$PATH" \
+      DOCKER_STUB_LOG="$log" DOCKER_STUB_STATE="$S/shipws-state" \
+      LOCK_FILE="$S/shipws.lock" OUT_DIR="$S/shipws-out" \
+      REMOTE_COMPOSE_DIR="$RWS/compose" \
+      SKIP_TESTS=1 SKIP_RELEASE_SELFTEST=1 \
+      "$@" bash deploy/build-and-ship.sh $sargs 2>&1 )
+}
+
+# R1 — no server, but a ship was asked for: refused before anything is built.
+RLOG="$S/r1.docker.log"
+OUT=$(rship "$RLOG" "--ship"); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 7 ] && ok "R1 --ship with no SSH_HOST/REMOTE_BUILD_HOST exits 7" \
+  || bad "R1 expected exit 7, got $RC"
+grep -q 'nothing can reach a server' <<<"$OUT" && ok "R1 says the server is unreachable" \
+  || bad "R1 the refusal is not explained"
+! grep -q 'docker build' "$RLOG" && ok "R1 refused BEFORE building an image" \
+  || bad "R1 it gated/built first and only then noticed it could not ship"
+
+# R2 — a reachable server: the server half runs here, and the proof passes.
+RLOG="$S/r2.docker.log"
+OUT=$(rship "$RLOG" "--ship" SSH_HOST=stub-deploy-host); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R2 a shipped run exits 0" || bad "R2 expected exit 0, got $RC"
+grep -q 'scp -P 22' "$RLOG" && ok "R2 the tarball is scp'd" || bad "R2 nothing was scp'd"
+grep -q 'docker load -i' "$RLOG" && ok "R2 the image is loaded on the server" || bad "R2 not loaded"
+grep -q 'docker tag jomform-api:v1.0.0 jomform-api:latest' "$RLOG" \
+  && ok "R2 :latest is re-pointed at the release tag" || bad "R2 :latest was not tagged"
+grep -q 'docker compose up -d --force-recreate api' "$RLOG" \
+  && ok "R2 the service is recreated" || bad "R2 the service was not recreated"
+grep -q 'SHIPPED jomform-api:v1.0.0' <<<"$OUT" && ok "R2 reports the ship only after the proof" \
+  || bad "R2 does not report a verified ship"
+! grep -q 'run manually' <<<"$OUT" && ok "R2 leaves no hand-run steps behind" \
+  || bad "R2 still tells the operator to finish by hand"
+
+# R3 — the recreate returns 0 and the OLD image is still what runs.
+# This is the assertion, not the command: without it R2's success means "the commands ran".
+RLOG="$S/r3.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state/running" "$S/shipws-state/labels"
+printf 'id-v0.9.0\n' > "$S/shipws-state/running/api"
+printf 'v0.9.0\n' > "$S/shipws-state/labels/id-v0.9.0"
+OUT=$(rship "$RLOG" "--ship" SSH_HOST=stub-deploy-host STUB_STALE=1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 7 ] && ok "R3 a recreate that left the old image exits 7" \
+  || bad "R3 expected exit 7, got $RC"
+grep -q 'SHIP NOT PROVEN' <<<"$OUT" && ok "R3 says the ship is not proven" \
+  || bad "R3 the unproven ship is not reported"
+grep -q 'labelled version=v0.9.0' <<<"$OUT" && ok "R3 names the version that is actually running" \
+  || bad "R3 does not say what the server is running"
+
+# R4 — the control: a build-only run still works, and never touches the running stack.
+RLOG="$S/r4.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$(rship "$RLOG" ""); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R4 a build-only run still exits 0" || bad "R4 expected exit 0, got $RC"
+grep -q 'docker save' "$RLOG" && ok "R4 the tarball is produced" || bad "R4 no tarball"
+grep -q 'Remaining steps ON THE SERVER' <<<"$OUT" && ok "R4 prints the server steps" \
+  || bad "R4 the manual steps are gone"
+! grep -Eq 'docker (load|tag|compose)' "$RLOG" \
+  && ok "R4 a build-only run never loads, tags or recreates anything" \
+  || bad "R4 a build-only run touched the running stack"
+! grep -q 'SHIPPED ' <<<"$OUT" && ok "R4 never claims a ship" || bad "R4 a build-only run claimed a ship"
+
+# Q9 — --no-ship with the mirror is a contradiction, and it is refused rather than "released".
+# The header has always said "nothing public points at a tree that did not ship"; this is the
+# flag combination that would have broken it without any environment being wrong.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$(qcutmirror "--no-ship"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 2 ] && ok "Q9 --no-ship with the mirror is refused (exit 2)" || bad "Q9 expected exit 2, got $RC"
+  grep -q 'nothing public points at a tree that did not ship' <<<"$OUT" \
+    && ok "Q9 names the invariant it would break" || bad "Q9 the refusal is not explained"
+  git -C "$QD" rev-parse --verify --quiet refs/tags/v1.1.0 >/dev/null \
+    && bad "Q9 it tagged before noticing the contradiction" || ok "Q9 refused before tagging"
+  ! grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "Q9 the mirror was never reached" || bad "Q9 it mirrored anyway"
+fi
+
+# Q10 — the control for Q9: tag+publish ONLY is still a legitimate step, and it says so.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  OUT=$(qcutmirror "--no-ship --no-oss"); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "Q10 --no-ship --no-oss still tags and publishes" || bad "Q10 expected exit 0, got $RC"
+  grep -q 'CUT v1.1.0' <<<"$OUT" && ok "Q10 reports it as CUT, not RELEASED" || bad "Q10 overstates the run"
+  grep -q 'NOTHING was shipped' <<<"$OUT" && ok "Q10 says nothing was shipped" || bad "Q10 does not say so"
+  ! grep -q '^SHIP image=' <<<"$OUT" && ok "Q10 no image was built" || bad "Q10 it shipped something"
+  git -C "$QD" rev-parse --verify --quiet refs/tags/v1.1.0 >/dev/null \
+    && ok "Q10 the tag exists (the decision is recorded)" || bad "Q10 the tag is missing"
+fi
+
+# Q11 — --oss-only (the documented mirror retry) is not a licence to mirror an unverified
+# tree: it proves the tag is live on prod first, and refuses without that.
+if qfixture "$QREPO"; then
+  qrecord "$QDEPS"
+  ( cd "$QD" && git tag -a v1.1.0 -m "Release v1.1.0" && git push -q origin v1.1.0 ) >/dev/null 2>&1
+  OUT=$( cd "$QD" && env -u SSH_HOST -u REMOTE_BUILD_HOST PATH="$S/bin:$PATH" \
+           bash deploy/cut-release.sh --yes --oss-only 2>&1 ); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 7 ] && ok "Q11 --oss-only without a way to verify prod exits 7" || bad "Q11 expected exit 7, got $RC"
+  ! grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "Q11 it did not mirror unverified" || bad "Q11 it mirrored unverified"
+  OUT=$( cd "$QD" && env -u REMOTE_BUILD_HOST PATH="$S/bin:$PATH" SSH_HOST=stub-deploy-host \
+           STUB_LIVE_VERSION=v1.0.0 bash deploy/cut-release.sh --yes --oss-only 2>&1 ); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 7 ] && ok "Q11 --oss-only refuses when prod runs an older tag" || bad "Q11 expected exit 7, got $RC"
+  ! grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "Q11 still did not mirror" || bad "Q11 mirrored an unshipped tag"
+  OUT=$( cd "$QD" && env -u REMOTE_BUILD_HOST PATH="$S/bin:$PATH" SSH_HOST=stub-deploy-host \
+           STUB_LIVE_VERSION=v1.1.0 bash deploy/cut-release.sh --yes --oss-only 2>&1 ); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "Q11 --oss-only mirrors once the tag is verified on prod" || bad "Q11 expected exit 0, got $RC"
+  grep -q 'SYNC STUB RAN' <<<"$OUT" && ok "Q11 the mirror ran on the verified tag" || bad "Q11 the mirror never ran"
+fi
+
+echo "== S. a diff that ships no image is REFUSED (this is how v1.27.4 took \"Latest\")"
+# The whole defect, end to end: a window of deploy/-only commits, the same shape as v1.25.1,
+# v1.27.2 and v1.27.4. The cutter must refuse BEFORE the tag exists — a tag is the record of
+# the decision, and this is the decision not to make one. --tag-only is the sanctioned way to
+# record a tooling milestone: it publishes no GitHub release, so "Latest" keeps pointing at
+# the version prod runs.
+SREPO=$S/srepo; SORIGIN=$S/srepo.git; SGH=$S/srepo.gh.log
+rm -rf "$SREPO" "$SORIGIN"; mkdir -p "$SREPO/deploy" "$SREPO/api"
+cp "$HERE/cut-release.sh" "$HERE/release_scope.sh" "$HERE/ship_proof.sh" "$SREPO/deploy/"
+cat > "$S/bin/gh" <<'GH'
+#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >> "${GH_LOG:-/dev/null}"
+echo "gh-stub $*"
+GH
+chmod +x "$S/bin/gh"
+scut() {   # <cut-release args...>; no server, so only the pre-tag decisions are reachable
+  ( cd "$SREPO" && env -u SSH_HOST -u REMOTE_BUILD_HOST PATH="$S/bin:$PATH" GH_LOG="$SGH" \
+      bash deploy/cut-release.sh "$@" 2>&1 )
+}
+if (
+  cd "$SREPO" || exit 1
+  git init -q .
+  git config user.name "Release Selftest"
+  git config user.email "selftest@users.noreply.github.com"
+  printf 'FROM scratch\n' > api/Dockerfile
+  printf '#!/bin/sh\ntrue\n' > deploy/tool.sh
+  git add -A && git commit -q -m "initial"
+  git branch -M main
+  git init -q --bare "$SORIGIN"
+  git remote add origin "$SORIGIN"
+  git tag -a v2.0.0 -m "Release v2.0.0"
+  git push -q -u origin main v2.0.0
+  printf 'tool 1\n' >> deploy/tool.sh && git commit -q -am "chore(deploy): tooling one (#1600)"
+  printf 'tool 2\n' >> deploy/tool.sh && git commit -q -am "chore(deploy): tooling two (#1601)"
+  printf 'tool 3\n' >> deploy/tool.sh && git commit -q -am "ci: workflow tidy (#1602)"
+  git push -q origin main
+) >/dev/null 2>&1; then
+  : > "$SGH"
+
+  # S1 — the refusal. Exit 3 (nothing to release), the reason in plain words, and no tag:
+  # a tag left behind here IS the defect, because `require-release-tag.sh` would then accept
+  # those bytes for a deploy and GitHub would advertise them as "Latest".
+  OUT=$(scut --yes --no-oss); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 3 ] && ok "a deploy/-only diff is refused with exit 3" || bad "S1 expected exit 3, got $RC"
+  grep -q 'nothing to release: the diff ships no image' <<<"$OUT" \
+    && ok "S1 says exactly what is missing (no image)" || bad "S1 the refusal is not explained"
+  grep -qi 'touch only deploy/' <<<"$OUT" && ok "S1 names deploy/ as the whole delta" || bad "S1 the scope is not named"
+  grep -q -- '--tag-only' <<<"$OUT" && ok "S1 offers the honest alternative (--tag-only)" \
+    || bad "S1 no remedy named"
+  git -C "$SREPO" rev-parse --verify --quiet refs/tags/v2.1.0 >/dev/null \
+    && bad "S1 an image-less diff was TAGGED anyway" || ok "S1 nothing was tagged"
+  [ ! -s "$SGH" ] && ok "S1 no GitHub release was published" || bad "S1 it published a release"
+
+  # S2 — and --dry-run does not paint a plan either: the refusal is the answer.
+  OUT=$(scut --dry-run); RC=$?
+  [ "$RC" -eq 3 ] && ok "S2 --dry-run refuses too (exit 3)" || bad "S2 expected exit 3, got $RC"
+  ! grep -q 'DRY RUN' <<<"$OUT" && ok "S2 it plans nothing, because there is nothing to plan" \
+    || bad "S2 a plan was printed for an unreleasable diff"
+
+  # S3 — --tag-only records the decision without stealing "Latest".
+  OUT=$(scut --yes --tag-only); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "S3 --tag-only records the tag (exit 0)" || bad "S3 expected exit 0, got $RC"
+  git -C "$SREPO" rev-parse --verify --quiet refs/tags/v2.1.0 >/dev/null \
+    && ok "S3 the tag exists" || bad "S3 no tag"
+  git -C "$SORIGIN" rev-parse --verify --quiet refs/tags/v2.1.0 >/dev/null \
+    && ok "S3 the tag was pushed" || bad "S3 the tag was not pushed"
+  grep -q 'no GitHub release (--tag-only)' <<<"$OUT" && ok "S3 it publishes no GitHub release" \
+    || bad "S3 it published a release"
+  [ ! -s "$SGH" ] && ok "S3 gh was never asked to publish (Latest keeps its meaning)" \
+    || bad "S3 gh released it anyway"
+  grep -q 'tagged and pushed ONLY' <<<"$OUT" && ok "S3 the final line does not overstate the run" \
+    || bad "S3 the final line overstates it"
+  ! grep -q 'shipping the tagged tree' <<<"$OUT" && ok "S3 nothing was shipped or mirrored" \
+    || bad "S3 it shipped an image-less tree"
+  # Remove the record again: S4/S5 measure the SAME deploy-only window, and a tag on it would
+  # turn the next runs into the "tag already exists" refusal instead of the case under test.
+  ( cd "$SREPO" && git tag -d v2.1.0 >/dev/null 2>&1; git push -q origin --delete v2.1.0 >/dev/null 2>&1 )
+
+  # S4 — --force is the deliberate product decision: it gets PAST the scope gate (and then
+  # stops at the next precondition, because this fixture has no server — that is exit 7, a
+  # different refusal, which is the proof that --force was accepted).
+  OUT=$(scut --yes --force --no-oss); RC=$?
+  [ "$RC" -eq 7 ] && ok "S4 --force bypasses the scope gate (stops later, at exit 7)" \
+    || bad "S4 expected exit 7 from the ship precondition, got $RC"
+  ! grep -q 'nothing to release' <<<"$OUT" && ok "S4 the scope refusal did not fire" \
+    || bad "S4 --force was ignored"
+
+  # S5 — NO REGRESSION: one api/ commit and the same window releases, and the notes are a
+  # grouped changelog rather than a dump of the diff.
+  printf 'package api\n' > "$SREPO/api/thing.go"
+  git -C "$SREPO" add -A && git -C "$SREPO" commit -q -m "fix(chat): keep the stopped answer (#1610)"
+  printf '\nvar Y = 1\n' >> "$SREPO/api/thing.go"
+  git -C "$SREPO" add -A && git -C "$SREPO" commit -q -m "feat(payments): show the fee breakdown (#1611)"
+  printf 'notes\n' >> "$SREPO/README.md"
+  git -C "$SREPO" add -A && git -C "$SREPO" commit -q -m "chore(deploy): plumbing (#1612)"
+  git -C "$SREPO" push -q origin main
+  OUT=$(scut --dry-run); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "S5 an api/ commit still plans a release (no regression)" || bad "S5 expected exit 0, got $RC"
+  grep -q 'this diff owes an image' <<<"$OUT" && ok "S5 the plan names the image debt" || bad "S5 scope not reported"
+  grep -q '^    | # v2.1.0 — ' <<<"$OUT" && ok "S5 the notes are TITLED and DATED" || bad "S5 no dated title"
+  grep -q '^    | ## Chat' <<<"$OUT" && ok "S5 the notes group by area (Chat)" || bad "S5 no area headings"
+  grep -q '^    | ## Payments' <<<"$OUT" && ok "S5 …and by the second area (Payments)" || bad "S5 one area only"
+  grep -q '^    | - keep the stopped answer (#1610)' <<<"$OUT" && ok "S5 each line is human, with its PR" \
+    || bad "S5 the bullet does not carry the PR number"
+  grep -q '^    | - show the fee breakdown (#1611)' <<<"$OUT" && ok "S5 …and the second one" \
+    || bad "S5 second bullet missing"
+  grep -q '^    | ## Internal' <<<"$OUT" && ok "S5 plumbing is rolled into Internal" || bad "S5 no Internal rollup"
+  grep -q '4 plumbing commit(s)' <<<"$OUT" && ok "S5 the Internal line counts, it does not list" \
+    || bad "S5 the Internal line is not a rollup"
+  ! grep -qE '^    \| (deploy|README)' <<<"$OUT" && ok "S5 no path dump in the notes" \
+    || bad "S5 the notes still look like a build log"
+  grep -q 'commits · .* PRs · .* product areas' <<<"$OUT" && ok "S5 aggregate stats are present" \
+    || bad "S5 no stats line"
+
+  # S6 — user-visible docs OWE the WEB image: web/scripts/guides.mjs materialises
+  # docs/guides into web/src/lib/guides.gen.ts + web/public, so a guide change is a product
+  # change. This is the case that makes "docs" a release trigger rather than plumbing.
+  mkdir -p "$SREPO/docs/guides/demo"
+  printf '# Demo\n\nA guide a user reads.\n' > "$SREPO/docs/guides/demo/README.md"
+  git -C "$SREPO" add -A && git -C "$SREPO" commit -q -m "docs(guides): a new guide (#1620)"
+  git -C "$SREPO" push -q origin main
+  OUT=$(scut --dry-run); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "S6 a docs/guides change is releasable (exit 0)" || bad "S6 expected exit 0, got $RC"
+  grep -q 'IMAGE=jomform-web' <<<"$OUT" && ok "S6 …and it owes the WEB image (the guides are baked into it)" \
+    || bad "S6 a guide change would ship no web image"
+  grep -q '^    | ## Documentation' <<<"$OUT" && ok "S6 the notes file it under Documentation" \
+    || bad "S6 the guide is not grouped as Documentation"
+else
+  bad "section S fixture could not be built"
+fi
 
 printf '\nrelease selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

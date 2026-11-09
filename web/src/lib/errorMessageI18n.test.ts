@@ -488,12 +488,15 @@ test("every key those call sites use is real and carries all five locales", () =
 const TEXT_ATTRS = new Set(["placeholder", "aria-label", "title", "alt"]);
 
 /**
- * The docs site is English by declaration (it is the knowledge base, not the
- * dashboard): every page under app/docs is static prose in one language, with no
- * `t()` at all and no per-user locale. Scanning it would report ~8 aria-labels
- * that are page-structure names and that no merchant's language setting reaches.
+ * A page that is prose by declaration, not a merchant surface: the docs site (the
+ * knowledge base, English, no `t()` at all) and the design gallery (the internal
+ * manifest at /design — its strings are SAMPLE VALUES of primitives, marked
+ * `robots: { index: false }`, and no merchant's language setting reaches it). A
+ * literal here is content, not an untranslated sentence, so scanning it would
+ * report page-structure names and example data as defects.
  */
-const isDocsPage = (relPath: string): boolean => relPath.startsWith("app/docs/");
+const isReferencePage = (relPath: string): boolean =>
+  relPath.startsWith("app/docs/") || relPath.startsWith("app/design/");
 
 /**
  * Malay function words and nouns that English does not use. Deliberately short
@@ -676,7 +679,7 @@ test("no text attribute hands the user a Malay literal", () => {
   // No ratchet on purpose: a Malay literal in a text attribute IS the defect this
   // card is about (t_541a31d5), on every locale that is not Malay.
   const offenders = sources
-    .filter((p) => !isDocsPage(rel(p)))
+    .filter((p) => !isReferencePage(rel(p)))
     .flatMap((p) =>
       textAttrOffenders(p, readFileSync(p, "utf8"))
         .filter((o) => o.kind === "malay")
@@ -692,7 +695,7 @@ test("no text attribute hands the user a Malay literal", () => {
 
 test("no text attribute hands the user un-translated prose without a recorded reason", () => {
   const offenders = sources
-    .filter((p) => !isDocsPage(rel(p)))
+    .filter((p) => !isReferencePage(rel(p)))
     .flatMap((p) =>
       textAttrOffenders(p, readFileSync(p, "utf8"))
         .filter((o) => o.kind === "prose")

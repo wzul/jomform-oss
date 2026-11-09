@@ -105,21 +105,6 @@ export default function FeedbackDocsPage() {
         admins — triage the whole queue.
       </p>
 
-      <nav className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-          On this page
-        </div>
-        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-          {SECTIONS.map((s) => (
-            <li key={s.id}>
-              <a href={`#${s.id}`} className="text-sky-700 hover:underline">
-                {s.title}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
-
       {SECTIONS.map((s) => (
         <section key={s.id} id={s.id} className="mt-10 scroll-mt-24">
           <h2 className="text-lg font-semibold text-slate-900">{s.title}</h2>

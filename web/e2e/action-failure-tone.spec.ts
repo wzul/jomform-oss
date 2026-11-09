@@ -231,6 +231,30 @@ function answerDialogs(page: Page, value: string) {
 // ─────────────────────────────────────────────────────────────────────────────
 // /sales — a FAILED refund vs a successful one
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** One entry of a sale row's `available_events`, exactly as the API sends it. */
+type StubEvent = { event: string; label_key?: string; enabled: boolean; reason?: string };
+
+// The dashboard draws a sale row's buttons from the SERVER's `available_events`,
+// not from `status` (card t_52429d6f, web/src/lib/saleActions.ts), and that rule
+// is FAIL-CLOSED: a row without the field renders NO actions. So a stub that
+// omits it renders a row with no Refund button, and this spec's click waits for
+// a button that cannot exist. That is what happened on the #1652 tree.
+//
+// PAID_EVENTS is what the Go table answers for a `paid` sale
+// (api/internal/lifecycle/sales.go): Confirm and Refund are legal; the two
+// authorization moves are defined but their guard refuses them ("not an
+// authorization awaiting capture"). A duplicate `pay` callback is also defined
+// but carries no label key, so it is not a person's action and is not listed.
+// Only refund is drawn in the row that this spec drives — capturing that is not
+// the point; matching the server is, so the stub is not a hand-picked subset.
+const PAID_EVENTS: StubEvent[] = [
+  { event: "capture", label_key: "bld.capture", enabled: false, reason: "not an authorization awaiting capture" },
+  { event: "confirm", label_key: "sales.confirmSale", enabled: true },
+  { event: "refund", label_key: "sales.refund", enabled: true },
+  { event: "release", label_key: "bld.release", enabled: false, reason: "not an authorization awaiting capture" },
+];
+
 const SALE = {
   ref_code: "SALE-TONE-1",
   status: "paid",
@@ -240,6 +264,7 @@ const SALE = {
   created_at: "2026-01-02T03:04:05Z",
   form_id: "form1",
   items: [],
+  available_events: PAID_EVENTS,
 };
 
 async function stubSales(page: Page, refundStatus: number) {
@@ -405,6 +430,16 @@ const CAPTURE_PENDING_SALE = {
   ref_code: "SALE-TONE-CAP",
   status: "authorized",
   skip_capture: true,
+  // `authorized` has no refund edge at all, and the two authorization moves are
+  // refused for THIS fixture (it carries no chip_purchase_id, which is what the
+  // capture/release guard checks). Left to inherit PAID_EVENTS the row would
+  // claim a Refund the server would never offer on an authorization, so it says
+  // what the table says; the row's action cell then stays as empty as before.
+  available_events: [
+    { event: "capture", label_key: "bld.capture", enabled: false, reason: "not an authorization awaiting capture" },
+    { event: "confirm", label_key: "sales.confirmSale", enabled: true },
+    { event: "release", label_key: "bld.release", enabled: false, reason: "not an authorization awaiting capture" },
+  ] as StubEvent[],
 };
 
 /** The bulk-capture outcome under test, as the endpoint reports it. */

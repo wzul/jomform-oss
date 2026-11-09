@@ -6263,6 +6263,71 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "read"
       }
     },
+    "/v1/rest/sales/{ref}": {
+      "get": {
+        "description": "Returns the full sale row plus available_events: every event this sale's current state accepts, each with a stable event name, the dashboard label key, and — when a guard refuses it — enabled=false with the English reason. The dashboard builds its action buttons from this list; an agent can ask before it proposes an action.",
+        "operationId": "getSale",
+        "parameters": [
+          {
+            "description": "Identifier in the URL path.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Read one sale, including its available lifecycle events",
+        "tags": [
+          "Sales"
+        ],
+        "x-jomform-access": "read"
+      }
+    },
     "/v1/rest/sales/{ref}/capture": {
       "post": {
         "description": "Omit amount_sen to capture the full authorisation; send it to capture part of it.",

@@ -31,18 +31,39 @@
 # Deploy order (do it in this sequence, every time):
 #   0. Merge all PRs; create the git tag + GitHub release FIRST
 #      (git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z)
-#   1. ./deploy/build-and-ship.sh                       # on a clean tree;
-#                                                       # build+test gate runs first
-#   2. scp the tarball to the server (script does this when SSH_HOST is set)
-#   3. on the server:  docker load -i <tarball>
+#   1. ./deploy/build-and-ship.sh --ship                # on a clean tree; the gate runs first,
+#                                                       # then the server half below runs HERE
+#   2. scp the tarball to the server   [--ship does this]
+#   3. on the server:  docker load -i <tarball>            [--ship does this]
 #   4. on the server:  docker tag jomform-api:X.Y.Z jomform-api:latest
 #                      # compose runs :latest — a stale :latest keeps the
-#                      # OLD image even after `restart`
+#                      # OLD image even after `restart`          [--ship does this]
 #   5. on the server:  docker compose up -d --force-recreate <service>
 #                      (the service matching IMAGE - see the NOTE printed at the end)
-#                      # plain `restart` will NOT pick up the new image
+#                      # plain `restart` will NOT pick up the new image   [--ship does this]
 #   6. verify: docker compose logs <service> | head   → startup line shows
 #      version=... commit=... matching the tag; then curl the health route
+#                                                      [--ship does this]
+#
+# WITHOUT --ship this is a BUILDER: it builds, saves the tarball and PRINTS steps 2-6 for a
+# human. It never claims the image shipped, and it says nothing that could be read as a ship:
+# the manual-steps block is headed "run manually" and the script's last word is "done", not
+# "shipped". That distinction is load-bearing — see the next paragraph.
+#
+# --ship IS THE ONLY THING THAT REPORTS A SHIP, AND IT REPORTS IT ONLY AFTER ASKING THE
+# SERVER. On the v1.27.3 release (2026-11-08) `deploy/cut-release.sh` reported RELEASED and
+# mirrored the public repo while this script had printed "SSH_HOST not set — skipping scp":
+# prod still ran v1.27.1, no jomform-api:v1.27.3 image existed on the host, and the mirror
+# advertised a release prod had never received. The whole release path was reading ONE EXIT
+# CODE, which a build always satisfies. So a ship run now:
+#   * refuses up front (exit 7, before the gate and before any build) when REQUIRE_SHIP=1 and
+#     neither SSH_HOST nor REMOTE_BUILD_HOST is set — an unreachable server is a refusal, not
+#     an info line;
+#   * performs scp + docker load + docker tag :latest + docker compose up -d --force-recreate
+#     itself, over ssh;
+#   * and then PROVES it by reading org.opencontainers.image.version off the RUNNING container
+#     (deploy/ship_proof.sh — one definition, shared with cut-release.sh). A recreate that
+#     left the old image live exits 7 here instead of passing quietly.
 #
 # THIS IS THE RELEASE GATE. AGENTS.md moved the FULL preflight here: a merge may
 # proceed on the evidence the branch's own iteration run produced (full, scoped or
@@ -56,17 +77,25 @@
 # spike. The source leaves as a `git archive` of HEAD, is verified by sha256 on the
 # far side before it is unpacked, and is built there with the same stamps. No
 # tarball is produced and nothing is scp'd — `docker load` is not needed either,
-# because the image already exists where it runs.
+# because the image already exists where it runs. With --ship the tag :latest +
+# recreate + proof still run, on the build host.
 #
 # Usage:
-#   ./deploy/build-and-ship.sh [--skip-tests] [--remote-build] [VERSION]
+#   ./deploy/build-and-ship.sh [--ship] [--skip-tests] [--remote-build] [VERSION]
 #
 #   VERSION (or VERSION_OVERRIDE in the environment) may only RESTATE the tag on HEAD: the
 #   version comes from deploy/require-release-tag.sh, and a contradicting override is refused
 #   instead of silently ignored.
 #
-# Exit: 0 shipped · 1 refused or failed · 4 HEAD carries no release tag · 5 VERSION_OVERRIDE
-#       contradicts the tag on HEAD
+#   --ship          deploy for real: scp/load/tag/recreate over ssh and VERIFY the running
+#                   container carries this tag. Requires SSH_HOST or REMOTE_BUILD_HOST
+#                   (refused with exit 7 before anything is built). Same as REQUIRE_SHIP=1.
+#                   Without it this script only builds and prints the server steps.
+#
+# Exit: 0 shipped (or built) · 1 refused or failed · 4 HEAD carries no release tag · 5 VERSION_OVERRIDE
+#       contradicts the tag on HEAD · 7 the ship could not be performed or could not be PROVEN
+#       (REQUIRE_SHIP=1 with no reachable server, a failed load/tag/recreate, or a running
+#       container that does not carry this tag)
 #
 #   --skip-tests    DANGER: bypass the pre-build preflight (scripts/preflight.sh,
 #                   every gate it lists) and print a loud warning naming them.
@@ -103,8 +132,10 @@
 #   DOCKERFILE  Dockerfile path       (default: api/Dockerfile)
 #   OUT_DIR     local tarball output  (default: /tmp — keep OUTSIDE the repo
 #                                     so the clean-tree guard stays valid)
-#   SSH_HOST    set to enable scp of the tarball (e.g. 203.0.113.10)
+#   SSH_HOST    set to enable scp of the tarball (e.g. 203.0.113.10); REQUIRED for --ship
+#               on a local build (the server half runs over ssh to this host)
 #   SSH_USER    (default: root)   SSH_PORT (default: 22)   SSH_PATH (default: /tmp)
+#   REQUIRE_SHIP  1 = same as --ship: deploy for real and verify (default: 0)
 #   GATE_CPU_QUOTA  cgroup quota for the pre-build gate (default: 300% = 3 cores;
 #                   set to "" to run it uncapped). systemd's CPUQuota counts
 #                   CORES, not a share of the host. Measured on a 6-core host: an
@@ -185,6 +216,12 @@ REMOTE_BUILD_DIR="${REMOTE_BUILD_DIR:-/root/jomform-build}"
 REMOTE_BUILD_SSH_USER="${REMOTE_BUILD_SSH_USER:-root}"
 REMOTE_BUILD_SSH_PORT="${REMOTE_BUILD_SSH_PORT:-22}"
 REMOTE_BUILD_FLAG=0
+# REQUIRE_SHIP=1 (or --ship): this run is a DEPLOY, not a build. It must reach a server, it
+# must perform the server half itself, and it must prove the running container carries this
+# tag before it may exit 0. deploy/cut-release.sh sets this on both of its ships; a human can
+# ask for the same thing with --ship. Default 0 keeps this script a builder for everyone else.
+REQUIRE_SHIP="${REQUIRE_SHIP:-0}"
+SHIP_RAN=0
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 # die_rc — same message shape, but the exit code is the one the FAILING STEP chose, so a
@@ -203,6 +240,7 @@ while [ $# -gt 0 ]; do
     -h|--help)   usage; exit 0 ;;
     --skip-tests) SKIP_TESTS=1 ;;
     --remote-build) REMOTE_BUILD_FLAG=1 ;;
+    --ship)      REQUIRE_SHIP=1 ;;
     --)          shift; break ;;
     -*)          die "unknown flag: $1 (see --help)" ;;
     *)           [ -z "$VERSION_OVERRIDE" ] || die "unexpected extra argument: $1 (see --help)"
@@ -224,6 +262,28 @@ export VERSION_OVERRIDE
 if [ "$REMOTE_BUILD_FLAG" = "1" ]; then
   [ -n "$REMOTE_BUILD_HOST" ] || die \
     "--remote-build needs REMOTE_BUILD_HOST=<host> (there is no default host — e.g. REMOTE_BUILD_HOST=217.216.39.61)"
+fi
+
+# ---------------------------------------------------------------------------
+# 0. A SHIP MUST BE ABLE TO REACH THE SERVER — decided BEFORE the lock, the gate and the
+#    build, so an unreachable deploy fails in a second instead of after half an hour.
+#
+#    This check is the fix for the v1.27.3 release, which spent the whole gate, built two
+#    images, then printed "SSH_HOST not set — skipping scp" and exited 0: the caller saw
+#    success and mirrored a tree prod never received. An info line is not a refusal, and an
+#    exit code that means "the build finished" must never be read as "the server has it".
+#    So on a ship path, no reachable server is exit 7 and nothing is gated or built.
+# ---------------------------------------------------------------------------
+SHIP_PROOF_LIB="$REPO_ROOT/deploy/ship_proof.sh"
+if [ "$REQUIRE_SHIP" = "1" ]; then
+  [ -r "$SHIP_PROOF_LIB" ] || die_rc 7 \
+    "REQUIRE_SHIP=1 but $SHIP_PROOF_LIB is missing — refusing to ship what cannot be verified"
+  # shellcheck source=deploy/ship_proof.sh
+  . "$SHIP_PROOF_LIB"
+  if ! ship_proof_target; then
+    die_rc 7 "REQUIRE_SHIP=1 (--ship) but nothing can reach a server: set SSH_HOST=<deploy host> (or REMOTE_BUILD_HOST=<host> to build there). Nothing was gated, built or shipped. Run WITHOUT --ship for a build-only run."
+  fi
+  info "ship target: $SP_DEST ($SP_TARGET_KIND), compose dir $SP_COMPOSE_DIR"
 fi
 
 # ---------------------------------------------------------------------------
@@ -486,9 +546,10 @@ if [ -n "$REMOTE_BUILD_HOST" ]; then
   #     verified by sha256 on the far side BEFORE it is unpacked: a truncated or
   #     replaced archive fails the release instead of building the wrong code.
   #
-  #     What is deliberately NOT done here: tagging `:latest` or recreating the
-  #     service. Those stay printed, human-run steps — same policy as the local
-  #     path, where this script never touches the running stack.
+  #     What is deliberately NOT done here UNLESS --ship is given: tagging `:latest` or
+  #     recreating the service. On a build-only run those stay printed, human-run steps — the
+  #     same policy as the local path. With --ship they run here and are verified, because a
+  #     release that cannot reach prod must not report itself shipped.
   # -------------------------------------------------------------------------
   SSH_OPTS=(-p "$REMOTE_BUILD_SSH_PORT" -o BatchMode=yes)
   SSH_DEST="$REMOTE_BUILD_SSH_USER@$REMOTE_BUILD_HOST"
@@ -552,21 +613,83 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Ship (optional): scp to the server when SSH_HOST is set.
+# 8. Ship. Two very different things share this step, and the difference is the whole point
+#    of the v1.27.3 fix:
+#      REQUIRE_SHIP=1 (--ship) — a DEPLOY: scp, load, tag :latest, recreate, then PROVE the
+#        running container carries this tag. Any failure is exit 7 and it says what is on the
+#        server instead.
+#      default                — a BUILD: at most an scp of the tarball when SSH_HOST is set.
+#        The server steps stay printed for a human, and nothing here claims they ran.
 # ---------------------------------------------------------------------------
 if [ -n "$REMOTE_BUILD_HOST" ]; then
-  info "skipping scp (remote build: nothing to ship)"
+  info "skipping scp (remote build: the image already lives on $REMOTE_BUILD_HOST)"
+  if [ "$REQUIRE_SHIP" = "1" ]; then
+    # The image was built on this same host, so there is nothing to load: tag :latest (compose
+    # runs :latest — a stale one keeps the OLD image) and recreate the service from it.
+    info "shipping on $SP_DEST: tag $IMAGE:latest + recreate '$SERVICE'"
+    ssh "${SP_SSH_OPTS[@]}" "$SP_DEST" \
+      "set -euo pipefail; docker tag '$IMAGE:$VERSION' '$IMAGE:latest' && cd '$SP_COMPOSE_DIR' && docker compose up -d --force-recreate '$SERVICE'" \
+      || die_rc 7 "shipping on $SP_DEST FAILED (tag :latest / recreate '$SERVICE') — the service was NOT recreated from $VERSION"
+    SHIP_RAN=1
+  fi
 elif [ -n "$SSH_HOST" ]; then
-  info "shipping $TARBALL → $SSH_USER@$SSH_HOST:$SSH_PATH/ (port $SSH_PORT)"
-  scp -P "$SSH_PORT" "$TARBALL" "$SSH_USER@$SSH_HOST:$SSH_PATH/"
+  if [ "$REQUIRE_SHIP" = "1" ]; then
+    info "shipping $TARBALL → $SSH_USER@$SSH_HOST:$SSH_PATH/ (port $SSH_PORT)"
+  else
+    info "copying $TARBALL → $SSH_USER@$SSH_HOST:$SSH_PATH/ (port $SSH_PORT) — build only: the server steps are printed below, NOT run"
+  fi
+  scp -P "$SSH_PORT" "$TARBALL" "$SSH_USER@$SSH_HOST:$SSH_PATH/" \
+    || die_rc 7 "scp of $TARBALL to $SSH_USER@$SSH_HOST:$SSH_PATH/ failed — nothing reached the server"
+  if [ "$REQUIRE_SHIP" = "1" ]; then
+    REMOTE_TARBALL="$SSH_PATH/$(basename "$TARBALL")"
+    info "shipping on $SP_DEST: load $REMOTE_TARBALL, tag $IMAGE:latest, recreate '$SERVICE'"
+    ssh "${SP_SSH_OPTS[@]}" "$SP_DEST" \
+      "set -euo pipefail; docker load -i '$REMOTE_TARBALL' && docker tag '$IMAGE:$VERSION' '$IMAGE:latest' && cd '$SP_COMPOSE_DIR' && docker compose up -d --force-recreate '$SERVICE'" \
+      || die_rc 7 "shipping on $SP_DEST FAILED (load / tag :latest / recreate '$SERVICE') — the service was NOT recreated from $VERSION"
+    SHIP_RAN=1
+  fi
 else
+  # Unreachable on a ship run (step 0 refuses it), so this is the build-only path.
   info "SSH_HOST not set — skipping scp (copy $TARBALL manually)"
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Print the remaining server-side steps (never executed from here).
+# 8b. THE PROOF. Recreating a container is not evidence that it runs the new image: compose
+#     runs :latest, so a skipped/replaced tag, or an `up` that did not recreate, leaves the
+#     OLD image serving traffic while every command above returned 0 (issue #576 shipped a
+#     web container that way). Ask the SERVER what the running container is, and refuse the
+#     release if the answer is not this tag. deploy/ship_proof.sh is the one definition of
+#     that question — deploy/cut-release.sh asks it again before it mirrors.
 # ---------------------------------------------------------------------------
-if [ -n "$REMOTE_BUILD_HOST" ]; then
+if [ "$SHIP_RAN" = "1" ]; then
+  info "verifying: the RUNNING '$SERVICE' container on $SP_DEST must carry org.opencontainers.image.version=$VERSION"
+  if ! ship_proof_live "$SERVICE" "$IMAGE" "$VERSION"; then
+    die_rc 7 "SHIP NOT PROVEN — '$SERVICE' on $SP_DEST is not running $VERSION (see above). The image exists on the host, but prod is serving something else: do NOT report this release as shipped. Fix the service (docker tag/skip-latest/compose recreate) and re-run, or roll back deliberately."
+  fi
+  info "SHIPPED $IMAGE:$VERSION — '$SERVICE' on $SP_DEST is running it (org.opencontainers.image.version=$VERSION)"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. What is left. After a verified ship there is nothing left, so the script says so and
+#    gives the rollback instead; otherwise it prints the server-side steps (never executed
+#    from here) exactly as before.
+# ---------------------------------------------------------------------------
+if [ "$SHIP_RAN" = "1" ]; then
+cat <<EOF
+
+Build host: $BUILD_HOST_LINE
+Gated tree: $TREE_SHA
+Image:      $IMAGE:$VERSION
+
+SHIPPED to $SP_DEST and VERIFIED: service '$SERVICE' is running it
+  (org.opencontainers.image.version=$VERSION read from the running container).
+
+Nothing is left to run by hand. Rollback: put the previous tag back on :latest
+and recreate, e.g.
+  docker tag $IMAGE:<previous-tag> $IMAGE:latest
+  cd $SP_COMPOSE_DIR && docker compose up -d --force-recreate $SERVICE
+EOF
+elif [ -n "$REMOTE_BUILD_HOST" ]; then
 cat <<EOF
 
 Build host: $BUILD_HOST_LINE
@@ -598,7 +721,7 @@ fi
 # The API image carries the version banner, so its log line proves the deploy.
 # The web image has no such banner - a successful recreate proves nothing about
 # which build is live, so it needs a request-level check instead.
-if [ "$SERVICE" != "api" ]; then
+if [ "$SERVICE" != "api" ] && [ "$SHIP_RAN" != "1" ]; then
 cat <<EOF
 
 NOTE - '$SERVICE' has no startup version banner, so "container started" does NOT

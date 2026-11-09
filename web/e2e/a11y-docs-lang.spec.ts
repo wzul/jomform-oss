@@ -146,7 +146,11 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
     await page.goto("/docs/embed", { waitUntil: "networkidle" });
     await expectEnglishProse(page, "/docs/embed", "Embed a form on your site");
     await expect(
-      page.getByText("Private forms and cookies").first(),
+      // Role-scoped: the /docs chrome now lists every section heading in its "On this page"
+      // navigation (twice: sidebar and mobile), so a bare text query resolves those links
+      // first — 13 matches, the first one scrolled out of the sticky rail. This assertion is
+      // about the PAGE HEADING rendering in English, so it asks for the heading.
+      page.getByRole("heading", { name: "Private forms and cookies" }),
       "/docs/embed renders this English section heading in every locale",
     ).toBeVisible();
 

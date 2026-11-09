@@ -126,9 +126,25 @@ not move into the preflight; it is documented as a manual on-demand run.
 ## Usage
 
 ```bash
-./deploy/build-and-ship.sh            # builds jomform-api from api/Dockerfile
+./deploy/build-and-ship.sh            # BUILDS jomform-api and prints the server steps
+./deploy/build-and-ship.sh --ship     # builds AND ships: scp + load + tag :latest + recreate
+                                      # + verify; needs SSH_HOST (or REMOTE_BUILD_HOST)
 ./deploy/build-and-ship.sh v1.0.1     # explicit version stamp instead of git describe
 ```
+
+`--ship` (or `REQUIRE_SHIP=1`) is the difference between a build and a deploy, and it is
+deliberate that the script cannot blur it:
+
+* without it the script stops after the tarball and prints steps 4–7 for a human — it never
+  claims anything shipped;
+* with it the script refuses up front (exit 7, before the gate and before any build) when
+  neither `SSH_HOST` nor `REMOTE_BUILD_HOST` is set, performs the server half itself, and
+  then **proves** it by reading `org.opencontainers.image.version` off the RUNNING container
+  (`deploy/ship_proof.sh`). A recreate that left the old image live exits 7 instead of
+  passing quietly.
+
+A release never runs without it: `deploy/cut-release.sh` sets `REQUIRE_SHIP=1` on both of its
+ships and asks the server again itself before it will mirror the tree to the public repo.
 
 Environment overrides:
 
@@ -138,8 +154,10 @@ Environment overrides:
 | `CONTEXT` | `api` | build context directory — **`api` for the api image, `.` (the repo root) for the web image** |
 | `DOCKERFILE` | `api/Dockerfile` | Dockerfile path |
 | `OUT_DIR` | `/tmp` | tarball output (kept **outside** the repo on purpose — anything inside the repo would trip the dirty-tree guard) |
-| `SSH_HOST` | unset | set to scp the tarball (e.g. the prod VPS IP) |
+| `SSH_HOST` | unset | the deploy host: scps the tarball, and (with `--ship`) runs the load/tag/recreate/proof there. **Required for `--ship`** on a local build |
 | `SSH_USER` / `SSH_PORT` / `SSH_PATH` | `root` / `22` / `/tmp` | scp destination details |
+| `REMOTE_COMPOSE_DIR` | `/opt/jomform` | compose directory on the server (`docker compose` runs there, and the ship proof reads the running container from it) |
+| `REQUIRE_SHIP` | `0` | same as `--ship` |
 | `LOCK_FILE` | `/tmp/jomform-build.lock` | single-writer lock path |
 
 Example — build the web image instead:
@@ -211,12 +229,64 @@ git ls-tree -d origin/main api/cmd/    # not `main` — the local ref may be sta
 git rev-list --count main..origin/main    # how far apart are they
 ```
 
+## Cutting a release (`cut-release.sh`) and what the notes look like
+
+A release is a **product decision**, not a build log: one tag, one GitHub release whose body
+is a changelog a customer can read, then a ship that is proved on prod before anything is
+mirrored.
+
+```bash
+./deploy/cut-release.sh --dry-run            # version, plan and the exact notes — changes nothing
+SSH_HOST=<host> ./deploy/cut-release.sh --yes
+```
+
+`cut-release.sh` refuses a diff that **owes no image** (exit 3, `nothing to release: the diff
+ships no image`) — see "A release that owes no image" below. The flags that exist because of
+that rule are `--tag-only` (tag + push only, no GitHub release, so the **Latest** badge stays
+on the version prod runs), `--prerelease` (a prerelease never takes the badge) and `--force`
+(a deliberate, Latest-taking release).
+
+### The notes are a grouped changelog, not a diff dump
+
+The body is generated from the commits in the window (subject + touched paths), so it cannot
+rot into a stale hand-written list:
+
+```markdown
+# v1.28.0 — 2026-11-09
+
+**42 commits · 11 PRs · 8 product areas** since v1.27.4
+
+Images owed: API + Web (the diff touches web/).
+
+## Forms
+- Duplicate submissions are rejected when a form is rate-limited (#1651)
+
+## Payments
+- The fee breakdown shows the merchant's cut before checkout (#1653)
+
+## Internal
+- 14 plumbing commit(s) (deploy/, CI, tests, repo docs) — no image owed (#1650, #1649, #1645)
+```
+
+* one line per **user-visible** change, in the customer's language, carrying the PR that
+  shipped it;
+* grouped by product area (Forms, Payments, Domains, Chat, MCP, QR & menus, Templates, …);
+  the area comes from the conventional-commit scope (`fix(chat): …` → Chat) and falls back to
+  the touched paths;
+* plumbing is a **single** `Internal` line (or absent when the window has no plumbing) —
+  `deploy/`, CI, tests and repo docs never appear as a list of paths;
+* `--notes-file <f>` still replaces the generated body entirely, for a release that deserves
+  a hand-written highlight.
+
 ## Deploy order (the whole sequence, every time)
 
-1. **Tag + release first.** Merge all PRs, then
-   `git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z`.
-   Never build before the tag exists.
-2. `./deploy/build-and-ship.sh` on a clean tree (the script refuses otherwise).
+1. **Tag + release first.** Merge all PRs, then cut the release with the tool that owns
+   the decision: `SSH_HOST=<host> ./deploy/cut-release.sh --yes` (it tags, publishes the
+   changelog, ships and verifies — see below). Never build before the tag exists.
+   A manual `git tag vX.Y.Z && git push origin vX.Y.Z && gh release create vX.Y.Z` skips
+   every check this section describes; `deploy/require-release-tag.sh` still refuses an
+   untagged tree at deploy time, which is the backstop, not the process.
+2. `./deploy/build-and-ship.sh --ship` on a clean tree (the script refuses otherwise).
    It runs `scripts/preflight.sh` itself — do not pre-check by hand and do not
    reach for `--skip-tests`. **Before it takes a slot in the host gate pool it
    reads the per-tree result record** (`scripts/preflight_reuse.sh`): a tree
@@ -239,7 +309,10 @@ git rev-list --count main..origin/main    # how far apart are they
                                    # a full-green per-tree record already covers the bytes.
    ```
    Run it standalone first if you want to see a failure before the lock is held.
-3. Ship the tarball (`SSH_HOST=... ./deploy/build-and-ship.sh` or scp manually).
+3. Ship it: `--ship` already did the scp, so steps 4–7 below ran inside the script and were
+   verified. If the run was a BUILD (no `--ship`), ship it yourself
+   (`SSH_HOST=<host> ./deploy/build-and-ship.sh --ship`, or scp the tarball and do 4–7 by
+   hand — but then nothing has verified it, so verify step 7 yourself).
 4. On the server: `docker load -i /tmp/jomform-api-vX.Y.Z.tar.gz`.
 5. On the server: `docker tag jomform-api:vX.Y.Z jomform-api:latest`.
    Compose runs `:latest` — if you skip this, `restart`/`up` keeps the old
@@ -249,8 +322,17 @@ git rev-list --count main..origin/main    # how far apart are they
 7. Verify: `docker compose logs api | head` must show
    `version=vX.Y.Z commit=<sha>` matching the tag; then curl the health route.
 
-Steps 4–7 are printed by the script at the end as a reminder; they are always
-run on the server manually.
+`--ship` runs 3–7 for the API image (and the web image too, when
+`deploy/cut-release.sh` ships a web-touching release) and refuses to exit 0 unless the
+running container reports the tag. A build-only run prints 4–7 as a reminder and says
+"run manually" — it never reports a ship.
+
+**Deployed without evidence is not done.** The evidence the scripts accept is the running
+container's `org.opencontainers.image.version` label (`deploy/ship_proof.sh`), read over ssh
+from `REMOTE_COMPOSE_DIR`. That is deliberately stricter than "the build succeeded", "the
+tarball was copied" or "an image with that tag exists on the host": on 2026-11-08 the
+v1.27.3 release reported success and mirrored the public repo while prod still served
+v1.27.1 and no v1.27.3 image existed on the host at all.
 
 **Probing the running version must not disturb the service.** To read the release
 a container is running, use
@@ -267,10 +349,41 @@ whether the service actually serves; the flag only tells you what binary it is.
 
 ### A release that owes no image (the delta cannot move the shipped artefact)
 
-Steps 1–7 assume the release owes an image. Some releases do not, and then the
-sequence is **step 1 only** — but only when that is *proved*, never asserted. The
-screen is: every changed file is either excluded from the build context that
-produces the image, or read by no build input.
+Steps 1–7 assume the release owes an image. Some deltas do not, and then there is **no
+release at all** — the commits accumulate and ride along with the next release that does owe
+an image, where the generated notes roll them into one `Internal` line.
+
+That is a rule, not advice: `deploy/cut-release.sh` classifies the diff by path
+(`deploy/release_scope.sh`) and **refuses** (exit 3, `nothing to release: the diff ships no
+image`) when the only changed paths are `deploy/`, `scripts/`, CI, tests or repo docs.
+`deploy/release-due.sh` applies the same rule before it files a release card, so a
+tooling-only window does not even produce the card.
+
+Why it is enforced: four of the last eight releases before this rule (v1.25.0, v1.25.1,
+v1.27.2, v1.27.4) shipped no image and each still took GitHub's **Latest** badge off the
+version prod was actually running. v1.27.4's own notes said "NO IMAGE IS OWED … this tag is
+not a shipped prod version" — while being published as a release. `Latest` is how a reader
+learns what prod runs, so a tag with no image behind it must never take it.
+
+Three sanctioned exits when the diff owes nothing:
+
+| command | what it produces |
+|---|---|
+| `./deploy/cut-release.sh --yes --tag-only` | tag + push only. No GitHub release, no ship, no mirror. The changelog goes into the annotated tag. This is the tooling-milestone record. |
+| `./deploy/cut-release.sh --yes --prerelease` | a GitHub **pre-release** — a prerelease never takes the Latest badge |
+| `./deploy/cut-release.sh --yes --force` | a normal, Latest-taking release. A deliberate product decision; prefer `--tag-only`. |
+
+**What counts as owing an image.** `api/**`, `web/**`, `MCP-PARITY.md` (a build input of both
+images) and `docs/guides/**` (user-visible guides are materialised into `web/src/lib/
+guides.gen.ts` + `web/public` by `web/scripts/guides.mjs`, so the web image is what renders
+them). Everything else — `deploy/`, `scripts/`, `.github/`, `e2e/`, `loadtest/`, `AGENTS.md`,
+`GATE-INVENTORY.md`, `docs/*` that are not guides — owes nothing.
+
+The classification is by path, so it says "an image is owed", not "the image bytes will
+differ". A delta of `*_test.go` files under `api/` owes the API image by this rule even
+though Go never compiles them into the binary. The byte-identity proof below is how you
+prove that a *ship* is unnecessary once a release is owed for a real reason — do not use it
+to justify publishing a release for an image-less diff.
 
 **api image** (context `api/`, `api/Dockerfile`). The load-bearing rule is Go's
 own: `go build ./cmd/jomform-api` never compiles a `_test.go` file, so a delta

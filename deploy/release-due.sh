@@ -12,17 +12,26 @@
 # big enough to be worth the full-inventory gate or old enough that a fix is sitting on main
 # unused. The decision is code, not prose in a profile, so it can be tested.
 #
+# THE WINDOW MUST ALSO OWE AN IMAGE. Commit count and age are necessary, not sufficient:
+# a commit to the release tooling itself is not a release. Measured on 2026-11-08, four of
+# the last eight releases (v1.25.0, v1.25.1, v1.27.2, v1.27.4) changed only deploy/, CI or
+# repo docs, shipped no image, and each still took GitHub's "Latest" badge off the version
+# prod was running. So the diff is classified by PATH (deploy/release_scope.sh — the same
+# rule cut-release.sh applies) and a window that owes nothing files no card at all: those
+# commits accumulate and ride along with the next release that does owe an image.
+#
 # Policy knobs:
 #   RELEASE_MIN_COMMITS    (default 5)  commits since the last tag
 #   RELEASE_MAX_AGE_HOURS  (default 24) age of the OLDEST unreleased commit
-# A window that meets EITHER threshold is due. Both set to 0 disables the schedule and makes
-# releases purely on-demand (then only --force files a card).
+# A window that meets EITHER threshold is due — PROVIDED it owes an image. Both set to 0
+# disables the schedule and makes releases purely on-demand (then only --force files a card).
 #
 # Usage:
 #   deploy/release-due.sh                        # print the decision and the numbers
 #   deploy/release-due.sh --print-card           # print the card TEXT, touch no board
 #   deploy/release-due.sh --file-card            # file the release card when due (deduped)
-#   deploy/release-due.sh --force --file-card    # file it regardless (Wan said "release now")
+#   deploy/release-due.sh --force --file-card    # file it regardless (Wan said "release now",
+#                                                # or a deliberate tooling milestone)
 #   --from <ref>   what would be released (default: origin/main)
 #
 # --file-card goes through `hermes kanban`, which is FENCED in a dispatcher lane shell
@@ -38,6 +47,16 @@ set -o pipefail
 PROG=${0##*/}
 die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
 say() { printf '%s: %s\n' "$PROG" "$*"; }
+
+# The scope rule lives in ONE file, shared with cut-release.sh (deploy/release_scope.sh).
+# Resolved next to THIS script, not next to the repo root: `--from` can point at another
+# checkout, and the rule that decides "does this window owe an image" must come from the
+# tool that is running, not from whichever tree it is looking at.
+SELF_DIR=$(cd "$(dirname "$0")" && pwd) || die "cannot resolve the script's directory"
+SCOPE_LIB="$SELF_DIR/release_scope.sh"
+[ -r "$SCOPE_LIB" ] || die "deploy/release_scope.sh is missing next to $PROG — this script cannot tell a diff that owes an image from one that does not, so it will NOT file a release card"
+# shellcheck source=deploy/release_scope.sh
+. "$SCOPE_LIB"
 
 FROM=origin/main; FILE=0; FORCE=0; PRINT=0
 while [ $# -gt 0 ]; do
@@ -78,6 +97,13 @@ fi
 NOW=$(date +%s)
 AGE_H=$(( (NOW - ${OLDEST:-$NOW}) / 3600 ))
 
+# Does the window OWE anything? This is the question the commit count cannot answer, and
+# skipping it is what published v1.27.4 (deploy/ only) as a release. Classified by path,
+# with the same rule cut-release.sh applies, so a window this script calls releasable is
+# one cut-release will not then refuse.
+SCOPE=$(rs_scope "$LAST" "$SHA")
+SCOPE_SUMMARY=$(rs_scope_summary "$LAST" "$SHA")
+
 REASON=""
 [ "$FORCE" = 1 ] && REASON="forced (an explicit 'release now')"
 if [ -z "$REASON" ] && [ "$MIN_COMMITS" != 0 ] && [ "$COUNT" -ge "$MIN_COMMITS" ]; then
@@ -88,12 +114,28 @@ if [ -z "$REASON" ] && [ "$MAX_AGE_HOURS" != 0 ] && [ "$AGE_H" -ge "$MAX_AGE_HOU
 fi
 
 say "last release $LAST · unreleased $COUNT commit(s) · oldest ${AGE_H}h · policy ${MIN_COMMITS} commits / ${MAX_AGE_HOURS}h"
+if [ "$SCOPE" = image ]; then
+  say "scope: $SCOPE_SUMMARY — this window owes an image"
+else
+  say "scope: ${SCOPE_SUMMARY:-no changed paths} — nothing here ships an image"
+fi
+
+# A gate, not a tie-break: when the diff owes no image there is no release to cut, whatever
+# the count or the age says. Those commits are not lost — they ride along with the next
+# release that does owe an image, and the notes roll them into one "Internal" line.
+if [ "$SCOPE" != image ] && [ "$FORCE" != 1 ]; then
+  say "not due: the $COUNT unreleased commit(s) owe no image — deploy/, CI and tooling changes accumulate and ride along with the next real release"
+  say "  cutting a version for these bytes is how v1.25.0, v1.25.1, v1.27.2 and v1.27.4 took GitHub's \"Latest\" badge without an image behind it"
+  say "  a deliberate tooling milestone is an explicit decision: $PROG --force --file-card"
+  exit 1
+fi
 
 if [ -z "$REASON" ]; then
   say "not due yet — the window is smaller and younger than the policy"
   exit 1
 fi
 say "DUE: $REASON"
+
 
 if [ "$FILE" = 0 ] && [ "$PRINT" = 0 ]; then
   exit 0
@@ -111,17 +153,28 @@ Dasar pada masa kad ini difailkan:
 
     $REASON
     $LAST -> $FROM (${COUNT} commit, tertua ${AGE_H}j)
+    skop: ${SCOPE_SUMMARY:-tiada} — $([ "$SCOPE" = image ] && echo 'berhutang image' || echo 'MILESTONE TOOLING (tiada image; --force dipakai)')
     polisi: RELEASE_MIN_COMMITS=${MIN_COMMITS} · RELEASE_MAX_AGE_HOURS=${MAX_AGE_HOURS}
 
 ## Apa yang perlu dibuat
 
-1. \`./deploy/cut-release.sh --dry-run\` — baca pelan dan versi seterusnya dahulu.
-2. \`./deploy/cut-release.sh --yes\` — tag, GitHub release, ship (inventori penuh), mirror ke
-   \`wzul/jomform-oss\`.
-3. Jika ini HOTFIX (prod rosak sekarang): \`./deploy/cut-release.sh --yes --patch\`.
+1. \`./deploy/cut-release.sh --dry-run\` — baca pelan, versi seterusnya dan NOTA (changelog
+   berkumpulan mengikut kawasan) dahulu.
+2. \`SSH_HOST=<host prod> ./deploy/cut-release.sh --yes\` — tag, GitHub release, ship
+   (inventori penuh), kemudian VERIFY pada prod dan barulah mirror ke
+   \`wzul/jomform-oss\`. Tanpa SSH_HOST (atau REMOTE_BUILD_HOST) ia MENOLAK dengan
+   exit 7 dan tidak mencipta tag: release yang tidak boleh sampai ke prod bukan release.
+   Tag+publish sahaja mesti disertakan \`--no-ship --no-oss\` — mirror tidak
+   pernah menerima pokok yang tidak di-ship.
+3. Jika ini HOTFIX (prod rosak sekarang): \`SSH_HOST=<host> ./deploy/cut-release.sh --yes --patch\`.
 4. Jika ship gagal selepas tag: tag itu KEKAL sebagai rekod; betulkan pohon, kemudian
-   \`./deploy/cut-release.sh --yes --ship-only\`.
-5. Jika mirror gagal: release tetap sah; \`./deploy/cut-release.sh --yes --oss-only\`.
+   \`SSH_HOST=<host> ./deploy/cut-release.sh --yes --ship-only\`.
+5. Jika mirror gagal: release tetap sah; \`SSH_HOST=<host> ./deploy/cut-release.sh --yes --oss-only\`
+   (ia sahkan tag itu benar-benar hidup pada prod sebelum mirror).
+6. Jika ini MILESTONE TOOLING yang sengaja ditag (bukan release prod):
+   \`./deploy/cut-release.sh --yes --tag-only\` — tag + push sahaja, TIADA GitHub release,
+   tiada ship dan tiada mirror, jadi lencana **Latest** kekal pada versi yang prod jalankan.
+   Jangan guna \`--force\` untuk ini: \`--force\` menerbitkan release biasa.
 
 Jangan cipta tag sendiri dan jangan jalankan \`build-and-ship.sh\` pada pokok tanpa tag — ia
 akan menolak (exit 4).

@@ -23,6 +23,7 @@ import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggl
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formatMoney, formatTotals, normaliseCurrency } from "../../lib/money";
+import { enabledSaleActions, saleActions, SALE_ROW_EVENTS, type AvailableEvent } from "../../lib/saleActions";
 
 type Item = {
   product_id: string;
@@ -87,6 +88,11 @@ type Sale = {
   // fields and the entry would still not be readable.
   submission_id?: string;
   data?: Record<string, unknown>;
+  // Card t_52429d6f: the server's own answer to "what may I do with this sale".
+  // The page renders its action buttons from THIS list (lib/saleActions.ts) and
+  // never from `status`. Absent = the server did not say, and then no action
+  // button is rendered at all — see the card's fail-closed test.
+  available_events?: AvailableEvent[];
 };
 
 type SalesPage = { items: Sale[]; page: number; limit: number; total: number };
@@ -654,6 +660,29 @@ function SalesPageInner() {
     }
   }
 
+  // Card t_52429d6f: the ONE dispatcher from a server event to its handler. The
+  // page never decides WHICH events exist (the API's available_events does);
+  // this only maps a name the page knows to the call it already had. An event
+  // missing here is dropped by lib/saleActions.ts rather than rendered dead.
+  function runSaleAction(event: string, ref: string) {
+    switch (event) {
+      case "confirm":
+        return confirmSale(ref);
+      case "capture":
+        return captureSale(ref);
+      case "release":
+        return releaseSale(ref);
+      case "refund":
+        return refundSale(ref);
+      default:
+        return undefined;
+    }
+  }
+
+  // The row's action cell keeps its own vocabulary (money-in-flight actions);
+  // enabled/disabled still comes from the server.
+  const rowSaleActions = (sale: Sale) => enabledSaleActions(saleActions(sale.available_events, SALE_ROW_EVENTS));
+
   async function captureAllPending() {
     const awaiting = rows.filter(isCapturePending);
     if (awaiting.length === 0) return;
@@ -1160,31 +1189,21 @@ function SalesPageInner() {
                       >
                         {t("sales.viewDetail")}
                       </button>
-                      {isCapturePending(s) ? (
-                        <>
+                      {canWrite && rowSaleActions(s).length > 0 ? (
+                        rowSaleActions(s).map((a) => (
                           <button
-                            onClick={() => captureSale(s.ref_code)}
+                            key={a.event}
+                            onClick={() => runSaleAction(a.event, s.ref_code)}
                             disabled={busyRef !== null}
-                            className="rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                            className={
+                              a.event === "capture"
+                                ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                                : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                            }
                           >
-                            {busyRef === s.ref_code ? "…" : t("bld.capture")}
+                            {busyRef === s.ref_code ? "…" : t(a.labelKey as Key)}
                           </button>
-                          <button
-                            onClick={() => releaseSale(s.ref_code)}
-                            disabled={busyRef !== null}
-                            className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {t("bld.release")}
-                          </button>
-                        </>
-                      ) : canWrite && (s.status === "paid" || s.status === "confirmed") ? (
-                        <button
-                          onClick={() => refundSale(s.ref_code)}
-                          disabled={busyRef !== null}
-                          className="rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {busyRef === s.ref_code ? "…" : t("sales.refund")}
-                        </button>
+                        ))
                       ) : (
                         <span className="text-jf-3xs text-[var(--jf-muted)]">—</span>
                       )}
@@ -1513,45 +1532,40 @@ function SalesPageInner() {
 
               {/* Actions — issue #604: these are payment actions (capture /
                   release / confirm / refund), so they only render for a sale. A
-                  response has none, and its drawer already closed above. */}
+                  response has none, and its drawer already closed above.
+                  Card t_52429d6f: the list comes from the server's
+                  available_events. An entry with enabled=false is rendered
+                  DISABLED with the guard's reason as its title, so the drawer
+                  explains why an action cannot be taken instead of hiding the
+                  fact or guessing a predicate from `status`. */}
               {rowKind(detail) !== "response" && (
               <div className="mt-6 flex justify-end gap-2 border-t border-[var(--jf-border)] pt-4">
-                {canWrite && isCapturePending(detail) && (
-                  <>
+                {canWrite && saleActions(detail.available_events).map((a) => {
+                  // Resolved once per action: the two button shapes below must not
+                  // each carry their own t() call (one key, one lookup).
+                  const label = busyRef === detail.ref_code ? "…" : t(a.labelKey as Key);
+                  return a.event === "capture" ? (
                     <button
-                      onClick={() => releaseSale(detail.ref_code)}
-                      disabled={busyRef !== null}
-                      className="jf-btn-ghost"
-                    >
-                      {t("bld.release")}
-                    </button>
-                    <button
-                      onClick={() => captureSale(detail.ref_code)}
-                      disabled={busyRef !== null}
+                      key={a.event}
+                      onClick={() => runSaleAction(a.event, detail.ref_code)}
+                      disabled={busyRef !== null || !a.enabled}
+                      title={a.enabled ? undefined : a.reason}
                       className="jf-btn-primary disabled:opacity-40"
                     >
-                      {busyRef === detail.ref_code ? "…" : t("bld.capture")}
+                      {label}
                     </button>
-                  </>
-                )}
-                {canWrite && detail.status !== "confirmed" && (
-                  <button
-                    onClick={() => confirmSale(detail.ref_code)}
-                    disabled={busyRef !== null || isCapturePending(detail)}
-                    className="jf-btn-ghost"
-                  >
-                    {t("sales.confirmSale")}
-                  </button>
-                )}
-                {canWrite && (detail.status === "paid" || detail.status === "confirmed") && (
-                  <button
-                    onClick={() => refundSale(detail.ref_code)}
-                    disabled={busyRef !== null}
-                    className="jf-btn-ghost"
-                  >
-                    {busyRef === detail.ref_code ? "…" : t("sales.refund")}
-                  </button>
-                )}
+                  ) : (
+                    <button
+                      key={a.event}
+                      onClick={() => runSaleAction(a.event, detail.ref_code)}
+                      disabled={busyRef !== null || !a.enabled}
+                      title={a.enabled ? undefined : a.reason}
+                      className="jf-btn-ghost"
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
               </div>
               )}
             </div>

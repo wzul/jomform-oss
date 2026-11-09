@@ -186,6 +186,82 @@ const UNREADABLE_PIN: UnreadablePin[] = [
       "the static half and the width branch are read; the `className` PROP the " +
       "caller fills in is not",
   },
+  // THE PRIMITIVE LAYER (card t_f2e231d3). Every entry below is the same shape and
+  // the same reason, and it is the one the paragraph above sanctions: the class
+  // list genuinely belongs to the CALLER, because a primitive's whole contract is
+  // "the base look from tokens, plus whatever the site adds". `className` is a
+  // prop, and a prop is not resolvable by construction — so these sites are
+  // pinned rather than rewritten into a shape the reader can follow. What the
+  // reader DOES resolve is the static half of each list, which is where a base
+  // text token on a tint would have to appear.
+  {
+    rel: "app/design/page.tsx",
+    expr: "`${step.utility} block text-[var(--jf-text)]`",
+    count: 1,
+    why:
+      "the type-scale sample: the size utility comes from the `TYPE_SCALE` row being " +
+      "rendered, so the class list belongs to the data table, not to this element",
+  },
+  {
+    rel: "components/ui/Alert.tsx",
+    expr:
+      "[ \"flex gap-jf-3 rounded-jf-md border px-jf-4 py-jf-3 text-jf-read-sm\", t.box, className, ] .filter(Boolean) .join(\" \")",
+    count: 1,
+    why: "the tone box is picked from `tone`; the caller's `className` is merged in",
+  },
+  {
+    rel: "components/ui/Button.tsx",
+    expr: "cls",
+    count: 2,
+    why:
+      "`cls` is BASE + the variant and size class maps + the caller's `className`: the " +
+      "static BASE and both maps are read, the prop is not (it covers the <a> and the <button>)",
+  },
+  {
+    rel: "components/ui/EmptyState.tsx",
+    expr:
+      "[\"flex flex-col items-center gap-jf-2 px-jf-6 py-jf-12 text-center\", className] .filter(Boolean) .join(\" \")",
+    count: 1,
+    why: "a fixed centred column plus the caller's `className`",
+  },
+  {
+    rel: "components/ui/Field.tsx",
+    expr: "[\"flex flex-col gap-jf-1\", className].filter(Boolean).join(\" \")",
+    count: 1,
+    why: "the field's column plus the caller's `className`",
+  },
+  {
+    rel: "components/ui/Field.tsx",
+    expr:
+      "[\"text-jf-read-sm font-medium text-[var(--jf-text)]\", labelClassName].filter(Boolean).join(\" \")",
+    count: 1,
+    why: "the label's own type token plus the caller's `labelClassName`",
+  },
+  {
+    rel: "components/ui/Select.tsx",
+    expr:
+      "[CONTROL_CLASS, \"appearance-none pr-jf-8\", className].filter(Boolean).join(\" \")",
+    count: 1,
+    why: "`CONTROL_CLASS` is read; the caret padding is static; the caller's `className` is not",
+  },
+  {
+    rel: "components/ui/Table.tsx",
+    expr: "className",
+    count: 1,
+    why: "`<tr className={className}>`: the row's classes are the caller's (a table row has no base look)",
+  },
+  {
+    rel: "components/ui/Tabs.tsx",
+    expr: "className",
+    count: 1,
+    why: "the tablist `<div className={className}>`: the list's layout belongs to the page",
+  },
+  {
+    rel: "components/ui/Tabs.tsx",
+    expr: "[\"pt-jf-4\", panelClassName].filter(Boolean).join(\" \")",
+    count: 1,
+    why: "the panel's top rhythm plus the caller's `panelClassName`",
+  },
 ];
 
 /**

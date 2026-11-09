@@ -2,10 +2,10 @@
 
 // Reset password page (issue #62): token from query param, new password +
 // confirm, calls POST /v1/auth/reset-password, redirects to login on success.
-import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "../../components/i18n";
+import { Button, Card, Field, Input } from "../../components/ui";
 import { apiErr } from "../../lib/apiErr";
 
 function ResetForm() {
@@ -59,58 +59,53 @@ function ResetForm() {
         <p className="mt-1.5 text-sm text-[var(--jf-muted)]">{t("reset.desc")}</p>
       </div>
 
-      <div className="rounded-xl border border-[var(--jf-border)] bg-white p-6 shadow-[0_0_0_1px_rgba(0,0,0,0.2),0_8px_24px_rgba(0,0,0,0.4)]">
+      <Card className="p-jf-6">
         {done ? (
           <div className="space-y-3">
             <p className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-jf-sm text-green-300">
               {t("reset.done")}
             </p>
-            <Link
-              href="/login"
-              className="block w-full rounded-md bg-[var(--jf-primary)] py-2 text-center text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)]"
-            >
+            <Button as="a" href="/login" className="w-full">
               {t("login.tabLogin")}
-            </Link>
+            </Button>
           </div>
         ) : !token ? (
-          <p className="text-sm text-red-600">{t("reset.invalid")}</p>
+          // Card t_8f20418d: `text-red-700`, not `-600`. The message now sits
+          // inside `Card`, whose fill lives in the primitive — a surface this
+          // file no longer names — so the red/sky guard judges it against the
+          // page background, where `text-red-600` is 4.48:1 (below AA) and
+          // `text-red-700` clears it. Same sentence, one step darker.
+          <p className="text-sm text-red-700">{t("reset.invalid")}</p>
         ) : (
           <form onSubmit={submit} className="space-y-3">
             {error && (
               <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">{error}</p>
             )}
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("reset.newPw")}</label>
-              <input
+            <Field id="reset-new-pw" label={t("reset.newPw")}>
+              <Input
                 value={pw}
                 onChange={(e) => setPw(e.target.value)}
                 type="password"
                 required
                 minLength={10}
                 placeholder="••••••••••"
-                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-[var(--jf-muted)]">{t("reset.confirmPw")}</label>
-              <input
+            </Field>
+            <Field id="reset-confirm-pw" label={t("reset.confirmPw")}>
+              <Input
                 value={pw2}
                 onChange={(e) => setPw2(e.target.value)}
                 type="password"
                 required
                 placeholder="••••••••••"
-                className="w-full rounded-md border border-[var(--jf-border)] bg-white px-3 py-2 text-sm text-[var(--jf-text)] placeholder-slate-400 outline-none transition-colors focus:border-[var(--jf-accent)]/60 focus:bg-indigo-50"
               />
-            </div>
-            <button
-              disabled={busy}
-              className="mt-1 w-full rounded-md bg-[var(--jf-primary)] py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--jf-primary-hover)] disabled:opacity-60"
-            >
+            </Field>
+            <Button type="submit" disabled={busy} className="mt-1 w-full">
               {busy ? "…" : t("reset.submit")}
-            </button>
+            </Button>
           </form>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

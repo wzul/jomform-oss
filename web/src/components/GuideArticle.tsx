@@ -36,24 +36,6 @@ export function GuideArticle({ guide }: { guide: Guide }) {
 
   return (
     <article className="max-w-3xl min-w-0">
-      {/* The card asks for a way back to /docs from every guide; the layout's sidebar is not
-          enough on its own (it is hidden below md). Both crumbs are underlined so the link is
-          distinguishable without colour alone (axe link-in-text-block). */}
-      <nav aria-label="Breadcrumb" className="text-sm text-slate-600">
-        <Link href="/docs" className="underline decoration-dotted underline-offset-2 hover:text-slate-900">
-          Docs
-        </Link>
-        <span className="mx-2 text-slate-600" aria-hidden="true">
-          ›
-        </span>
-        <Link
-          href="/docs/guides"
-          className="underline decoration-dotted underline-offset-2 hover:text-slate-900"
-        >
-          Screenshot guides
-        </Link>
-      </nav>
-
       <h1 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">{guide.title}</h1>
       <p className="mt-2 text-sm text-slate-600">{guide.summary}</p>
       <p className="mt-3 text-xs text-slate-600">

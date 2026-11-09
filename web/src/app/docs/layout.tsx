@@ -1,71 +1,99 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { DocsBreadcrumb } from "./docsBreadcrumb";
+import { DocsNavLink } from "./docsNavLink";
+import { DocsNavSearch } from "./docsNavSearch";
+import { DocsPager } from "./docsPager";
+import { DocsRelated } from "./docsRelated";
+import { DocsSearch } from "./docsSearch";
+import { DocsToc } from "./docsToc";
 import { OG_IMAGE, OG_IMAGE_URL } from "../../lib/ogImage";
 
 // Issue #395: shared layout for the JomForm knowledge base (/docs).
-// A left sidebar lists the doc sections; content renders on the right.
-// Static server-rendered pages (English-first, like the legal pages).
 //
-// t_d768342e: the sidebar follows the same categories as the /docs index, so the
-// two surfaces describe one structure instead of two. The category labels are the
-// English strings (the sidebar chrome is static, like every /docs page); the
-// /docs index itself renders the same taxonomy through t().
+// t_45fd1bee made this file the /docs CHROME rather than a sidebar plus whatever each
+// page happened to render:
 //
-// t_5425c958 (the rebase onto main): main's flat NAV carried two destinations the
-// PR's taxonomy did not — /docs/builder (#671) and /docs/api (#680) — and dropping
-// either would leave a published page unreachable from the nav. Both are in the
-// taxonomy below, which is why this is a merge of the two lists rather than a
-// choice between them.
+//   * three layers (Learn · Product docs · Reference), the Stripe shape — the sidebar
+//     groups its rows under them instead of one long list;
+//   * a breadcrumb, an "On this page" table of contents and a previous/next pair on
+//     EVERY page, rendered here once from the registry (src/lib/docsNav.ts);
+//   * a search field in the sidebar and in the top bar, filtering a build-time index
+//     (src/lib/docsSearch.gen.json) in memory — typing issues no request.
+//
+// WHAT STAYS AUTHORED HERE. `NAV_GROUPS` is the one list of pages and their order.
+// docsIndex.test.ts reads it as SOURCE TEXT (it is the guard that proves every sidebar
+// row reaches a real page that the /docs index also links), and scripts/docsNav.mjs
+// reads the same shape to emit the registry. A row's optional `guides` names the
+// screenshot guides for that page; the guide pages link back automatically.
+//
+// The category labels are the English strings (the sidebar chrome is static, like every
+// /docs page); the /docs index itself renders the same taxonomy through t().
 
-type Section = { href: string; label: string };
-type Group = { label: string; sections: Section[] };
+type Section = {
+  href: string;
+  label: string;
+  /** Related screenshot guides (`/docs/guides/<slug>`); rendered at the end of the page. */
+  guides?: string[];
+};
+type Group = {
+  /** The top-level layer this group belongs to — one header per layer in the sidebar. */
+  layer: "Learn" | "Product docs" | "Reference";
+  label: string;
+  sections: Section[];
+};
 
 const NAV_GROUPS: Group[] = [
   {
+    layer: "Learn",
     label: "Start here",
     sections: [
       { href: "/docs", label: "Overview & features" },
-      { href: "/docs/builder", label: "The form builder" },
+      { href: "/docs/builder", label: "The form builder", guides: ["/docs/guides/qr-table-ordering", "/docs/guides/tuition-class", "/docs/guides/wedding-rsvp"] },
+      { href: "/docs/guides", label: "Screenshot guides" },
     ],
   },
   {
+    layer: "Product docs",
     label: "Workspaces",
     sections: [
       { href: "/docs/workspaces", label: "Workspaces & deleting one" },
-      // Card t_eb09b25a, rebased onto main (t_4c58a09e): the audit trail sits
-      // with the workspace category, so the sidebar still describes the same
-      // structure as the /docs index — docsIndex.test.ts fails the build when
-      // a page the index links is absent from this list.
+      // Card t_eb09b25a: the audit trail sits with the workspace category, so the
+      // sidebar still describes the same structure as the /docs index — docsIndex.test.ts
+      // fails the build when a page the index links is absent from this list.
       { href: "/docs/activity", label: "Activity log" },
     ],
   },
   {
+    layer: "Product docs",
     label: "Sales & payments",
     sections: [
-      { href: "/docs/sales", label: "Sales, responses & analytics" },
-      { href: "/docs/subscriptions", label: "Subscriptions & recurring billing" },
-      // Shipping by zone: the managed rate source a form's shipping block can
-      // use. The index carries the entry that links here, so a reader can reach
-      // it from both surfaces (docsIndex.test.ts checks both directions).
+      { href: "/docs/sales", label: "Sales, responses & analytics", guides: ["/docs/guides/qr-table-ordering", "/docs/guides/donations", "/docs/guides/wedding-rsvp", "/docs/guides/tuition-class"] },
+      { href: "/docs/subscriptions", label: "Subscriptions & recurring billing", guides: ["/docs/guides/club-membership", "/docs/guides/tuition-class"] },
+      // Shipping by zone: the managed rate source a form's shipping block can use.
       { href: "/docs/shipping", label: "Shipping by zone" },
-      // Card t_135c3c72: the buyer-borne processing fee — one MDR rate per CHIP
-      // payment method, grossed up, disclosed to the buyer before they pay.
-      { href: "/docs/payment-fees", label: "Processing fees paid by the buyer" },
+      // Card t_135c3c72: the buyer-borne processing fee.
+      { href: "/docs/payment-fees", label: "Processing fees paid by the buyer", guides: ["/docs/guides/payment-fees"] },
     ],
   },
   {
+    layer: "Product docs",
     label: "Forms & fields",
     sections: [
-      { href: "/docs/customize", label: "Design → AI agent → MCP" },
+      { href: "/docs/customize", label: "Design → AI agent → MCP", guides: ["/docs/guides/affiliate-programme", "/docs/guides/qr-table-ordering", "/docs/guides/design-with-mcp"] },
       { href: "/docs/custom-forms", label: "Custom HTML forms" },
       { href: "/docs/variations", label: "Variation products" },
     ],
   },
   {
+    layer: "Product docs",
     label: "Storefront & pages",
-    sections: [{ href: "/docs/embed", label: "Embed on your site" }],
+    sections: [
+      { href: "/docs/embed", label: "Embed on your site", guides: ["/docs/guides/donations", "/docs/guides/wedding-rsvp"] },
+    ],
   },
   {
+    layer: "Product docs",
     label: "Email",
     sections: [
       { href: "/docs/email", label: "Email & notifications" },
@@ -74,6 +102,7 @@ const NAV_GROUPS: Group[] = [
     ],
   },
   {
+    layer: "Product docs",
     label: "Security",
     sections: [
       { href: "/docs/spam-detection", label: "AI spam detection" },
@@ -81,24 +110,27 @@ const NAV_GROUPS: Group[] = [
     ],
   },
   {
-    label: "For developers",
+    layer: "Product docs",
+    label: "In-app & support",
     sections: [
-      { href: "/docs/mcp", label: "MCP tool reference" },
-      { href: "/docs/api", label: "REST API reference" },
-      { href: "/docs/chat", label: "In-app assistant" },
+      { href: "/docs/chat", label: "In-app assistant", guides: ["/docs/guides/design-with-mcp"] },
       { href: "/docs/feedback", label: "In-app feedback" },
+    ],
+  },
+  {
+    layer: "Reference",
+    label: "Reference",
+    sections: [
+      { href: "/docs/api", label: "REST API reference", guides: ["/docs/guides/design-with-mcp"] },
+      { href: "/docs/mcp", label: "MCP tool reference", guides: ["/docs/guides/design-with-mcp"] },
     ],
   },
 ];
 
-// Issue #513: deep links into the guide sections the dashboard's inline "?"
-// buttons target, so the features are reachable from the docs nav.
+// Issue #513: deep links into the guide sections the dashboard's inline "?" buttons
+// target. They are shortcuts, not a layer — rendered collapsed under the Learn layer so
+// they stay reachable without turning the sidebar back into one long list.
 const NAV_SECTIONS = [
-  // Card t_7b9f6d18: the screenshot guides. They are their own pages now, so the
-  // row is the index rather than one deep link per guide — docsIndex.test.ts wants
-  // every sidebar row to be a real page reached from the index, and the index
-  // carries the quick link to this one.
-  { href: "/docs/guides", label: "Screenshot guides" },
   { href: "/docs/customize#affiliate-marketing", label: "Affiliate marketing guide" },
   { href: "/docs/customize#menu", label: "Restaurant menu guide" },
   { href: "/docs/customize#menu-basket", label: "Menu basket guide" },
@@ -151,56 +183,70 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
           (this one is the site bar, the one below is the docs sidebar). */}
       <nav
         aria-label="JomForm site"
-        className="flex items-center justify-between border-b border-slate-100 px-5 py-3"
+        className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5"
       >
-        <Link href="/" className="text-sm font-medium text-slate-600 hover:text-slate-900">
+        <Link href="/" className="shrink-0 text-sm font-medium text-slate-600 hover:text-slate-900">
           ← Back to JomForm
         </Link>
-        <span className="text-sm font-semibold text-slate-900">JomForm Docs</span>
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="hidden text-sm font-semibold text-slate-900 sm:inline">JomForm Docs</span>
+          {/* The one search instance: a compact trigger in the top bar (the only search
+              surface a phone reader gets), opening a portalled dialog. The sidebar's
+              field dispatches the same event — see DocsNavSearch. */}
+          <DocsSearch />
+        </div>
       </nav>
 
-      <div className="mx-auto flex max-w-6xl gap-8 px-6 py-10">
-        <aside className="hidden w-56 shrink-0 md:block">
-          {/* axe `landmark-unique`: the second landmark needs a name too. */}
-          <nav aria-label="Docs sections" className="sticky top-10 space-y-1">
-            {NAV_GROUPS.map((g) => (
-              <div key={g.label} className="pt-3 first:pt-0">
-                <p className="px-3 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600">
-                  {g.label}
-                </p>
-                {g.sections.map((n) => (
-                  <Link
-                    key={n.href}
-                    href={n.href}
-                    className="mt-1 block rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                  >
-                    {n.label}
-                  </Link>
-                ))}
-              </div>
-            ))}
-            {/* Issue #513: deep links into the guide sections. */}
-            <div className="pt-3">
-              {/* axe `color-contrast`: text-slate-400 is 2.63:1 on the white
-                  page at 11px, against a 4.5:1 AA minimum. slate-600 is
-                  7.58:1 and still reads as a quieter heading than the links
-                  it introduces. */}
-              <p className="px-3 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600">
-                Guides
-              </p>
-              {NAV_SECTIONS.map((n) => (
-                <Link
-                  key={n.href}
-                  href={n.href}
-                  className="mt-1 block rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                >
-                  {n.label}
-                </Link>
+      <div className="mx-auto flex w-full max-w-7xl gap-8 px-4 py-8 sm:px-6 lg:py-10">
+        <aside className="hidden w-60 shrink-0 md:block">
+          <div className="sticky top-10 max-h-[calc(100vh-5rem)] overflow-y-auto pb-10">
+            <DocsNavSearch />
+            {/* axe `landmark-unique`: the second landmark needs a name too. */}
+            <nav aria-label="Docs sections" className="mt-4">
+              {NAV_GROUPS.map((g, i) => (
+                <div key={g.label} className="pt-3 first:pt-0">
+                  {i === 0 || NAV_GROUPS[i - 1].layer !== g.layer ? (
+                    <p className="px-3 pb-1 text-jf-2xs font-semibold uppercase tracking-wide text-slate-900">
+                      {g.layer}
+                    </p>
+                  ) : null}
+                  <p className="px-3 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600">
+                    {g.label}
+                  </p>
+                  {g.sections.map((n) => (
+                    <DocsNavLink key={n.href} href={n.href}>
+                      {n.label}
+                    </DocsNavLink>
+                  ))}
+                </div>
               ))}
-            </div>
-          </nav>
+              {/* Issue #513: deep links into guide sections, collapsed by default. */}
+              <details className="mt-3">
+                <summary className="cursor-pointer rounded-md px-3 py-2 text-jf-2xs font-semibold uppercase tracking-wide text-slate-600 hover:bg-slate-50">
+                  Guides & shortcuts
+                </summary>
+                {NAV_SECTIONS.map((n) => (
+                  <DocsNavLink key={n.href} href={n.href}>
+                    {n.label}
+                  </DocsNavLink>
+                ))}
+              </details>
+            </nav>
+          </div>
         </aside>
-        <div className="min-w-0 flex-1">{children}</div>
+
+        <div
+          data-docs-content
+          className="min-w-0 flex-1 [&_h2]:scroll-mt-24 [&_h3]:scroll-mt-24"
+        >
+          <DocsBreadcrumb />
+          <DocsToc variant="inline" />
+          {children}
+          <DocsRelated />
+          <DocsPager />
+        </div>
+
+        <DocsToc variant="sidebar" />
       </div>
     </main>
   );

@@ -32,6 +32,13 @@ const (
 	// SaleRefunded marks a sale whose payment was refunded (initiated from the
 	// Sales page or received via the purchase.refunded webhook).
 	SaleRefunded = "refunded"
+	// SaleAuthorized is admitted by the status CHECK (migration 000002) but no
+	// current write path produces it: a skip_capture sale sits in SalePending
+	// until the merchant captures it. It is named here because the capture
+	// queue (ListAwaitingCapture) and the lifecycle table
+	// (internal/lifecycle) must READ it — a legacy row carrying it is still
+	// capturable — and an unnamed state would invite a second spelling.
+	SaleAuthorized = "authorized"
 )
 
 // Refund states derived from Sale.RefundedSen (issue #518). A partial refund
@@ -45,6 +52,16 @@ const (
 	RefundPartial = "partial"
 	RefundFull    = "full"
 )
+
+// LifecycleState names the sale's state for the lifecycle machine
+// (internal/lifecycle), which owns the legal transitions between states. The
+// machine reads this instead of every handler comparing Status strings.
+func (s *Sale) LifecycleState() string {
+	if s == nil {
+		return ""
+	}
+	return s.Status
+}
 
 // RefundStatus derives the partial-vs-full refund state from the running
 // refunded total (issue #518). A sale is only "full" once the whole total has
@@ -359,6 +376,12 @@ func (s *SaleStore) AttachChipPurchase(ctx context.Context, saleID, purchaseID, 
 
 // MarkAuthorized flips an authorized (skip_capture) purchase to paid state
 // after the merchant captures; CapturedAt marks the moment.
+//
+// The status it writes is the lifecycle table's `capture` target
+// (internal/lifecycle: pending/authorized → paid), and every caller has already
+// been through that transition; this method exists because the capture write is
+// a compound one (hold released, captured_at stamped), not because the state is
+// decided here.
 func (s *SaleStore) MarkCaptured(ctx context.Context, saleID string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE sales SET authorized=true, captured_at=now(), status=$2, updated_at=now() WHERE id=$1`,

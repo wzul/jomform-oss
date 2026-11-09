@@ -13,6 +13,7 @@ import (
 	"github.com/wzul/jomform/api/internal/chip"
 	"github.com/wzul/jomform/api/internal/cryptoutil"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 )
 
 // PurchaseArgs is the platform-level purchase request (pre-CHIP mapping).
@@ -231,19 +232,22 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 
 	switch p.Status {
 	case chip.StatusPaid:
-		// Transition guard: only pending → paid is a real transition.
-		// A sale already paid (or confirmed/cancelled) must not re-fire
-		// webhooks or re-send the receipt.
-		if cur.Status == dbstore.SalePaid {
+		// The lifecycle table owns the rule: `pay` is a real move only from
+		// pending (and a legal no-op from paid, so a redelivered callback
+		// fires nothing a second time). A sale in any other state is a
+		// conflicting transition and is deliberately ignored — it used to be
+		// decided by comparing status strings here.
+		res, lerr := lifecycle.SalesMachine.Apply(cur, lifecycle.SaleEventPay)
+		if lerr != nil {
+			slog.Warn("callback_paid_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "err", lerr.Error())
+			return nil
+		}
+		if !res.Changed {
 			slog.Info("callback_paid_idempotent", "purchase", p.ID, "sale", cur.ID)
 			return nil
 		}
-		if cur.Status != dbstore.SalePending {
-			slog.Warn("callback_paid_conflicting_transition",
-				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SalePaid)
-			return nil
-		}
-		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SalePaid); err != nil {
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, res.To); err != nil {
 			return err
 		}
 		// Issue #245: a successful payment means the entry is legit — a
@@ -280,16 +284,17 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 			return s.activateSubscription(ctx, cur)
 		}
 	case chip.StatusError:
-		// Transition guard: only pending → failed is a real transition.
-		// A late payment_failure after the sale is already paid must not
-		// flip it back to failed.
-		if cur.Status == dbstore.SaleFailed {
-			slog.Info("callback_failed_idempotent", "purchase", p.ID, "sale", cur.ID)
+		// Same rule for the failure branch: `fail` is a real move only from
+		// pending, and a legal no-op from failed. A late payment_failure after
+		// the sale is already paid must not flip it back to failed.
+		res, lerr := lifecycle.SalesMachine.Apply(cur, lifecycle.SaleEventFail)
+		if lerr != nil {
+			slog.Warn("callback_failed_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "err", lerr.Error())
 			return nil
 		}
-		if cur.Status != dbstore.SalePending {
-			slog.Warn("callback_failed_conflicting_transition",
-				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleFailed)
+		if !res.Changed {
+			slog.Info("callback_failed_idempotent", "purchase", p.ID, "sale", cur.ID)
 			return nil
 		}
 		s.goOnPaid(ctx, cur.AccountID, "sale.failed", map[string]any{
@@ -297,26 +302,27 @@ func (s *Service) ProcessCallbackTx(ctx context.Context, tx pgx.Tx, p *chip.Purc
 		})
 		// Issue #193: fire per-form notifications on the failed event.
 		s.fireSaleNotifications(ctx, cur, "sale.failed")
-		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleFailed); err != nil {
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, res.To); err != nil {
 			return err
 		}
 	case chip.StatusPendingCharge:
 		// transient; nothing to persist beyond event row (caller stores raw event)
 	case chip.StatusRefunded:
 		// Issue #407: a refunded purchase (initiated from the Sales page or
-		// manually in the CHIP dashboard) flips the sale to refunded. Only a
-		// real transition from a paid/confirmed state is applied; an already
-		// refunded sale is idempotent.
-		if cur.Status == dbstore.SaleRefunded {
+		// manually in the CHIP dashboard) flips the sale to refunded. The
+		// table defines `refund` from paid/confirmed only, and as a legal no-op
+		// from an already-refunded sale (a redelivered callback).
+		res, lerr := lifecycle.SalesMachine.Apply(cur, lifecycle.SaleEventRefund)
+		if lerr != nil {
+			slog.Warn("callback_refunded_conflicting_transition",
+				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "err", lerr.Error())
+			return nil
+		}
+		if !res.Changed {
 			slog.Info("callback_refunded_idempotent", "purchase", p.ID, "sale", cur.ID)
 			return nil
 		}
-		if cur.Status != dbstore.SalePaid && cur.Status != dbstore.SaleConfirmed {
-			slog.Warn("callback_refunded_conflicting_transition",
-				"purchase", p.ID, "sale", cur.ID, "from", cur.Status, "to", dbstore.SaleRefunded)
-			return nil
-		}
-		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, dbstore.SaleRefunded); err != nil {
+		if err := s.Sales.SetStatusTx(ctx, tx, cur.ID, res.To); err != nil {
 			return err
 		}
 		// Issue #518: the refunded purchase is terminal at CHIP, so record
@@ -815,13 +821,17 @@ func (s *Service) RefundSale(ctx context.Context, sale *dbstore.Sale, amountSen 
 		if err != nil {
 			return err
 		}
-		// The refundable-state guard. A partial refund deliberately leaves the
-		// status paid/confirmed, so a partially refunded sale is still
-		// refundable here — the balance guard below is what stops over-refunding.
-		switch cur.Status {
-		case dbstore.SalePaid, dbstore.SaleConfirmed:
-			// refundable
-		default:
+		// The refundable-state rule now comes from the lifecycle table: the
+		// `refund` event is defined for paid/confirmed only (a `refunded` sale
+		// answers a legal no-op, which is not a refund). The pre-existing
+		// sentinel keeps the wire message and its error code unchanged.
+		//
+		// A PARTIAL refund applies the same event but leaves the sale where it
+		// is (it is still refundable), so the state persisted below is the money
+		// layer's: ApplyRefundTx moves it to the table's target only when the
+		// whole balance has been returned, atomically with the amount.
+		res, lerr := lifecycle.SalesMachine.Apply(cur, lifecycle.SaleEventRefund)
+		if lerr != nil || !res.Changed {
 			return ErrRefundNotRefundable
 		}
 
