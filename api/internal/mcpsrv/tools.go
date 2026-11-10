@@ -885,7 +885,7 @@ func (s *Server) registerTools() {
 	}, s.getChipSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_chip_settings",
-		Description: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only.",
+		Description: "Set the account's CHIP credentials (brand_id + secret_key + mode). mode is test or live: the mode you created the key in, in the CHIP portal. Empty mode keeps the stored one (test when none is stored); the key carries no prefix, so the mode is never inferred. Empty secret = keep the existing key. Validated against CHIP before saving. Admin only.",
 	}, s.setChipSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "clear_chip_settings",

@@ -33,10 +33,15 @@ export function DocsBreadcrumb() {
                   ›
                 </span>
               ) : null}
+              {/* `min-h-[44px]` (card t_ff973d0b): the /docs index's last
+                  sub-24px tap target was this crumb. It is shared chrome, so the
+                  row is 44px tall on every docs page — the crumb sits above the
+                  h1, where the height costs nothing, and a phone reader gets a
+                  real target. */}
               {crumb.href && !current ? (
                 <Link
                   href={crumb.href}
-                  className="underline decoration-dotted underline-offset-2 hover:text-slate-900"
+                  className="inline-flex min-h-[44px] items-center underline decoration-dotted underline-offset-2 hover:text-slate-900"
                 >
                   {crumb.label}
                 </Link>

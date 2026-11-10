@@ -429,7 +429,7 @@ func (s *Server) getChipSettings(ctx context.Context, _ *mcp.CallToolRequest, _ 
 type setChipSettingsIn struct {
 	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID (required)"`
 	SecretKey       string   `json:"secret_key,omitempty" jsonschema:"CHIP Secret Key. Empty = keep the existing key."`
-	Mode            string   `json:"mode,omitempty" jsonschema:"test|live (auto-derived from the sk_test_/sk_live_ prefix when empty)"`
+	Mode            string   `json:"mode,omitempty" jsonschema:"test|live: the mode you created the key in, in the CHIP portal. Empty = keep the stored mode (test when none is stored). The key carries no prefix, so this is never inferred."`
 	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback email when the buyer does not provide an email"`
 	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of payment methods, empty = all"`
 }
@@ -445,13 +445,16 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 	secretEnc := ""
 	existingMode := ""
 	existingVerified := false
-	if in.SecretKey == "" {
-		if a, aerr := s.deps.Accounts.ByID(ctx, acc); aerr == nil {
+	// Card t_8f38dc34: the stored mode + verified state are read on BOTH
+	// paths, because an omitted mode keeps what the account already says.
+	if a, aerr := s.deps.Accounts.ByID(ctx, acc); aerr == nil {
+		existingMode = a.ChipMode
+		existingVerified = a.ChipVerified
+		if in.SecretKey == "" {
 			secretEnc = a.ChipSecretKeyEnc
-			existingMode = a.ChipMode
-			existingVerified = a.ChipVerified
 		}
-	} else {
+	}
+	if in.SecretKey != "" {
 		enc, eerr := cryptoutil.Encrypt(s.decKey, []byte(in.SecretKey))
 		if eerr != nil {
 			return nil, nil, eerr
@@ -461,16 +464,11 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 	if secretEnc == "" {
 		return nil, nil, errors.New("secret_key is required")
 	}
-	mode := strings.ToLower(in.Mode)
-	if in.SecretKey == "" && existingMode != "" {
-		mode = existingMode
-	} else if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_live") {
-		mode = "live"
-	} else if strings.HasPrefix(strings.ToLower(in.SecretKey), "sk_test") {
-		mode = "test"
-	}
-	if mode != "live" && mode != "test" {
-		mode = "test"
+	// The mode is the merchant's choice, exactly as in the REST door: one
+	// shared rule (dbstore.ResolveChipMode), so the two cannot disagree.
+	mode, modeOK := dbstore.ResolveChipMode(in.Mode, existingMode)
+	if !modeOK {
+		return nil, nil, errors.New(`mode must be "test" or "live"`)
 	}
 	verified := false
 	if s.chip != nil && in.SecretKey != "" {

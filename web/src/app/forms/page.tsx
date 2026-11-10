@@ -675,7 +675,25 @@ export default function FormsPage() {
                   />
                 )}
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{f.title}</p>
+                  {/* t_bb0d0bee: the STATUS pill lives with the TITLE, not in the
+                      action row. In the action row it sat between links and
+                      buttons and read as a third control ("Draft" beside "Edit"
+                      and "Form Settings"); status is information about the form,
+                      so it belongs where the form's name is. The row below is
+                      actions only now (Edit / Form Settings / entries / View /
+                      Publish). */}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <p className="min-w-0 truncate text-sm font-medium">{f.title}</p>
+                    {f.status === "published" || f.status === "unlisted" ? (
+                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
+                        {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
+                      </span>
+                    ) : (
+                      <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-jf-2xs font-medium text-slate-500">
+                        {f.status === "private" ? t("forms.private") : t("forms.draft")}
+                      </span>
+                    )}
+                  </div>
                   <p className="font-mono text-jf-2xs text-[var(--jf-muted)]">
                     {view.kind === "link" ? view.href : t("forms.urlUnavailable")}
                   </p>
@@ -684,9 +702,6 @@ export default function FormsPage() {
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                 {f.status === "published" || f.status === "unlisted" ? (
                   <>
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
-                      {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
-                    </span>
                     {canWrite && (
                       <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                         {t("forms.edit")}
@@ -732,9 +747,6 @@ export default function FormsPage() {
                   </>
                 ) : (
                   <>
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-jf-2xs font-medium text-slate-500">
-                      {f.status === "private" ? t("forms.private") : t("forms.draft")}
-                    </span>
                     {canWrite && (
                       <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
                         {t("forms.edit")}

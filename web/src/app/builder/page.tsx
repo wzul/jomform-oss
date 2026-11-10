@@ -1945,9 +1945,22 @@ export default function Builder() {
   if (sessionError) return <SessionFault />;
 
   return (
-    <main className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]">
-      {/* Issue #174: template picker on the new-form path (no ?form= param). */}
+    <>
+      {/* Issue #174: template picker on the new-form path (no ?form= param).
+          Card t_bb0d0bee: it is a MODAL, so it renders OUTSIDE the shell it
+          covers, and the shell carries `inert` while it is open. Before this the
+          panel sat on top of a live header: "Save & publish" was painted at 60%
+          behind a 40% scrim (measured 390px: 56,66,131 for an indigo that is
+          94,106,210 at full strength) and, with no `inert` anywhere, its
+          controls stayed focusable and clickable underneath the overlay. A modal
+          that announces `aria-modal="true"` owes the shell the inertness it
+          claims; without it the header's Publish was a second live first step
+          competing with the picker's own choices. */}
       <TemplatePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+      <main
+        inert={pickerOpen}
+        className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]"
+      >
       {/* top bar — issue #59: stacks on mobile. Row1: back + title (flex-1,
           min-w-0, truncate) + Publish. Row2: slug + View + unsaved. Desktop
           (md+) keeps the single flat row; inputs shrink (w-56/w-40 →
@@ -2574,7 +2587,8 @@ export default function Builder() {
         )}
         </aside>
       </div>
-    </main>
+      </main>
+    </>
   );
 
   function paletteDragStart(e: React.DragEvent, t: BlockType) {

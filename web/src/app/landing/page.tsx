@@ -12,9 +12,18 @@
 //
 //   Now: a two-column hero whose right column IS the product (`HeroOrderForm`,
 //   a real order-form card on a dark stage), a three-step lane under it, the
-//   seven use cases as cards in a three-column grid — each keeping every
-//   "How to set it up" step and its guide link — the MCP band as a white card
-//   with a short terminal transcript, then "Free. Not a trial." and the footer.
+//   seven use cases as cards in a three-column grid — each with its title, body,
+//   tick bullets and ONE plain line pointing at its screenshot guide — the MCP band
+//   as a white card with a short terminal transcript, then "Free. Not a trial."
+//   and the footer.
+//
+// NO "HOW TO SET IT UP" LISTS ON THIS PAGE (card t_b4e5881d, reversing t_41666fb1)
+//   Each showcase used to carry a nested setup box: a heading, a four/five-item
+//   ordered list and a guide link. Wan, on a phone screenshot of the RSVP card:
+//   "benda yang terlalu technical tak sesuai ada kat landing page." The steps are
+//   still written down — in docs/guides/<slug>/README.md, rendered at
+//   /docs/guides/<slug> — so the card keeps a single guide line and the landing
+//   says what the product does rather than how to configure it.
 //
 // THE MARKUP THIS FILE MUST KEEP, and which test pins each piece
 //   `src/lib/landingHeroPan.test.ts` reads this file's source and anchors on
@@ -28,11 +37,11 @@
 //   the guard counts raw occurrences in the source, comments included.
 //   `src/lib/landingRaisedText.test.ts` pins the nav's `flex-wrap`, the Log in
 //   anchor's `whitespace-nowrap` and the footer row's `flex-wrap` + `gap-y-1`.
-//   `src/lib/landingUseCases.test.ts` counts the seven `land.setup` headings and
-//   the seven ordered lists (class `mt-3 list-decimal …`) IN THIS FILE, and
-//   requires each showcase's guide link to sit between its last step and the
-//   next section close — which is why the setup lists live here rather than
-//   inside `ShowcaseCard`.
+//   `src/lib/landingUseCases.test.ts` requires, per showcase, its title/body/
+//   bullets/cta rendered once, ONE guide line inside the card's own slice of this
+//   file, and ZERO setup lists — and it checks each linked guide still carries
+//   numbered steps, so removing the steps here cannot mean losing them from the
+//   product.
 //
 // Every colour is a `--jf-*` token and every space a Tailwind step (no hex, no
 // `[Npx]` — design-system rule, card t_f2e231d3 will absorb these primitives).
@@ -41,7 +50,8 @@
 // large text and on white cards, where it measures 4.70:1 and up.
 import { useEffect } from "react";
 
-import { useI18n } from "../../components/i18n";
+import { LANG_LABEL, LANG_SHORT, useI18n } from "../../components/i18n";
+import { endonymLangProps } from "../../lib/endonymLang";
 import OperatorNotice from "../../components/OperatorNotice";
 import AgentBand from "../../components/landing/AgentBand";
 import HeroOrderForm from "../../components/landing/HeroOrderForm";
@@ -80,10 +90,26 @@ export default function Landing() {
        20em at a 16px root, outside the band. */
     <main className="min-h-screen bg-[var(--jf-bg)] max-[17em]:[overflow-wrap:anywhere]">
       {/* nav
-          `flex-wrap` + `gap-y-2` (card t_68456ead): three items whose widths
-          are their own text; at a raised root font they no longer fit on one
-          row and, without wrapping, Log in was pushed 26.7px past a 320px
-          viewport. */}
+          `flex-wrap` + `gap-y-2` (card t_68456ead): the brand and the link
+          cluster are each as wide as their own text; at a raised root font they
+          no longer fit on one row and, without wrapping, the last item was
+          pushed 26.7px past a 320px viewport.
+
+          HEADER HIERARCHY — DO NOT INVERT (card t_53bcd451, measured from the
+          shipped 390px and 1440px screenshots):
+            A public landing page is read by a FIRST-TIME visitor, so the
+            strongest control in this header must be the one that starts them
+            building: "Build a form" is the filled primary and points at
+            /builder (for a visitor with no session cookie the SSR gate turns
+            that into /login?next=…builder, so the intent survives sign-in).
+            "Log in" is the returning user's shortcut — it stays a plain text
+            link and must never carry the fill. The old header had it the other
+            way round: a filled purple Log in beside a plain Build a form, so a
+            new visitor's eye landed on an account form.
+            `src/lib/landingHeaderHierarchy.test.ts` fails the unit suite if the
+            fill moves back onto /login, if /builder loses it, if the Docs link
+            leaves the header, if the language buttons drop under 44px, or if
+            the trust bullets go back to 12px muted text. */}
       <nav className="flex flex-wrap items-center justify-between gap-y-2 border-b border-[var(--jf-border)] bg-[var(--jf-surface)] px-5 py-3">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white">
@@ -93,24 +119,33 @@ export default function Landing() {
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+          {/* /docs is a full product surface, so it is reachable from the
+              header and not only from the footer. */}
+          <a
+            href="/docs"
+            className="whitespace-nowrap text-sm text-[var(--jf-text-secondary)] hover:text-[var(--jf-text)]"
+          >
+            Docs
+          </a>
+          {/* `whitespace-nowrap` (card t_68456ead): at a raised root font the
+              label used to break to two lines inside its link; the row wraps
+              instead of the words. Text link, NOT the filled button — see the
+              hierarchy note above. */}
+          <a
+            href="/login"
+            className="whitespace-nowrap text-sm text-[var(--jf-muted)] hover:text-[var(--jf-text)]"
+          >
+            {t("land.login")}
+          </a>
           <a
             href="/builder"
-            className="hidden text-sm text-[var(--jf-muted)] hover:text-[var(--jf-text)] sm:block"
+            className="whitespace-nowrap rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
           >
             {t("land.buildForm")}
           </a>
           <LangButtons />
         </div>
-        {/* `whitespace-nowrap` (card t_68456ead): at a raised root font the
-            label used to break to two lines inside the button; the row wraps
-            instead of the words. */}
-        <a
-          href="/login"
-          className="whitespace-nowrap rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-        >
-          {t("land.login")}
-        </a>
       </nav>
 
       {/* hero — the product IS the first screen (variant A) */}
@@ -149,7 +184,14 @@ export default function Landing() {
                 {t("land.cta2")}
               </a>
             </div>
-            <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2 text-xs text-[var(--jf-muted)]">
+            {/* Trust bullets (card t_53bcd451). They were `text-xs` in
+                --jf-muted: the reassurance was there but visually discarded.
+                Now `text-sm` in --jf-text-secondary, which measures 9.69:1 on
+                this hero surface (--jf-bg #f7f8f8) — comfortably past the 4.5:1
+                AA floor for normal text, where --jf-muted measured 4.54:1 at
+                12px. Colour is a token, so the a11y gate's axe scan measures
+                the same pair on every run. */}
+            <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2 text-sm text-[var(--jf-text-secondary)]">
               {[t("land.trust1"), t("land.trust2"), t("land.trust3")].map((label) => (
                 <li key={label} className="flex items-center gap-1.5">
                   <span aria-hidden="true" className="text-[var(--jf-primary-strong)]">
@@ -199,34 +241,8 @@ export default function Landing() {
             ]}
             cta={{ href: "/builder", label: t("land.weddingcta") }}
             secondary={{ href: "/mcp", label: t("land.weddingmcp") }}
-          >
-            {/* How to set it up — the real product paths, not marketing. Every
-                step names a control the shipped product has, and no step claims
-                a capability the code lacks. Every showcase has a screenshot
-                guide now, so the list ends on a link to it under /docs/guides
-                (src/lib/landingUseCases.test.ts checks each link lands on a
-                page file and that no card still promises one). */}
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.weddingstep1")}</li>
-                <li>{t("land.weddingstep2")}</li>
-                <li>{t("land.weddingstep3")}</li>
-                <li>{t("land.weddingstep4")}</li>
-                <li>{t("land.weddingstep5")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/wedding-rsvp"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guidewedding")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/wedding-rsvp", label: t("land.guidewedding") }}
+          />
 
           {/* use case showcase — QR ordering / restaurant (issue #441) */}
           <ShowcaseCard
@@ -235,28 +251,8 @@ export default function Landing() {
             body={t("land.qrbody")}
             bullets={[t("land.qr1"), t("land.qr2"), t("land.qr3"), t("land.qr4")]}
             cta={{ href: "/builder", label: t("land.qrcta") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.qrstep1")}</li>
-                <li>{t("land.qrstep2")}</li>
-                <li>{t("land.qrstep3")}</li>
-                <li>{t("land.qrstep4")}</li>
-                <li>{t("land.qrstep5")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/qr-table-ordering"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guideqr")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/qr-table-ordering", label: t("land.guideqr") }}
+          />
 
           {/* use case showcase — recurring class / tuition fees (card t_345b0c87).
               Every bullet is a behaviour that exists today, and this is the mapping:
@@ -301,28 +297,8 @@ export default function Landing() {
               t("land.tuition4"),
             ]}
             cta={{ href: "/builder", label: t("land.tuitioncta") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.tuitionstep1")}</li>
-                <li>{t("land.tuitionstep2")}</li>
-                <li>{t("land.tuitionstep3")}</li>
-                <li>{t("land.tuitionstep4")}</li>
-                <li>{t("land.tuitionstep5")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/tuition-class"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guidetuition")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/tuition-class", label: t("land.guidetuition") }}
+          />
 
           {/* use case showcase — Canva→Claude→MCP customization (issue #441) */}
           <ShowcaseCard
@@ -331,27 +307,8 @@ export default function Landing() {
             body={t("land.canvabody")}
             bullets={[t("land.canva1"), t("land.canva2"), t("land.canva3"), t("land.canva4")]}
             cta={{ href: "/mcp", label: t("land.canvacta") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.canvastep1")}</li>
-                <li>{t("land.canvastep2")}</li>
-                <li>{t("land.canvastep3")}</li>
-                <li>{t("land.canvastep4")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/design-with-mcp"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guidecanva")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/design-with-mcp", label: t("land.guidecanva") }}
+          />
 
           {/* use case showcase — affiliate marketing (issue #450) */}
           <ShowcaseCard
@@ -361,27 +318,8 @@ export default function Landing() {
             bullets={[t("land.aff1"), t("land.aff2"), t("land.aff3"), t("land.aff4")]}
             cta={{ href: "/settings", label: t("land.affcta") }}
             secondary={{ href: "/mcp", label: t("land.affmcp") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.affstep1")}</li>
-                <li>{t("land.affstep2")}</li>
-                <li>{t("land.affstep3")}</li>
-                <li>{t("land.affstep4")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/affiliate-programme"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guideaff")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/affiliate-programme", label: t("land.guideaff") }}
+          />
 
           {/* use case showcase — club / society membership with recurring fees
               (card t_72d8fbac). Every bullet is a behaviour that exists today: the
@@ -402,27 +340,8 @@ export default function Landing() {
               t("land.membership4"),
             ]}
             cta={{ href: "/builder", label: t("land.membershipcta") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.membershipstep1")}</li>
-                <li>{t("land.membershipstep2")}</li>
-                <li>{t("land.membershipstep3")}</li>
-                <li>{t("land.membershipstep4")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/club-membership"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guidemembership")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/club-membership", label: t("land.guidemembership") }}
+          />
 
           {/* use case showcase — collect donations (card t_41666fb1). The copy
               describes what SHIPS TODAY, led by the pay-what-you-want product
@@ -432,8 +351,9 @@ export default function Landing() {
               and suggested_price_sen before it prices the sale
               (api/internal/httpapi/custom_amount.go). Fixed-denomination products
               — one product per RM10 / RM50 / RM100 — remain a supported
-              ALTERNATIVE, which is what the third step offers.
-              Donationstep2 starts from tpl-donation (migration 000027), the
+              ALTERNATIVE, which is what docs/guides/donations/README.md walks through
+              (card t_b4e5881d took the steps off this page; the guide keeps them).
+              That guide also starts from tpl-donation (migration 000027), the
               payment-mode form with its product block, name, email and message
               fields; a paid donation is a sale row, so /sales lists it with the
               donor's name and email. Deliberately absent, and negated by the guard
@@ -452,28 +372,8 @@ export default function Landing() {
             ]}
             cta={{ href: "/builder", label: t("land.donationcta") }}
             secondary={{ href: "/mcp", label: t("land.donationmcp") }}
-          >
-            <div className="mt-4 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-bg)] p-4">
-              <p className="text-jf-2xs font-semibold uppercase tracking-widest text-[var(--jf-muted)]">
-                {t("land.setup")}
-              </p>
-              <ol className="mt-3 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[var(--jf-text-secondary)]">
-                <li>{t("land.donationstep1")}</li>
-                <li>{t("land.donationstep2")}</li>
-                <li>{t("land.donationstep3")}</li>
-                <li>{t("land.donationstep4")}</li>
-                <li>{t("land.donationstep5")}</li>
-              </ol>
-              <p className="mt-3 text-xs">
-                <a
-                  href="/docs/guides/donations"
-                  className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
-                >
-                  {t("land.guidedonation")}
-                </a>
-              </p>
-            </div>
-          </ShowcaseCard>
+            guide={{ href: "/docs/guides/donations", label: t("land.guidedonation") }}
+          />
         </div>
       </section>
 
@@ -545,21 +445,53 @@ export default function Landing() {
   );
 }
 
+/**
+ * The landing's language control.
+ *
+ * Card t_53bcd451: it measured roughly 20px tall — under the 24px AA pointer
+ * minimum and far under the 44px touch target — and each button's only name was
+ * the two-letter label ("EN" / "BM"), which names neither the language nor the
+ * target of the press.
+ *
+ * The HIT AREA is 44px (`min-h-11 min-w-11`) and the VISUAL pill inside it keeps
+ * the original size: the padding around the label is what grows, so the header
+ * keeps its density while every pointer, thumb included, gets a real target.
+ * `aria-pressed` carries the segmented control's state, and the accessible name
+ * puts the language's own name in (`LANG_LABEL`) while keeping the visible short
+ * label first, so it contains the text it shows (WCAG 2.5.3) as well as naming
+ * the language it switches to.
+ */
 function LangButtons() {
   const { lang, setLang } = useI18n();
   return (
-    <div className="flex overflow-hidden rounded-md border border-[var(--jf-border)] text-xs">
+    <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-[var(--jf-border)]">
       {(["en", "ms"] as const).map((l) => (
         <button
           key={l}
+          type="button"
+          /* The endonym appears TWICE in this element — in the accessible name
+             below and in the visible label — and `endonymLang.test.ts` inspects
+             the element that holds each occurrence, requiring the declaration
+             BEFORE it. It is empty today (EN/BM are Latin abbreviations, the
+             same script as the page) and it is what keeps a non-Latin locale
+             from shipping undeclared (WCAG 3.1.2). */
+          {...endonymLangProps(l)}
           onClick={() => setLang(l)}
-          className={`px-2 py-1 font-medium transition-colors ${
-            lang === l
-              ? "bg-[var(--jf-primary)] text-white"
-              : "bg-[var(--jf-surface)] text-[var(--jf-muted)]"
-          }`}
+          aria-pressed={lang === l}
+          aria-label={`${LANG_SHORT[l]} — ${LANG_LABEL[l]}`}
+          title={LANG_LABEL[l]}
+          className="flex min-h-11 min-w-11 items-center justify-center px-1 text-xs"
         >
-          {l === "en" ? "EN" : "BM"}
+          <span
+            {...endonymLangProps(l)}
+            className={`rounded px-2 py-0.5 font-medium transition-colors ${
+              lang === l
+                ? "bg-[var(--jf-primary)] text-white"
+                : "text-[var(--jf-muted)]"
+            }`}
+          >
+            {LANG_SHORT[l]}
+          </span>
         </button>
       ))}
     </div>

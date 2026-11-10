@@ -36,6 +36,7 @@ import { workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { translateApiErr } from "../../lib/apiErr";
 import { formatDateTime } from "../../lib/formatDate";
+import { eventLabelKey } from "../../lib/activityEvents";
 
 // One events row as `GET /v1/rest/events` returns it (api/internal/httpapi/rest_events.go).
 type ActivityEvent = {
@@ -215,24 +216,33 @@ export default function ActivityPage() {
               ))}
             </select>
           </label>
-          <label className="text-xs text-[var(--jf-muted)]">
-            {t("act.filterFrom")}
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="jf-input mt-0.5 block w-40"
-            />
-          </label>
-          <label className="text-xs text-[var(--jf-muted)]">
-            {t("act.filterTo")}
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="jf-input mt-0.5 block w-40"
-            />
-          </label>
+          {/* FROM AND TO ARE ONE FIELD GROUP (card t_804040d3). As three
+              independent flex items they wrapped badly on a phone: measured at
+              390px, the event-type select and "From" shared the first row and
+              "To" sat alone on the second, so the range read as a ragged pair
+              rather than a range. The pair is now a single flex item that takes
+              its own row below `sm`, where the two boxes split that row evenly;
+              above `sm` they return to their fixed widths and sit inline. */}
+          <div className="flex w-full items-end gap-2 sm:w-auto">
+            <label className="min-w-0 flex-1 text-xs text-[var(--jf-muted)] sm:flex-none">
+              {t("act.filterFrom")}
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="jf-input mt-0.5 block w-full sm:w-40"
+              />
+            </label>
+            <label className="min-w-0 flex-1 text-xs text-[var(--jf-muted)] sm:flex-none">
+              {t("act.filterTo")}
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="jf-input mt-0.5 block w-full sm:w-40"
+              />
+            </label>
+          </div>
         </div>
 
         {/* Table */}
@@ -246,17 +256,29 @@ export default function ActivityPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((e) => (
-                <tr key={e.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
-                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs font-semibold">{e.event_name}</td>
-                  <td className="hidden max-w-lg break-all px-2 py-3 font-mono text-jf-2xs text-[var(--jf-muted)] md:table-cell">
-                    {e.properties && Object.keys(e.properties).length > 0 ? JSON.stringify(e.properties) : "—"}
-                  </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)]">
-                    {formatDateTime(e.created_at, user?.timezone)}
-                  </td>
-                </tr>
-              ))}
+              {rows.map((e) => {
+                // THE CELL IS A SENTENCE, NOT A TOKEN (card t_804040d3). The raw
+                // event name is what the REST/MCP surface answers in — it is not
+                // something a merchant should have to read in their own table —
+                // so the label comes from the dictionary and the machine token
+                // stays on the cell as its `title`, which is where an operator
+                // looks for it. A name the map does not know falls back to the
+                // token itself rather than to a blank cell (lib/activityEvents.ts).
+                const labelKey = eventLabelKey(e.event_name);
+                return (
+                  <tr key={e.id} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                    <td className="whitespace-nowrap px-4 py-3 text-xs font-semibold" title={e.event_name}>
+                      {labelKey ? t(labelKey) : e.event_name}
+                    </td>
+                    <td className="hidden max-w-lg break-all px-2 py-3 font-mono text-jf-2xs text-[var(--jf-muted)] md:table-cell">
+                      {e.properties && Object.keys(e.properties).length > 0 ? JSON.stringify(e.properties) : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-3 text-jf-2xs text-[var(--jf-muted)]">
+                      {formatDateTime(e.created_at, user?.timezone)}
+                    </td>
+                  </tr>
+                );
+              })}
               {!checking && rows.length === 0 && (
                 <tr>
                   <td colSpan={3} className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">

@@ -39,7 +39,7 @@ function CopyBtn({ value, label, copiedLabel }: { value: string; label: string; 
   );
 }
 
-function CopyBlock({ code, copyLabel, copiedLabel }: { code: string; copyLabel: string; copiedLabel: string }) {
+function CopyBlock({ code, copyLabel, copiedLabel, label }: { code: string; copyLabel: string; copiedLabel: string; label: string }) {
   const [done, setDone] = useState(false);
   return (
     <div className="relative mt-2">
@@ -54,7 +54,23 @@ function CopyBlock({ code, copyLabel, copiedLabel }: { code: string; copyLabel: 
       >
         {done ? copiedLabel : copyLabel}
       </button>
-      <pre className="overflow-x-auto rounded-lg bg-slate-900 p-4 text-jf-2xs leading-relaxed text-slate-100">
+      {/* THE SNIPPET IS A KEYBOARD-REACHABLE REGION (card t_804040d3). This box
+          scrolls horizontally (measured at 390px: 309px of code in a 292px box),
+          and a scroll container with no tab stop cannot be scrolled from the
+          keyboard — axe reports `scrollable-region-focusable` (serious) on
+          exactly this node. `tabIndex={0}` gives it the tab stop and
+          `role="region"` + its name is what axe asks for, because a focusable
+          <pre> with no name is announced as a bare group. The name comes from
+          the dictionary: /mcp is multilingual, so a literal here would be one
+          English string on a Malay page.
+          e2e/a11y-scroll-regions.spec.ts drives this page at 390px and fails if
+          the tab stop or the name is dropped. */}
+      <pre
+        tabIndex={0}
+        role="region"
+        aria-label={label}
+        className="overflow-x-auto rounded-lg bg-slate-900 p-4 text-jf-2xs leading-relaxed text-slate-100"
+      >
         {code}
       </pre>
     </div>
@@ -150,6 +166,7 @@ export default function McpPage() {
               code={CLAUDE_CONFIG}
               copyLabel={t("mcp.copy")}
               copiedLabel={t("mcp.copied")}
+              label={t("mcp.configExample")}
             />
           </div>
 

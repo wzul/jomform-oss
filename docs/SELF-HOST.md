@@ -255,9 +255,11 @@ Merchant Portal (Developers):
 
 ![Settings → CHIP, before any key is saved](assets/selfhost/07-chip-settings.png)
 
-- **Mode is detected from the key, not chosen.** `sk_test_…` is Test,
-  `sk_live_…` is Live. Start with the sandbox/test key; nothing else in this step
-  needs a live merchant account.
+- **Mode is chosen, not detected.** CHIP issues a separate key for test and for
+  live, and the key carries no prefix JomForm can read, so you pick **Mode**
+  yourself: the one you created the key in. Start with the sandbox/test key;
+  nothing else in this step needs a live merchant account. The label is only a
+  label: the key decides what CHIP does, so a test key never charges a real card.
 - Keys are stored **encrypted** with `ENCRYPTION_KEY` and are never shown again
   after saving — this is the value a database backup cannot restore without
   `deploy/.env` (§ 9).
@@ -421,8 +423,9 @@ Panduan penuh di atas dalam Bahasa Inggeris; ini urutannya:
 6. **Borang pertama** — Forms → New form → isi tajuk → tambah blok → Save &
    publish. Pautan awam sebenar: `{APP_BASE_URL}/f/<slug>` (butang Copy link
    masih cetak pautan produk hosted — batasan yang diketahui).
-7. **CHIP sandbox** — Settings → CHIP, tampal Brand ID + Secret Key `sk_test_…`;
-   mod dikesan automatik daripada kunci.
+7. **CHIP sandbox** — Settings → CHIP, tampal Brand ID + Secret Key, dan pilih
+   **Mode** yang anda cipta kunci itu (Ujian atau Live). Kunci tiada awalan yang
+   boleh dibaca, jadi mod itu pilihan anda, bukan kesan automatik.
 8. **Emel (SES, pilihan)** — `SES_SMTP_*`, `SES_FROM` dalam `deploy/.env`,
    kemudian jalankan bootstrap semula dan set `JOMFORM_LOG_VERIFY_LINK=0`.
 9. **Sandaran + naik taraf** — `pg_dump` **dan** `deploy/.env` bersama; naik

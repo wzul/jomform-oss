@@ -38,7 +38,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 0,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "03c0c5b366e8fd4d",
+    "digest": "2327cf482d9932d8",
     "guides": []
   },
   {
@@ -174,7 +174,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 12,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "c3bc74e03cc0cb06",
+    "digest": "83cf7254c194a95c",
     "guides": []
   },
   {
@@ -382,7 +382,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 29,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "b0c16e59c4238c36",
+    "digest": "3e9e56bdf8af6221",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]

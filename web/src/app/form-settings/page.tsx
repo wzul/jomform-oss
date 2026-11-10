@@ -3233,7 +3233,7 @@ function FormSettingsInner() {
                       </div>
                       <div>
                         <label className={labelCls} htmlFor="fs-chip-secret">{t("set.secretKey")}</label>
-                        <input id="fs-chip-secret" value={ovSecret} onChange={(e) => setOvSecret(e.target.value)} type="text" placeholder="sk_live_… / sk_test_…" className={inputCls} />
+                        <input id="fs-chip-secret" value={ovSecret} onChange={(e) => setOvSecret(e.target.value)} type="text" placeholder={t("set.secretKeyPh")} className={inputCls} />
                       </div>
                       <div>
                         <label className={labelCls} htmlFor="fs-chip-fallback">{t("set.emailFallback")}</label>
@@ -3304,7 +3304,7 @@ function FormSettingsInner() {
                                   value={f.secret_key}
                                   onChange={(e) => updateChipFeed(f.id, { secret_key: e.target.value })}
                                   type="text"
-                                  placeholder="sk_live_… / sk_test_…"
+                                  placeholder={t("set.secretKeyPh")}
                                   className={inputCls}
                                 />
                               </div>

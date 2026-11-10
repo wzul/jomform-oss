@@ -149,9 +149,13 @@ export default function TemplatePicker({
     }
   }
 
+  // Card t_bb0d0bee: the scrim was `bg-black/40`, which left a saturated
+  // "Save & publish" behind it reading at 60% — still the loudest control on a
+  // phone screen. A modal's backdrop has to be unambiguous; the builder shell is
+  // inert as well (see builder/page.tsx), so that is the visual half of one fix.
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -176,20 +180,29 @@ export default function TemplatePicker({
         </div>
 
         <div className="grid flex-1 grid-cols-1 gap-3 overflow-y-auto p-5 sm:grid-cols-2 lg:grid-cols-3">
-          {/* Blank form */}
-          <button
-            onClick={() => {
-              onClose();
-              router.push("/builder?new=1");
-            }}
-            className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center transition-colors hover:border-[var(--jf-accent)]/50 hover:bg-indigo-50/40"
-          >
+          {/* Blank form — card t_bb0d0bee: this was a dashed BUTTON with no
+              call to action, while every template card next to it carried a
+              filled "Use template". Two choices on one screen, only one of them
+              looking like a choice. It is a card with the same anatomy as a
+              template card now (icon, title, hint, filled CTA) so "start from
+              scratch" is as actionable as "use a template" — and it is a div,
+              not a button wrapping a button. */}
+          <div className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--jf-border)] p-6 text-center">
             <span className="flex h-12 w-12 items-center justify-center rounded-full bg-indigo-50 text-2xl text-[var(--jf-primary-on-tint)]">
               +
             </span>
             <span className="text-sm font-semibold text-[var(--jf-text-secondary)]">{t("tpl.blank")}</span>
             <span className="text-xs text-[var(--jf-muted)]">{t("tpl.blankHint")}</span>
-          </button>
+            <button
+              onClick={() => {
+                onClose();
+                router.push("/builder?new=1");
+              }}
+              className="jf-btn-primary mt-1 w-full py-2 text-xs"
+            >
+              {t("tpl.blankCta")}
+            </button>
+          </div>
 
           {/* Issue #457: the merchant's own templates come first. Issue #589:
               only own-ONLY rows here — a row the gallery also serves is rendered

@@ -180,20 +180,50 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
     <main className="min-h-screen bg-white">
       {/* t_d768342e / axe `landmark-unique`: the layout holds two <nav>
           elements, so each needs its own accessible name to be told apart
-          (this one is the site bar, the one below is the docs sidebar). */}
+          (this one is the site bar, the one below is the docs sidebar).
+
+          Card t_ff973d0b: the bar carries the BRAND and a way in. It used to be
+          "← Back to JomForm" as plain text plus "JomForm Docs" — no mark and no
+          Log in / Start free — so a reader who arrived from the landing page lost
+          both the product identity and the conversion path. The tile + wordmark
+          is the landing nav's own lockup (app/landing/page.tsx), and the CTA is
+          the same /login both of that page's buttons use. */}
       <nav
         aria-label="JomForm site"
-        className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5"
+        className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-1.5 sm:px-5"
       >
-        <Link href="/" className="shrink-0 text-sm font-medium text-slate-600 hover:text-slate-900">
-          ← Back to JomForm
+        <Link
+          href="/"
+          className="flex shrink-0 items-center gap-2 py-1.5 hover:opacity-90"
+        >
+          <span
+            aria-hidden="true"
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white"
+          >
+            JF
+          </span>
+          <span className="text-sm font-semibold text-slate-900">
+            Jom<span className="text-[var(--jf-primary-strong)]">Form</span>
+          </span>
+          {/* The section name, kept for a reader on a desktop where the logo
+              alone is not enough to say "docs". */}
+          <span className="hidden text-sm text-slate-500 sm:inline">Docs</span>
         </Link>
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="hidden text-sm font-semibold text-slate-900 sm:inline">JomForm Docs</span>
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* The one search instance: a compact trigger in the top bar (the only search
               surface a phone reader gets), opening a portalled dialog. The sidebar's
               field dispatches the same event — see DocsNavSearch. */}
           <DocsSearch />
+          {/* Width band (card t_ff973d0b): the brand lockup plus the search
+              trigger plus this button were 4px wider than a 320px viewport and
+              panned the header, so the button is `px-3` until `sm` where it
+              returns to `px-4`. Invisible at the 390px the card was filed at. */}
+          <Link
+            href="/login"
+            className="inline-flex min-h-[44px] shrink-0 items-center whitespace-nowrap rounded-lg bg-[var(--jf-primary)] px-3 text-sm font-medium text-white hover:opacity-90 sm:px-4"
+          >
+            Start free
+          </Link>
         </div>
       </nav>
 

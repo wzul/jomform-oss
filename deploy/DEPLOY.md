@@ -675,6 +675,64 @@ still serves, or pass `--await-expiry`).
 A check that stops at the origin reports a clean purge while the object is still
 downloadable — that is the mistake this script is built to prevent.
 
+## The web build output is purged at ship time (`/_next/static/`)
+
+`/_next/static/*` is served `cache-control: public, max-age=31536000, immutable`,
+and a CDN caches the **response, header set included**. The chunk names are hashes
+of the module graph, not of the bytes, so a release that changes response headers
+but not asset bytes keeps the same names — and the edge goes on answering with the
+**old** headers for up to a year. Measured on prod 2026-11-09: 39 of the 60 assets
+the running image shipped came from the edge with **zero** security headers (ages
+up to 23.8 days) although the release that added them was live at the origin; only
+a manual `purge_everything` closed it. The origin is honest immediately, which is
+why nothing that looks only at the origin can see this.
+
+So `deploy/build-and-ship.sh` ends a **proven** ship (§ 8b) with step 8c: it pipes
+`deploy/edge-purge-static.sh` to the deployment host and runs it there, because the
+token lives in that host's compose `.env` and nowhere else. The script:
+
+1. reads `JF_CF_PURGE_TOKEN` / `JF_CF_PURGE_ZONE_ID` out of the environment the ship
+   hands it (the ship reads those two by NAME out of `$COMPOSE_DIR/.env` — the file
+   is read, never sourced, since it belongs to compose and not to bash);
+2. with both set, POSTs **one prefix purge** for `https://<host>/_next/static/` to
+   `POST /client/v4/zones/{zone}/purge_cache` and logs the CDN's answer
+   (`http 200 success=true`, or the refusal with its error code);
+3. with either unset **or empty**, prints
+   `edge not purged: stale `_next/static` headers may be served for up to a year
+   after a header-only release` and exits 0 — the ship already happened, and no
+   exit code brings the asset bytes back.
+
+A 200 carrying `success:false` is a refusal, not a purge (Cloudflare answers 200
+with `errors[]` for several rejections, rate limiting among them), and the purge
+does **not** run when the roll failed: an unproven recreate leaves the old image
+serving, so purging then would only refill the edge from the old origin.
+
+The host purged is the web app's own origin (`APP_BASE_URL`, or `--host` for a
+manual run). **A wildcard in `JF_CF_PURGE_HOSTS` does not cover the apex** — the
+`*.jomform.com` entry exists for the per-workspace form hosts — so a deployment
+whose `JF_CF_PURGE_HOSTS` is wildcard-only would drop the apex and purge nothing.
+The script says so by name and names the fix; list the apex too:
+
+```bash
+JF_CF_PURGE_HOSTS=*.jomform.com,jomform.com
+```
+
+Run it by hand against a deployment's own credentials (it takes the same
+environment the ship gives it):
+
+```bash
+# on the deployment host, from its compose directory
+set -a; . ./.env; set +a          # or export the three vars yourself
+bash /path/to/edge-purge-static.sh --host jomform.com
+#   ==> edge purge: https://api.cloudflare.com/client/v4/zones/<zone>/purge_cache
+#       -> http 200 success=true (https://jomform.com/_next/static/)
+```
+
+`deploy/biteproof_ship_static_purge.sh` is the offline proof: it drives the script
+against a loopback stub CDN (unconfigured, accepted, `success:false`, out-of-zone)
+and drives `build-and-ship.sh` through both ship outcomes, requiring that a failed
+roll purges nothing and that its own § 8c call, when neutered, turns the checks red.
+
 ## Reconciling the media store against the `media` table
 
 Stored bytes and the `media` table can disagree, and when they do

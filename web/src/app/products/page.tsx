@@ -351,6 +351,13 @@ export default function Products() {
   }
 
   // ── create ───────────────────────────────────────────────────────────────
+  // Card t_bb0d0bee: ONE creation entry point. The quick-create panel below is
+  // COLLAPSED by default and the header's "New product" button is what reveals
+  // it. Before this, the panel was always open while a second "New product"
+  // LINK to /products/new sat above it — two ways to start the same task on one
+  // screen, and on a 390x844 phone the always-open panel pushed the first
+  // catalogue row to y=781 (measured), i.e. the list began below the fold.
+  const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   // Card t_7eb3b623: pay-what-you-want. A custom_amount product has no asking
@@ -869,17 +876,35 @@ export default function Products() {
               issue #151 and NOTHING linked to it — `git grep 'products/new'`
               across web/ returned nothing. It is the only surface with the
               product-type switch, variations and images, so an orphaned route
-              hid all three. */}
+              hid all three.
+
+              Card t_bb0d0bee: ONE entry point. This button used to be a LINK to
+              /products/new while a second, always-open inline form sat right
+              below it — two ways to create a product on one screen, and the
+              inline form pushed the catalogue below the fold on a phone
+              (measured at 390px: the first row's top was y=781 on an 844px
+              viewport). The button now OPENS the quick-create panel (the reveal
+              is `createOpen`), and the full editor stays reachable from inside
+              that panel — a secondary "more options" route, not a second
+              always-visible creation surface. */}
           {canWrite && (
-            <Link href="/products/new" className="jf-btn-primary">
-              {t("prod.newTitle")}
-            </Link>
+            <button
+              type="button"
+              onClick={() => setCreateOpen((v) => !v)}
+              aria-expanded={createOpen}
+              aria-controls="prod-create"
+              className={createOpen ? "jf-btn-ghost" : "jf-btn-primary"}
+            >
+              {createOpen ? t("common.cancel") : t("prod.newTitle")}
+            </button>
           )}
         </div>
 
-        {/* Add form */}
-        {canWrite && (
-        <form onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
+        {/* Add form — the reveal behind the header's "New product" button
+            (card t_bb0d0bee). Collapsed by default so the catalogue is what a
+            phone lands on; `id` matches the button's aria-controls. */}
+        {canWrite && createOpen && (
+        <form id="prod-create" onSubmit={add} className="jf-card mt-6 flex flex-wrap gap-2 p-4">
           {/* The inputs and selects in this row are named with the SAME shape —
               `aria-label={t(...)}` — and neither half may fall back to its
               placeholder. A `<select>` with only `<option>` children has no
@@ -997,6 +1022,14 @@ export default function Products() {
             </>
           )}
           <button className="jf-btn-primary">{t("prod.add")}</button>
+          {/* Card t_7eb3b623's route, kept reachable as the SECONDARY path
+              (card t_bb0d0bee): /products/new is the only surface with
+              variations, images and the payment link, and an orphaned route
+              hid all three once already. It is a link inside the one creation
+              panel, not a second always-visible entry point. */}
+          <Link href="/products/new" className="jf-btn-ghost">
+            {t("prod.fullEditor")}
+          </Link>
         </form>
         )}
         {error && (

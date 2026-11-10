@@ -34,12 +34,20 @@
 #   - web/node_modules/.bin/playwright, which needs the browser too:
 #       cd web && npm ci && npx playwright install chromium
 #
-# NOT A GATE. It is not in scripts/preflight.sh and it must not be: it needs a
-# database, a Go toolchain and a browser, and it runs one long-lived server. The
-# `api` `test` gate carries the half that CAN run there
-# (api/internal/menufixture/fixture_test.go: the page really carries both groups
-# and the order route stores the answer); this script carries the half that needs
-# a layout engine.
+# A GATE, as of card t_ef32ea3b: `menufixture` in scripts/preflight.sh, ordered
+# right after `e2e` so it reuses the browser cache that gate just warmed. This
+# header used to say "NOT A GATE" on cost grounds; that conclusion was about the
+# price, and the price was MEASURED on 2026-11-09: 3 passed (3.3s), real 0m18.4s
+# with the Go build warm, leaving no schema, listener or process behind. What
+# changed the answer is the defect, not the cost: the spec SKIPS inside `e2e`
+# (no MENU_FIXTURE_URL there), so until this was a gate the ONLY guard that can
+# see a layout defect in a menu option group — card t_664549fc, a radio sized to
+# the whole row by the buyer-field rule, label pushed off a 375px screen — ran
+# when a lane remembered, which is never. The Go half still lives in the `test`
+# gate (api/internal/menufixture/fixture_test.go: the page really carries both
+# groups and the order route stores the answer); this script carries the half
+# that needs a layout engine, and it is a gate now so that half is measured on
+# every release.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,7 +58,7 @@ for arg in "$@"; do
   case "$arg" in
     --serve) serve=1 ;;
     --keep-schema) keep_schema=1 ;;
-    -h|--help) sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^set -uo pipefail/{/^set -uo pipefail/d;p}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "menu-fixture-e2e: unknown argument: $arg (see --help)" >&2; exit 2 ;;
   esac
 done

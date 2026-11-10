@@ -371,6 +371,13 @@ const GROUPS: Group[] = [
 
 // The five first steps, raised to the top of the page (they used to sit under
 // 2,811 words of feature text, where nobody found them).
+//
+// Card t_ff973d0b: they now sit above the reference chip row as well. Before
+// this the page opened with six chips whose FIRST one was filled purple, so a
+// reference shortcut read as the page's primary action while "Start here" — the
+// actual onboarding path — started below it. The order is the claim: this
+// section is the page's one primary path, and the chips are shortcuts that
+// follow it.
 const START_STEPS = [
   "Create a free account — your first form is ready in about 5 minutes.",
   "Build a form with the drag-and-drop builder and attach products.",
@@ -378,6 +385,18 @@ const START_STEPS = [
   "Publish the form — it goes live at your workspace URL or a custom domain.",
   "Track sales, subscriptions and email delivery from the dashboard.",
 ];
+
+// Card t_ff973d0b: the picture-first route through the same material. It used to
+// be one chip in the row below, where it was a third way to reach a page the
+// sidebar already carried; it belongs to the onboarding path instead, so a new
+// reader who would rather follow screenshots meets it INSIDE "Start here".
+// `docsIndex.test.ts` reads this array as a fourth surface the index links a
+// route from, so /docs/guides stays reachable from the page itself and not only
+// from the sidebar row the guard separately checks.
+const START_LINKS: { href: string; labelKey: Key }[] = [
+  { href: "/docs/guides", labelKey: "docs.linkGuides" },
+];
+
 
 // One emoji per group, because a reader scrolling /docs scans for a shape before
 // they read a label. Keyed on the group id, so a new group gets an explicit one
@@ -393,20 +412,27 @@ const GROUP_EMOJI: Record<string, string> = {
   "developers": "🧑‍💻",
 };
 
-const QUICK_LINKS: { href: string; labelKey: Key; primary?: boolean }[] = [
-  { href: "/docs/customize", labelKey: "docs.linkDesign", primary: true },
+// Popular references, rendered under their own label BELOW "Start here" (card
+// t_ff973d0b). The row used to open with a FILLED purple chip — "Design → AI
+// agent → MCP guide" — so on a docs home a reference shortcut read as the
+// primary action. No chip is filled now: they are secondary shortcuts to the
+// three look-up pages a returning reader hunts for, and the primary path is the
+// section above them.
+//
+// Three, not six (card t_ff973d0b, "one destination, one home"): the dropped
+// chips all pointed at a destination the page already carries — "Design → AI
+// agent → MCP guide" is the "Design → AI agent → MCP customization" entry below
+// AND the sidebar row, and "Embed on your site" is an entry with the same title
+// below. "Screenshot guides" moved into START_LINKS above.
+const QUICK_LINKS: { href: string; labelKey: Key }[] = [
   { href: "/docs/placeholders", labelKey: "docs.linkPlaceholders" },
-  { href: "/docs/embed", labelKey: "docs.linkEmbed" },
   { href: "/docs/mcp", labelKey: "docs.linkMCP" },
   // t_5425c958: the REST API reference arrived on main after this structure was
   // written. Every docs entry point is a quick link here, and
   // `docsApi.test.ts` requires the index to be able to reach /docs/api.
   { href: "/docs/api", labelKey: "docs.linkAPI" },
-  // Card t_7b9f6d18: the screenshot guides (/docs/guides) are in the sidebar, and
-  // docsIndex.test.ts requires every sidebar row to be reachable from the index —
-  // this row is that way in.
-  { href: "/docs/guides", labelKey: "docs.linkGuides" },
 ];
+
 
 const FAQ: FaqEntry[] = [
   {
@@ -443,24 +469,9 @@ export default function DocsIndexPage() {
         <T k="docs.intro" />
       </p>
 
-      <div className="mt-6 flex flex-wrap gap-3">
-        {QUICK_LINKS.map((l) => (
-          <Link
-            key={l.href}
-            href={l.href}
-            className={
-              l.primary
-                ? "rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-                : "rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            }
-          >
-            <T k={l.labelKey} />
-          </Link>
-        ))}
-      </div>
-
-      {/* Getting started — FIRST, not last. */}
-      <section id="start" className="mt-10 scroll-mt-24">
+      {/* Getting started — FIRST, above the shortcut row (card t_ff973d0b). A
+          reference chip used to be the first thing under the intro. */}
+      <section id="start" className="mt-8 scroll-mt-24">
         <h2 className="text-xl font-semibold text-slate-900">
           <T k="docs.gsTitle" />
         </h2>
@@ -469,6 +480,41 @@ export default function DocsIndexPage() {
             <li key={s}>{s}</li>
           ))}
         </ol>
+        {START_LINKS.map((l) => (
+          <p key={l.href} className="mt-1 text-sm text-slate-600">
+            {/* `min-h-[44px]` (card t_ff973d0b): an inline link in a paragraph is
+                a ~20px tap target, and the index is the densest page in the
+                product on a phone. Every link this page owns is at least 44px
+                tall; the row stays visually inline because the text is centred
+                in the box. */}
+            <Link
+              href={l.href}
+              className="inline-flex min-h-[44px] items-center font-medium text-[var(--jf-primary-strong)] underline underline-offset-2"
+            >
+              <T k={l.labelKey} />
+            </Link>
+          </p>
+        ))}
+      </section>
+
+      {/* Popular references — SECONDARY shortcuts, under their own label and
+          after the onboarding path (card t_ff973d0b). No chip is filled: a
+          filled chip here is what made a reference link read as the page's CTA. */}
+      <section id="popular" className="mt-8 scroll-mt-24">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-600">
+          <T k="docs.popularTitle" />
+        </h2>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {QUICK_LINKS.map((l) => (
+            <Link
+              key={l.href}
+              href={l.href}
+              className="inline-flex min-h-[44px] items-center rounded-lg border border-slate-200 px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <T k={l.labelKey} />
+            </Link>
+          ))}
+        </div>
       </section>
 
       <h2 className="mt-12 text-xl font-semibold text-slate-900">
@@ -477,7 +523,15 @@ export default function DocsIndexPage() {
 
       {GROUPS.map((g) => (
         <section key={g.id} id={g.id} className="mt-8 scroll-mt-24">
-          <h3 className="flex items-center gap-2 text-base font-semibold uppercase tracking-wide text-[var(--jf-primary-strong)]">
+          {/* `data-toc-skip` (card t_ff973d0b): the right rail is "On this page"
+              and nothing else. These category headings carried the sidebar's own
+              taxonomy into it — emoji and all, twice on one screen — so the rail
+              rendered a second site nav next to the ToC. The anchor still works
+              for a deep link; only the rail entry is gone. */}
+          <h3
+            data-toc-skip
+            className="flex items-center gap-2 text-base font-semibold uppercase tracking-wide text-[var(--jf-primary-strong)]"
+          >
             <span aria-hidden="true" className="text-lg normal-case">
               {GROUP_EMOJI[g.id] ?? "📄"}
             </span>
@@ -494,10 +548,12 @@ export default function DocsIndexPage() {
                 <p className="mt-1 text-base leading-7 text-[var(--jf-text-secondary)]">
                   {f.body}
                 </p>
+                {/* `min-h-[44px]` (card t_ff973d0b): these rows are the index's
+                    "next step" target on a phone — 20px tall is not a tap target. */}
                 {f.href ? (
                   <Link
                     href={f.href}
-                    className="mt-2 inline-block text-sm font-medium text-[var(--jf-primary-strong)] underline underline-offset-2"
+                    className="mt-1 inline-flex min-h-[44px] items-center text-sm font-medium text-[var(--jf-primary-strong)] underline underline-offset-2"
                   >
                     <T k="docs.next" />
                   </Link>
@@ -506,11 +562,14 @@ export default function DocsIndexPage() {
             ))}
           </div>
           {g.more ? (
-            <p className="mt-3 text-sm text-slate-600">
+            <p className="mt-1 text-sm text-slate-600">
               {g.more.map((m, i) => (
                 <span key={m.href}>
                   {i > 0 ? " · " : null}
-                  <Link href={m.href} className="text-[var(--jf-primary-strong)] underline underline-offset-2">
+                  <Link
+                    href={m.href}
+                    className="inline-flex min-h-[44px] items-center text-[var(--jf-primary-strong)] underline underline-offset-2"
+                  >
                     {m.label}
                   </Link>
                 </span>
@@ -525,12 +584,16 @@ export default function DocsIndexPage() {
       </h2>
       {/* A section entry carries its own heading and anchor and renders prose
           (one <p> per sentence, like the section blocks above); a q/a entry
-          renders a question and its answer. Both live under this heading. */}
+          renders a question and its answer. Both live under this heading.
+          `data-toc-skip` (card t_ff973d0b): the right rail stopped listing FAQ
+          questions — "On this page" is the page's anchors, not a second FAQ
+          index, and five questions pushed the page's real structure off the
+          rail. Each question's heading stays a heading for a screen reader. */}
       <div className="mt-4 space-y-4">
         {FAQ.map((f) =>
           f.q !== undefined ? (
             <section key={f.q}>
-              <h3 className="text-sm font-semibold text-slate-900">{f.q}</h3>
+              <h3 data-toc-skip className="text-sm font-semibold text-slate-900">{f.q}</h3>
               {/* `[overflow-wrap:anywhere]` (card t_68456ead): an FAQ answer is
                   prose that carries tokens — the MCP answer has a bare
                   https://mcp.jomform.com/mcp — and a URL has no whitespace to
@@ -547,7 +610,7 @@ export default function DocsIndexPage() {
             </section>
           ) : (
             <section key={f.title} id={f.slug} className="scroll-mt-24">
-              <h3 className="text-sm font-semibold text-slate-900">{f.title}</h3>
+              <h3 data-toc-skip className="text-sm font-semibold text-slate-900">{f.title}</h3>
               <p className="mt-1 text-sm leading-relaxed text-slate-600">{f.body}</p>
             </section>
           ),

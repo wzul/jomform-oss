@@ -39,6 +39,14 @@ function visibleHeadings(): { headings: Heading[]; nodes: Map<string, HTMLElemen
   for (const element of Array.from(root.querySelectorAll<HTMLElement>("h2, h3"))) {
     const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
     if (!text) continue;
+    // `data-toc-skip` (card t_ff973d0b): a heading can be real page structure and
+    // still be the wrong entry for this rail. The /docs index marks its feature
+    // categories (they repeat the sidebar's taxonomy, emoji and all) and its FAQ
+    // questions with it, so "On this page" stays a table of contents instead of
+    // becoming a second site nav. Checked BEFORE the id assignment below: a
+    // skipped heading is not a rail destination, so it must not get an id minted
+    // for it either.
+    if (element.closest("[data-toc-skip]")) continue;
     const section = element.closest("section[id]");
     let id = element.id || (section instanceof HTMLElement ? section.id : "");
     if (!id) {
@@ -143,8 +151,11 @@ export function DocsToc({ variant }: { variant: "sidebar" | "inline" }) {
   return (
     <nav aria-label="On this page — mobile" className="mb-5 xl:hidden">
       {headings.length > 0 ? (
-        <details className="rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface-2)] px-3 py-2">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+        <details className="rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface-2)] px-3 py-1">
+          {/* `py-3` (card t_ff973d0b): the mobile rail toggle was a 20px tap
+              target. Padding rather than a flex box so the disclosure triangle
+              Chrome draws for <summary> stays. */}
+          <summary className="cursor-pointer py-3 text-sm font-semibold text-slate-900">
             On this page
           </summary>
           <TocList headings={headings} active={active} />

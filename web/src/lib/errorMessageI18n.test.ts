@@ -581,11 +581,9 @@ const KNOWN_TEXT_ATTR: { file: string; lit: string; why: "sample value" | "code 
   { file: "app/settings/page.tsx", lit: "e.g. 5f2b…-uuid", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "e.g. C1234567890", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "e.g. 62010", why: "sample value" },
-  { file: "app/settings/page.tsx", lit: "sk_live_… / sk_test_…", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "Acme Sdn Bhd", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "+60 12 345 6789", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "1 Jalan Test, Kuala Lumpur", why: "sample value" },
-  { file: "app/form-settings/page.tsx", lit: "sk_live_… / sk_test_…", why: "sample value" },
   { file: "app/form-settings/page.tsx", lit: "Admin Notification", why: "sample value" },
   // Code samples: the value is a snippet the merchant copies, not a sentence.
   { file: "app/settings/page.tsx", lit: '<script src="https://www.googletagmanager.com/gtag/js?id=G-XXXX"></-script>', why: "code sample" },

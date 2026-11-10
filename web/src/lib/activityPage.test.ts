@@ -50,6 +50,12 @@
 //      the recorder call sites under api/internal, so `chat.*` / `admin.*` /
 //      `feedback.*` cannot go missing again — those rows were readable in the
 //      unfiltered list and unselectable in the filter.
+//   7. (card t_804040d3) The event CELL is a sentence, not a token. Every event
+//      name the recorders can write has a `act.event.*` label in all five
+//      locales, the raw name survives as the cell's `title`, and a label for a
+//      name nothing records fails too. The three names built at the call site
+//      (`form.status_*`, `form.bulk_*`, `product.bulk_*`) are expanded from the
+//      Go source, so a new bulk action cannot ship as snake_case.
 //
 // Run with:
 //
@@ -63,6 +69,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
+import { EVENT_LABEL_KEYS } from "./activityEvents.ts";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
@@ -84,6 +91,8 @@ const GO_REST = read("../../../api/internal/httpapi/rest_events.go");
 const GO_ROUTES = read("../../../api/internal/httpapi/rest.go");
 const GO_SCOPE = read("../../../api/internal/httpapi/rest_scope.go");
 const GO_STORE = read("../../../api/internal/dbstore/event.go");
+const GO_HANDLERS = read("../../../api/internal/httpapi/rest_handlers.go");
+const GO_FORM_STORE = read("../../../api/internal/dbstore/form.go");
 
 const wsHelper = read("./workspace.ts");
 
@@ -538,4 +547,209 @@ test("every act.* dictionary key defines all five locales", () => {
   for (const k of ["act.title", "act.subtitle", "act.empty", "act.loadErr", "act.retention"]) {
     assert.ok(PAGE.includes(`t("${k}"`), `app/activity/page.tsx does not render ${k}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// THE EVENT CELL vs THE RECORDED VOCABULARY (card t_804040d3)
+//
+// The Activity table printed the machine token — `sale.paid`,
+// `workspace.renamed`, `admin.super_admin_action` — into the merchant's own
+// table. The label now comes from the dictionary (src/lib/activityEvents.ts's
+// EVENT_LABEL_KEYS), and the raw token stays on the cell as its `title`.
+//
+// The map is declared by hand, so it can fall behind the recorders exactly the
+// way the event-family filter did (t_07d8f4a4). Both directions are pinned here,
+// off the same recorder scan that already reads the families:
+//
+//   * a name the API records with no label  -> the merchant reads a raw token
+//   * a label for a name nothing records    -> dead weight, or a typo in the
+//                                              event name
+//
+// And because three names are built at the CALL SITE (`"form.status_"+status`,
+// `"form.bulk_"+action`, `"product.bulk_"+action`), their expansions are read
+// out of the Go source too — the status list through the `FormStatus*`
+// constants the store defines, the bulk actions from the switch that builds the
+// name. That is what stops a new bulk action shipping as a raw token.
+// ---------------------------------------------------------------------------
+
+/** Every literal event name a recorder call passes, plus the prefixes it builds. */
+function recordedEventNames(): { names: Set<string>; prefixes: Set<string> } {
+  const CALL =
+    /(?:\b(?:recordEvent|recordEventFor|recordAuthEvent|recordChatEvent|recordChatConfirmEvent|recordFeedbackEvent|recordMCPEvent|recordMCPMediaEvent)\(|Events\.Record\()/;
+  const names = new Set<string>();
+  const prefixes = new Set<string>();
+  for (const file of goSources(GO_INTERNAL)) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (/^func\s/.test(line) || !CALL.test(line)) continue;
+      for (const m of line.matchAll(/"([a-z][a-z_]*\.[a-z_.]*)"/g)) names.add(m[1]);
+      // `"form.status_"+in.Status` — the literal stops at the `_` that joins it.
+      for (const m of line.matchAll(/"([a-z][a-z_]*\.[a-z_]+_)"\s*\+/g)) prefixes.add(m[1]);
+    }
+  }
+  // A prefix is not a name; it is the head of a family built at the call site.
+  for (const p of prefixes) names.delete(p);
+  return { names, prefixes };
+}
+
+/** The Go source of the top-level function containing `marker`. */
+function goFunctionAround(src: string, marker: string, where: string): string {
+  const at = src.indexOf(marker);
+  assert.ok(at >= 0, `${where} no longer contains ${marker} — this guard's anchor moved`);
+  const start = src.lastIndexOf("\nfunc ", at);
+  const end = src.indexOf("\nfunc ", at);
+  assert.ok(start >= 0, `${marker} in ${where} is not inside a top-level Go function`);
+  return src.slice(start + 1, end < 0 ? undefined : end);
+}
+
+/** The `case` values of one `switch <head> {` block, resolving Go constants. */
+function goSwitchValues(body: string, head: string, consts: Map<string, string>): string[] {
+  const open = body.indexOf(`switch ${head} {`);
+  assert.ok(open >= 0, `no \`switch ${head} {\` in the function that records this event — the guard's anchor moved`);
+  // Brace-match from the switch's own `{`, so a nested block cannot end it early.
+  let depth = 0;
+  let i = open + `switch ${head} `.length;
+  const from = i + 1;
+  for (; i < body.length; i++) {
+    if (body[i] === "{") depth++;
+    else if (body[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  const block = body.slice(from, i);
+  const out: string[] = [];
+  for (const m of block.matchAll(/case\s+([^:]+):/g)) {
+    for (const raw of m[1].split(",")) {
+      const token = raw.trim();
+      const literal = token.match(/^"([^"]*)"$/);
+      if (literal) {
+        out.push(literal[1]);
+        continue;
+      }
+      // `dbstore.FormStatusDraft` — resolve through the store's constants.
+      const resolved = consts.get(token.replace(/^dbstore\./, ""));
+      assert.ok(resolved, `the switch on \`${head}\` names ${token}, which is not a \`X = "…"\` constant this guard can read`);
+      out.push(resolved!);
+    }
+  }
+  assert.ok(out.length > 0, `the switch on \`${head}\` has no case values — the guard is reading nothing`);
+  return out;
+}
+
+/** The form statuses the store defines (`FormStatusDraft = "draft"`, …). */
+function goFormStatuses(): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const m of GO_FORM_STORE.matchAll(/\b(FormStatus[A-Za-z]+)\s*=\s*"([^"]*)"/g)) values.set(m[1], m[2]);
+  assert.ok(
+    values.size >= 4,
+    `could not read the FormStatus* constants in api/internal/dbstore/form.go (found ${values.size})`,
+  );
+  return values;
+}
+
+test("the event cell renders a dictionary label, and keeps the machine name as its tooltip", () => {
+  assert.ok(
+    PAGE.includes('import { eventLabelKey } from "../../lib/activityEvents"'),
+    "app/activity/page.tsx no longer imports eventLabelKey — the cell would print the raw event name again",
+  );
+  assert.match(
+    PAGE,
+    /const labelKey = eventLabelKey\(e\.event_name\);/,
+    "the row no longer resolves a label key from the event name",
+  );
+  assert.match(
+    PAGE,
+    /\{labelKey \? t\(labelKey\) : e\.event_name\}/,
+    "the cell does not render the dictionary label (the raw token is only a fallback)",
+  );
+  assert.ok(
+    PAGE.includes("title={e.event_name}"),
+    "the raw event name is not the cell's title — an operator can no longer see the code the API answers in",
+  );
+});
+
+test("EVERY event the API records has a label — in all five locales — and no label is dead", () => {
+  const { names, prefixes } = recordedEventNames();
+
+  // Non-vacuity: if the scan stops seeing the recorders this fails instead of
+  // comparing an empty set against an empty map.
+  assert.ok(
+    names.size >= 40,
+    `the recorder scan found ${names.size} event names (${[...names].join(", ")}) — it is no longer reading the writers`,
+  );
+  for (const must of ["sale.captured", "workspace.deleted", "form.created", "mcp.tool_call", "auth.login"]) {
+    assert.ok(names.has(must), `the recorder scan no longer sees ${must} — this guard would pass on anything`);
+  }
+
+  // The three names built at the call site, expanded from the Go source.
+  assert.ok(prefixes.has("form.status_"), '`"form.status_"+in.Status` is no longer how a status change is recorded');
+  assert.ok(prefixes.has("form.bulk_"), '`"form.bulk_"+in.Action` is no longer how a bulk form action is recorded');
+  assert.ok(
+    prefixes.has("product.bulk_"),
+    '`"product.bulk_"+in.Action` is no longer how a bulk product action is recorded',
+  );
+
+  const statusConsts = goFormStatuses();
+  const statusBody = goFunctionAround(GO_HANDLERS, '"form.status_"', "rest_handlers.go");
+  const formBulkBody = goFunctionAround(GO_HANDLERS, '"form.bulk_"', "rest_handlers.go");
+  const productBulkBody = goFunctionAround(GO_HANDLERS, '"product.bulk_"', "rest_handlers.go");
+  const productBulkAction = productBulkBody.match(/in\.Action\s*!=\s*"([a-z_]+)"/);
+  assert.ok(
+    productBulkAction,
+    'the product bulk handler no longer guards `in.Action != "…"` — the only action it accepts cannot be read',
+  );
+
+  const required = new Set<string>(names);
+  for (const s of goSwitchValues(statusBody, "in.Status", statusConsts)) required.add(`form.status_${s}`);
+  for (const a of goSwitchValues(formBulkBody, "in.Action", statusConsts)) required.add(`form.bulk_${a}`);
+  required.add(`product.bulk_${productBulkAction![1]}`);
+
+  // Direction 1 — THE DEFECT: a recorded event with no label is a raw token in
+  // the merchant's table, in every locale.
+  const unlabelled = [...required].filter((n) => !(n in EVENT_LABEL_KEYS)).sort();
+  assert.deepEqual(
+    unlabelled,
+    [],
+    `the API records ${unlabelled.join(", ")} but src/lib/activityEvents.ts has no label for it — ` +
+      "the Activity table would print the raw event name to the merchant (card t_804040d3)",
+  );
+
+  // Direction 2 — the other way round: a label for a name nothing records is
+  // dead weight or a typo, and either way the row it was meant for falls back
+  // to its raw token.
+  const invented = Object.keys(EVENT_LABEL_KEYS)
+    .filter((n) => !required.has(n))
+    .sort();
+  assert.deepEqual(
+    invented,
+    [],
+    `src/lib/activityEvents.ts labels ${invented.join(", ")}, which no recorder writes — a rename or a typo`,
+  );
+
+  // Each key exists in the dictionary with all five locales. A key that names a
+  // real event but is absent from i18nDict renders the KEY itself (`t()`'s
+  // fallback), which is worse than the token it replaced.
+  const missing: string[] = [];
+  for (const [name, key] of Object.entries(EVENT_LABEL_KEYS)) {
+    const entry = (DICT as Record<string, Record<string, unknown>>)[key];
+    if (!entry) {
+      missing.push(`${name} -> ${key} (no such dictionary key)`);
+      continue;
+    }
+    for (const lang of LANGS) {
+      const v = entry[lang];
+      if (typeof v !== "string" || v.trim() === "") missing.push(`${name} -> ${key}.${lang}`);
+    }
+  }
+  assert.deepEqual(missing, [], `event labels with no usable translation:\n  ${missing.join("\n  ")}`);
+
+  // A label that IS the event name is the defect wearing a dictionary entry:
+  // `sale.paid` must not ship as the English "translation" of `sale.paid`.
+  const echoed = Object.entries(EVENT_LABEL_KEYS)
+    .filter(([name, key]) => {
+      const en = (DICT as Record<string, Record<string, unknown>>)[key]?.en;
+      return typeof en === "string" && en.includes(name);
+    })
+    .map(([name]) => name);
+  assert.deepEqual(echoed, [], `these labels still carry the machine name in English: ${echoed.join(", ")}`);
 });

@@ -26,18 +26,13 @@ import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist
 import { legalLinkWarningLines, type LegalLinkField, type LegalLinkStatusMap } from "../../lib/legalLinkWarning";
 import { cnameTarget, workspaceAddressLabel } from "../../lib/deployment";
 import { useDeployment } from "../../components/useDeployment";
+// Card t_8f38dc34: the CHIP test/live mode is the merchant's choice. CHIP keys
+// are opaque bearer tokens with no published prefix, so the page no longer
+// reads one out of the secret; the options and the default live here.
+import { CHIP_MODE_OPTIONS, chipModeFromStored, chipModeLabelKey, type ChipMode } from "../../lib/chipMode";
 
 type ChipStatus = { configured: boolean; verified?: boolean; mode?: string; secret_key_masked?: string };
 
-// Issue #326: CHIP mode is NOT user-set — it is auto-derived from the secret
-// key prefix (sk_live_ → live, sk_test_ → test, else test). One API endpoint;
-// test-vs-live is decided by which secret the merchant pastes.
-function detectMode(secret: string): "live" | "test" {
-  const s = (secret || "").toLowerCase();
-  if (s.startsWith("sk_live")) return "live";
-  if (s.startsWith("sk_test")) return "test";
-  return "test";
-}
 type KeyRow = { id: string; name: string; scopes: string[] };
 // Issue #444: affiliate marketing.
 type AffiliateRow = { id: string; code: string; name: string; email: string; commission_pct: number; referral_url: string };
@@ -204,6 +199,12 @@ export default function Settings() {
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [secretMasked, setSecretMasked] = useState("");
+  // Card t_8f38dc34: which mode the merchant created this key in. It is a
+  // CONTROL now, defaulting to Test, because CHIP keys carry no prefix the page
+  // can read. `touched` stops a background reload from overwriting a choice the
+  // merchant has made but not saved yet.
+  const [chipMode, setChipMode] = useState<ChipMode>("test");
+  const chipModeTouched = useRef(false);
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
   // The page's two message states. `msg` holds the banner/toast text and `msgOk`
@@ -473,6 +474,9 @@ export default function Settings() {
         // Issue #325: "verified" is TRUE only after a live CHIP API check
         // passed at save time — never merely because credentials are stored.
         setVerified(!!s.verified);
+        // Card t_8f38dc34: the control reflects what is stored. A merchant
+        // mid-edit keeps their pick until they save it.
+        if (!chipModeTouched.current) setChipMode(chipModeFromStored(s.mode));
       }
       setKeys(Array.isArray(k) ? k : []);
     };
@@ -922,8 +926,11 @@ export default function Settings() {
       body: JSON.stringify({
         brand_id: brandId,
         secret_key: secretKey,
-        // Issue #326: no mode field — the backend auto-derives live/test from
-        // the secret key prefix (sk_live_ / sk_test_).
+        // Card t_8f38dc34: the mode the merchant chose. It used to be omitted
+        // ("Issue #326: no mode field") because the API guessed it from the
+        // key's prefix — a prefix CHIP keys do not have, which is why every
+        // workspace was stored as test.
+        mode: chipMode,
         email_fallback: emailFallback,
         payment_method_whitelist: whitelist,
       }),
@@ -948,6 +955,10 @@ export default function Settings() {
         verified: d.verified === true,
         mode: typeof d.mode === "string" ? d.mode : prev?.mode,
       }));
+      // The server echoed the mode it stored, so the pick is no longer an
+      // unsaved edit: a later load (workspace switch) may apply server truth
+      // again. Card t_8f38dc34.
+      chipModeTouched.current = false;
       // A save that reached the API but whose CHIP check could not be confirmed
       // is NOT a clean success. It is shown on the failure tone so the merchant
       // reads the caveat on the same chrome as its meaning (the sentence itself
@@ -982,6 +993,10 @@ export default function Settings() {
     setStatus((prev) => ({ ...(prev || { configured: false }), configured: false, verified: false, mode: "" }));
     setVerified(false);
     setSecretMasked("");
+    // Clearing resets the stored mode to test (ClearChipCredentials), so the
+    // control goes back to its default and stops holding an unsaved pick.
+    chipModeTouched.current = false;
+    setChipMode("test");
     reload();
   }
 
@@ -1681,7 +1696,7 @@ export default function Settings() {
                   onChange={(e) => setSecretKey(e.target.value)}
                   type="text"
                   className="jf-input mt-1 max-w-xl font-mono"
-                  placeholder={verified && secretMasked ? t("set.secretMaskedPlaceholder") : "sk_live_… / sk_test_…"}
+                  placeholder={verified && secretMasked ? t("set.secretMaskedPlaceholder") : t("set.secretKeyPh")}
                 />
                 {verified && secretMasked && (
                   <p className="mt-1 text-xs text-[var(--jf-muted)]">
@@ -1690,10 +1705,28 @@ export default function Settings() {
                 )}
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.mode")}</label>
-                <p className="mt-1 text-sm">
-                  {t("set.autoDetected", { mode: (secretKey ? detectMode(secretKey) : (status?.mode || "test")) === "live" ? t("set.live") : t("set.test") })}
-                </p>
+                {/* A mode group is not a form field a <label> can point at, so the
+                    caption is a span and the radiogroup carries the accessible
+                    name (card t_8f38dc34). */}
+                <span className="text-xs text-slate-500">{t("set.mode")}</span>
+                <div className="mt-1.5 flex flex-wrap gap-4" role="radiogroup" aria-label={t("set.mode")}>
+                  {CHIP_MODE_OPTIONS.map((m) => (
+                    <label key={m} className="flex items-center gap-1.5 text-sm text-slate-700">
+                      <input
+                        type="radio"
+                        name="chip-mode"
+                        value={m}
+                        data-testid={`chip-mode-${m}`}
+                        checked={chipMode === m}
+                        onChange={() => {
+                          chipModeTouched.current = true;
+                          setChipMode(m);
+                        }}
+                      />
+                      {t(chipModeLabelKey(m))}
+                    </label>
+                  ))}
+                </div>
                 <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("set.modeHint")}</p>
               </div>
 

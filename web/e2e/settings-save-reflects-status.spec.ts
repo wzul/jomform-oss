@@ -54,6 +54,9 @@ const NOT_SET = DICT["set.notSet"].en;
 const CLEAR = DICT["set.clear"].en;
 const ADD = DICT["set.add"].en;
 const SAVE = DICT["set.save"].en;
+// Card t_8f38dc34: the key field's placeholder no longer advertises a prefix
+// (`sk_live_… / sk_test_…`) CHIP keys do not carry; it is a dictionary value now.
+const SECRET_PH = DICT["set.secretKeyPh"].en;
 
 /** `set.activeMode` with its `{mode}` filled the way the page fills it. */
 const activeMode = (mode: string) => DICT["set.activeMode"].en.replace("{mode}", mode.toUpperCase());
@@ -136,6 +139,7 @@ async function stubSettingsAPI(page: Page): Promise<SettingsStub> {
       const body = (req.postDataJSON() || {}) as {
         brand_id?: string;
         secret_key?: string;
+        mode?: string;
         email_fallback?: string;
         payment_method_whitelist?: string[];
       };
@@ -143,7 +147,10 @@ async function stubSettingsAPI(page: Page): Promise<SettingsStub> {
       chip = {
         configured: true,
         verified: true,
-        mode: secret.startsWith("sk_live") ? "live" : "test",
+        // Card t_8f38dc34: the API stores the mode the caller chose; it does not
+        // read one out of the key (CHIP keys have no prefix). The stub mirrors
+        // that contract, so this spec cannot pass on a guess the server dropped.
+        mode: body.mode === "live" ? "live" : "test",
         brand_id: body.brand_id || "",
         whitelist: body.payment_method_whitelist || [],
         email_fallback: body.email_fallback || "",
@@ -197,7 +204,7 @@ test("Saving CHIP credentials flips the status badge without a page reload", asy
   await expect(badge(page)).toHaveText(NOT_SET);
 
   await page.getByPlaceholder("e.g. 5f2b…-uuid").fill("brand-123");
-  await page.getByPlaceholder("sk_live_… / sk_test_…").fill("sk_test_abcdefgh1234");
+  await page.getByPlaceholder(SECRET_PH).fill("sk_test_abcdefgh1234");
   await page.getByRole("button", { name: SAVE }).click();
 
   // THE ASSERTION THAT BITES: the badge, read from the live DOM, with no reload.
@@ -215,7 +222,7 @@ test("Disconnecting CHIP credentials clears the badge without a page reload", as
   await page.goto("/settings?tab=chip");
 
   await page.getByPlaceholder("e.g. 5f2b…-uuid").fill("brand-123");
-  await page.getByPlaceholder("sk_live_… / sk_test_…").fill("sk_test_abcdefgh1234");
+  await page.getByPlaceholder(SECRET_PH).fill("sk_test_abcdefgh1234");
   await page.getByRole("button", { name: SAVE }).click();
   await expect(badge(page)).toHaveText(activeMode("test"));
 

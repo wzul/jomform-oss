@@ -1,21 +1,22 @@
-import type { ReactNode } from "react";
-
 // One showcase card — the shell only.
 //
-// WHY THE SETUP LIST IS A CHILD, NOT A PROP (card t_09f60795)
-//   `src/lib/landingUseCases.test.ts` reads `app/landing/page.tsx`'s SOURCE and
-//   pins, per showcase: the `land.setup` heading (exactly seven times), one
-//   `<ol className="mt-3 list-decimal …">` (exactly seven), the steps in order,
-//   and the guide link INSIDE the card's own slice of the file. Moving the list
-//   into this component would move those strings out of the file the guard
-//   reads and the whole suite would go red for a refactor that changes
-//   nothing a reader sees. So the page keeps the copy it is accountable for and
-//   this component owns the frame around it.
+// NO SETUP LIST, ONE GUIDE LINK (card t_b4e5881d, reversing t_41666fb1)
+//   Each card used to carry a nested box under its actions: a "How to set it up" heading,
+//   a five-item ordered list and a guide link. Wan's call on a phone screenshot of the RSVP
+//   card — "benda yang terlalu technical tak sesuai ada kat landing page" — so the steps
+//   are off the landing page and the guide keeps them. What is left on the card is ONE
+//   plain line under the tick bullets, pointing at the showcase's own /docs/guides page:
+//   the landing says what the product does, the guide says how.
 //
-// The frame is the reusable half a design system can absorb (card t_f2e231d3):
-// icon tile, title, body, a check list, a primary/secondary action row, and a
-// slot. Every colour is a `--jf-*` token and every space is a Tailwind step —
-// no hex, no `[Npx]`.
+// WHY THE LINK IS A PROP AND NOT A CHILD (it was a child before this card)
+//   `src/lib/landingUseCases.test.ts` reads `app/landing/page.tsx`'s SOURCE and pins, per
+//   showcase: its title/body/bullets/cta, and that its guide link sits inside its own
+//   slice of the page. Keeping the link a prop written in the page is what lets one
+//   source-level guard see all seven cards without opening JSX.
+//
+// The frame is the reusable half a design system can absorb (card t_f2e231d3): icon tile,
+// title, body, a check list, a guide line, a primary/secondary action row. Every colour is
+// a `--jf-*` token and every space is a Tailwind step — no hex, no `[Npx]`.
 export type ShowcaseCardProps = {
   /** Emoji glyph for the card's icon tile. */
   icon: string;
@@ -26,8 +27,13 @@ export type ShowcaseCardProps = {
   cta: { href: string; label: string };
   /** The optional second action (both are real routes, never a placeholder). */
   secondary?: { href: string; label: string };
-  /** The "How to set it up" block, supplied by the page. */
-  children: ReactNode;
+  /**
+   * The showcase's screenshot guide — one plain line under the tick bullets.
+   * Optional in type only: `landingUseCases.test.ts` fails when a showcase on the landing
+   * page has no guide line, because deleting the step list must never cut the reader's
+   * route to the steps.
+   */
+  guide?: { href: string; label: string };
 };
 
 export default function ShowcaseCard({
@@ -37,7 +43,7 @@ export default function ShowcaseCard({
   bullets,
   cta,
   secondary,
-  children,
+  guide,
 }: ShowcaseCardProps) {
   return (
     <article className="flex flex-col rounded-2xl border border-[var(--jf-border)] bg-[var(--jf-surface)] p-5">
@@ -60,6 +66,16 @@ export default function ShowcaseCard({
           </li>
         ))}
       </ul>
+      {guide ? (
+        <p className="mt-3 text-xs">
+          <a
+            href={guide.href}
+            className="font-medium text-[var(--jf-primary-strong)] underline decoration-dotted underline-offset-2 hover:opacity-90"
+          >
+            {guide.label}
+          </a>
+        </p>
+      ) : null}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <a
           href={cta.href}
@@ -76,7 +92,6 @@ export default function ShowcaseCard({
           </a>
         ) : null}
       </div>
-      {children}
     </article>
   );
 }

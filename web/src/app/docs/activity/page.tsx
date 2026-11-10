@@ -49,12 +49,13 @@ const SECTIONS: Section[] = [
     title: "Reading and filtering it",
     icon: "🔎",
     body: [
-      "The table has three columns: the **event name**, the event's own detail, and when it happened.",
+      "The table has three columns: **what happened**, the event's own detail, and when it happened.",
+      "The first column is worded for people — “Workspace deleted” — and the raw event name (`workspace.deleted`) is the row's tooltip, as REST and MCP use it.",
       "The detail is the small JSON payload the action recorded: a form id and slug, a ref code and amount, or a key name.",
       {
         list: [
           "Times use your profile's timezone (Profile → Identity), or the browser's own zone when that is set to Auto.",
-          "The From box starts at 00:00 and the To box runs to 23:59 of the day you picked. Both ends are inclusive.",
+          "From and To are one range — From 00:00, To 23:59, both inclusive — and on a narrow screen the pair shares one line.",
         ],
       },
       {

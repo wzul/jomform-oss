@@ -15,6 +15,25 @@
 export const LANGS = ["en", "ms", "zh", "ta", "ar"] as const;
 export type Lang = (typeof LANGS)[number];
 
+/**
+ * The payment methods the landing hero's demo order form shows under its Pay button
+ * (card t_b4e5881d).
+ *
+ * These are BRAND / SCHEME NAMES, not translated UI chrome: "FPX" is FPX and "DuitNow QR"
+ * is DuitNow QR in every locale, so they deliberately are NOT five-locale DICT entries —
+ * an entry per locale would invite a translator to "fix" a brand name. What the dictionary
+ * DOES own is the claim that these methods are accepted — `land.path2b` and `land.f2`,
+ * which are prose and are translated.
+ *
+ * The list lives here rather than in HeroOrderForm.tsx so that no landing component writes
+ * a method name into its own source. The pre-fix hero wrote them down twice — a caption
+ * ("Card · FPX · DuitNow QR · GrabPay") and a chip strip below it — and the two copies
+ * disagreed ("Card" vs "VISA", four names vs five, different order). One list, read once,
+ * is the fix; src/lib/landingPayMethods.test.ts fails if a landing component reintroduces
+ * a literal.
+ */
+export const LANDING_PAY_METHODS = ["FPX", "DuitNow QR", "VISA", "GrabPay", "Boost"] as const;
+
 // The custom-domain CNAME target USED to be a constant here (issue #323). It is
 // a deployment fact now — `custom.jomform.com` is the hosted product's target,
 // and a self-hosted install points the domain at its own host (card
@@ -351,7 +370,11 @@ export const DICT = {
   "prod.subscription": { en: "Subscription", ms: "Langganan", zh: "订阅", ta: "சந்தா", ar: "اشتراك" },
   "prod.monthly": { en: "Monthly", ms: "Bulanan", zh: "每月", ta: "மாதந்தோறும்", ar: "شهرياً" },
   "prod.yearly": { en: "Yearly", ms: "Tahunan", zh: "每年", ta: "ஆண்டுதோறும்", ar: "سنوياً" },
-  "prod.empty": { en: "No products yet. Add your first above.", ms: "Belum ada produk — tambah yang pertama di atas.", zh: "还没有商品。", ta: "இன்னும் தயாரிப்புகள் இல்லை.", ar: "لا توجد منتجات بعد." },
+  "prod.empty": { en: "No products yet. Use “New product” above to add your first.", ms: "Belum ada produk — guna “Produk baharu” di atas untuk tambah yang pertama.", zh: "还没有商品。用上方的“新建商品”添加第一个。", ta: "இன்னும் தயாரிப்புகள் இல்லை. மேலே உள்ள “புதிய தயாரிப்பு” மூலம் முதல் ஒன்றைச் சேர்க்கவும்.", ar: "لا توجد منتجات بعد. استخدم “منتج جديد” في الأعلى لإضافة أول منتج." },
+  // Card t_bb0d0bee: the quick-create panel's route to the full editor. The
+  // panel is the ONE creation entry point; /products/new is its secondary path
+  // (variations, images, payment link) and must stay reachable (card t_7eb3b623).
+  "prod.fullEditor": { en: "More options: variations, images", ms: "Pilihan lanjutan: variasi, imej", zh: "更多选项：变体、图片", ta: "மேலும் விருப்பங்கள்: மாறுபாடுகள், படங்கள்", ar: "خيارات إضافية: الأشكال والصور" },
   "prod.stock": { en: "Stock (blank = ∞)", ms: "Stok (kosong = ∞)", zh: "库存（留空 = ∞）", ta: "சரக்கு (காலியாக = ∞)", ar: "المخزون (فارغ = ∞)" },
   "prod.inStock": { en: "{n} in stock", ms: "{n} dalam stok", zh: "库存 {n}", ta: "சரக்கில் {n}", ar: "{n} في المخزون" },
   "prod.soldOut": { en: "SOLD OUT", ms: "HABIS", zh: "售罄", ta: "விற்றுத் தீர்ந்தது", ar: "نفدت الكمية" },
@@ -533,6 +556,9 @@ export const DICT = {
   "tpl.title": { en: "Explore form templates", ms: "Terokai template borang", zh: "浏览表单模板", ta: "படிவ வார்ப்புருக்களை ஆராயுங்கள்", ar: "استكشف قوالب النماذج" },
   "tpl.subtitle": { en: "Start from a template or a blank form.", ms: "Mula dari template atau borang kosong.", zh: "从模板或空白表单开始。", ta: "வார்ப்புரு அல்லது வெற்று படிவத்திலிருந்து தொடங்குங்கள்.", ar: "ابدأ من قالب أو نموذج فارغ." },
   "tpl.blank": { en: "Blank form", ms: "Borang kosong", zh: "空白表单", ta: "வெற்று படிவம்", ar: "نموذج فارغ" },
+  // Card t_bb0d0bee: the blank card's own call to action — it had none while
+  // every template card had "Use template".
+  "tpl.blankCta": { en: "Start blank", ms: "Mula kosong", zh: "从空白开始", ta: "வெற்றிலிருந்து தொடங்கு", ar: "ابدأ فارغاً" },
   "tpl.blankHint": { en: "Start from scratch", ms: "Mula dari kosong", zh: "从零开始", ta: "புதிதாகத் தொடங்கு", ar: "ابدأ من الصفر" },
   "tpl.use": { en: "Use template", ms: "Guna template", zh: "使用模板", ta: "வார்ப்புருவைப் பயன்படுத்து", ar: "استخدم القالب" },
   "tpl.using": { en: "Creating…", ms: "Mencipta…", zh: "创建中…", ta: "உருவாக்குகிறது…", ar: "جارٍ الإنشاء…" },
@@ -622,11 +648,14 @@ export const DICT = {
   "set.secretMaskedPlaceholder": { en: "•••••• (masked; leave blank to keep)", ms: "•••••• (disamarkan — biarkan kosong untuk kekal)", zh: "••••••（已掩码 — 留空以保留）", ta: "•••••• (மறைக்கப்பட்டது — வைக்க காலியாக விடவும்)", ar: "•••••• (مخفي — اتركه فارغاً للإبقاء عليه)" },
   "set.secretKey": { en: "Secret Key", ms: "Kunci Rahsia", zh: "密钥", ta: "ரகசிய விசை", ar: "المفتاح السري" },
   "set.apiVerified": { en: "✓ API credentials verified", ms: "✓ Kredensial API disahkan", zh: "✓ API 凭证已验证", ta: "✓ API சான்றுகள் சரிபார்க்கப்பட்டன", ar: "✓ تم التحقق من بيانات API" },
-  "set.mode": { en: "Mode (auto-detected)", ms: "Mod (auto-dikesan)", zh: "模式（自动检测）", ta: "முறை (தானாகக் கண்டறியப்பட்டது)", ar: "الوضع (مكتشف تلقائياً)" },
+  "set.mode": { en: "Mode", ms: "Mod", zh: "模式", ta: "முறை", ar: "الوضع" },
   "set.live": { en: "Live", ms: "Live", zh: "生产", ta: "லைவ்", ar: "مباشر" },
   "set.test": { en: "Test", ms: "Ujian", zh: "测试", ta: "சோதனை", ar: "اختبار" },
-  "set.autoDetected": { en: "Auto-detected: {mode}", ms: "Auto-dikesan: {mode}", zh: "自动检测：{mode}", ta: "தானாகக் கண்டறியப்பட்டது: {mode}", ar: "مكتشف تلقائياً: {mode}" },
-  "set.modeHint": { en: "Mode follows the secret key you paste: sk_live_ means Live, sk_test_ means Test.", ms: "Mod mengikut kunci rahsia yang anda tampal — sk_live_ = Live, sk_test_ = Ujian.", zh: "模式取决于您粘贴的密钥 — sk_live_ = 生产，sk_test_ = 测试。", ta: "முறை நீங்கள் ஒட்டும் ரகசிய விசையைப் பின்தொடர்கிறது — sk_live_ = லைவ், sk_test_ = சோதனை.", ar: "يتبع الوضع المفتاح السري الذي تلصقه — sk_live_ = مباشر، sk_test_ = اختبار." },
+  // Card t_8f38dc34: CHIP keys are opaque tokens with no prefix (CHIP issues a
+  // separate key per mode in the portal), so the mode is a control, and the
+  // hint says what a wrong choice does instead of pretending one can be read.
+  "set.modeHint": { en: "Pick the mode you created this key in, in the CHIP portal. A test key never charges a real card. If this label does not match the key, the badge is wrong but payments still follow the key.", ms: "Pilih mod anda cipta kunci ini, di portal CHIP. Kunci ujian tidak sekali-kali mengecaj kad sebenar. Jika label ini tidak sepadan dengan kunci, lencana itu salah tetapi pembayaran tetap mengikut kunci.", zh: "请选择您在 CHIP 门户创建此密钥时所用的模式。测试密钥绝不会向真实银行卡收费。如果此标签与密钥不符，徽章会显示错误，但付款仍以密钥为准。", ta: "இந்த விசையை நீங்கள் உருவாக்கிய முறையை CHIP தளத்தில் தேர்ந்தெடுக்கவும். சோதனை விசை உண்மையான அட்டையிலிருந்து ஒருபோதும் வசூலிக்காது. இந்த லேபிள் விசையுடன் பொருந்தவில்லை என்றால் பேட்ஜ் தவறாகும், ஆனால் பணம் செலுத்துதல் விசையையே பின்பற்றும்.", ar: "اختر الوضع الذي أنشأت به هذا المفتاح في بوابة CHIP. مفتاح الاختبار لا يسحب أبداً من بطاقة حقيقية. إذا لم يطابق هذا التصنيف المفتاح، فستكون الشارة خاطئة لكن المدفوعات تتبع المفتاح." },
+  "set.secretKeyPh": { en: "Paste the Secret Key", ms: "Tampal Kunci Rahsia", zh: "粘贴密钥", ta: "ரகசிய விசையை ஒட்டவும்", ar: "الصق المفتاح السري" },
   "set.emailFallback": { en: "Email fallback", ms: "Emel sandaran", zh: "备用邮箱", ta: "மாற்று மின்னஞ்சல்", ar: "البريد الإلكتروني الاحتياطي" },
   "set.emailFallbackHint": { en: "(optional; used when buyer email is missing; one-time forms only)", ms: "(pilihan — digunakan bila emel pembeli tiada; borang one-time sahaja)", zh: "（可选 — 买家邮箱缺失时使用；仅一次性表单）", ta: "(விருப்பம் — வாங்குபவர் மின்னஞ்சல் இல்லாதபோது பயன்படும்; ஒரு முறை படிவங்களுக்கு மட்டும்)", ar: "(اختياري — يُستخدم عند غياب بريد المشتري؛ النماذج لمرة واحدة فقط)" },
   "set.paymentMethods": { en: "Payment methods", ms: "Kaedah bayaran", zh: "支付方式", ta: "பணம் செலுத்தும் முறைகள்", ar: "طرق الدفع" },
@@ -1977,7 +2006,7 @@ export const DICT = {
   "land.path3t": { en: "It keeps itself", ms: "Ia mengurus sendiri", zh: "自动维护", ta: "தானாகவே நடக்கும்", ar: "يدير نفسه" },
   "land.path3b": { en: "Sales update themselves and every receipt goes out on its own.", ms: "Status jualan naik sendiri dan setiap resit dihantar automatik.", zh: "销售状态自动更新，每张收据自动发出。", ta: "விற்பனை நிலை தானாகப் புதுப்பிக்கும், ஒவ்வொரு ரசீதும் தானாக அனுப்பப்படும்.", ar: "تتحدث المبيعات تلقائياً ويُرسل كل إيصال من تلقاء نفسه." },
   "land.showcases": { en: "Built for the things people actually sell", ms: "Dibina untuk perkara yang orang benar-benar jual", zh: "为人们真正在卖的东西而造", ta: "மக்கள் உண்மையில் விற்பதற்காக உருவாக்கப்பட்டது", ar: "مبني لما يبيعه الناس فعلاً" },
-  "land.showcasessub": { en: "Seven setups, each with the exact clicks, and a screenshot guide for every one.", ms: "Tujuh persediaan, setiap satu dengan langkah sebenar — dan panduan bergambar untuk semuanya.", zh: "七种场景，每一种都写明具体步骤 —— 每一个都有截图指南。", ta: "ஏழு அமைப்புகள், ஒவ்வொன்றுக்கும் சரியான படிகள் — ஒவ்வொன்றுக்கும் பட வழிகாட்டி.", ar: "سبعة إعدادات، كل منها بخطواته الفعلية — ودليل بالصور لكل واحد." },
+  "land.showcasessub": { en: "Seven setups, each with a screenshot guide that walks the exact clicks.", ms: "Tujuh persediaan, setiap satu dengan panduan bergambar yang menunjukkan langkah sebenar.", zh: "七种场景，每一种都配有截图指南，写明具体步骤。", ta: "ஏழு அமைப்புகள், ஒவ்வொன்றுக்கும் சரியான படிகளைக் காட்டும் பட வழிகாட்டி.", ar: "سبعة إعدادات، ولكل منها دليل بالصور يوضح الخطوات الفعلية." },
   "land.term1": { en: "you › how many sales today?", ms: "anda › berapa jualan hari ini?", zh: "你 › 今天有多少笔销售？", ta: "நீங்கள் › இன்று எத்தனை விற்பனை?", ar: "أنت › كم عدد المبيعات اليوم؟" },
   "land.term2": { en: "agent › 14 paid · RM2,410.00 · 2 pending", ms: "agen › 14 dibayar · RM2,410.00 · 2 menunggu", zh: "代理 › 14 笔已付款 · RM2,410.00 · 2 笔待处理", ta: "முகவர் › 14 செலுத்தப்பட்டது · RM2,410.00 · 2 நிலுவையில்", ar: "الوكيل › 14 مدفوعة · RM2,410.00 · 2 معلّقة" },
   "land.term3": { en: "you › refund sale JF-3f9a2c", ms: "anda › pulangkan jualan JF-3f9a2c", zh: "你 › 退款销售 JF-3f9a2c", ta: "நீங்கள் › JF-3f9a2c விற்பனையைத் திருப்பிச் செலுத்து", ar: "أنت › استرد البيع JF-3f9a2c" },
@@ -2083,22 +2112,21 @@ export const DICT = {
   "land.membership3": { en: "Manage members and cancel a plan from the dashboard. Cancelling does not revoke the saved card.", ms: "Urus ahli dan batal pelan dari dashboard — pembatalan tidak membatalkan kad yang disimpan", zh: "在仪表板管理会员并取消方案——取消不会撤销已保存的卡", ta: "டாஷ்போர்டில் உறுப்பினர்களை நிர்வகித்து திட்டத்தை ரத்து செய்யலாம் — ரத்து செய்வது சேமிக்கப்பட்ட கார்டை ரத்து செய்யாது", ar: "إدارة الأعضاء وإلغاء الخطة من لوحة التحكم — الإلغاء لا يُبطل البطاقة المحفوظة" },
   "land.membership4": { en: "The same actions over MCP: list, retry or cancel a membership with your AI agent.", ms: "Perintah sama melalui MCP — senarai, cuba semula atau batal keahlian dengan agent AI anda", zh: "同一操作也可通过 MCP 完成——用 AI 代理列出、重试或取消会员", ta: "இதே செயல்கள் MCP வழியாக — உங்கள் AI முகவர் மூலம் உறுப்பினரைப் பட்டியலிடவோ மீண்டும் முயற்சிக்கவோ ரத்து செய்யவோ முடியும்", ar: "الأوامر نفسها عبر MCP — اعرض أو أعد المحاولة أو ألغِ عضوية بوكيل الذكاء الاصطناعي" },
   "land.membershipcta": { en: "Set up recurring fees →", ms: "Sediakan yuran berulang →", zh: "设置定期收费 →", ta: "தொடர் கட்டணங்களை அமைக்கவும் →", ar: "إعداد الرسوم المتكررة ←" },
-  // Card t_41666fb1 (Wan, 7 Nov): use-case showcase setup instructions —
-  // one "How to set it up" list per showcase, plus the "Collect donations"
-  // showcase. Every step names a control that exists in the shipped product:
-  // Products → Add product (prod.add), the template gallery (tpl-donation and
-  // friends, api/internal/db/migrations/000027_template_library.up.sql), the
-  // builder's Form mode + Pricing Fields → product, Form settings' QR code and
-  // Restaurant menu panels, Settings → Storefront / Affiliates, Subscriptions.
-  // Product types are ONLY one_time and subscription
-  // (000001_init.up.sql) — no entry here may promise a free amount.
+  // Card t_41666fb1 (Wan, 7 Nov) added one "How to set it up" list per showcase here.
+  // Card t_b4e5881d (Wan, on a phone screenshot of the RSVP card — "benda yang terlalu
+  // technical tak sesuai ada kat landing page") REMOVED those lists from the landing page,
+  // so `land.setup` and every `land.<usecase>step1..N` entry is gone from this dictionary:
+  // the steps were never the landing page's job, and docs/guides/<slug>/README.md — rendered
+  // at /docs/guides/<slug> — carries the real step-by-step with a screenshot per step.
+  // src/lib/landingUseCases.test.ts now fails if a setup list comes back to the landing, and
+  // it also fails if a linked guide STOPS having numbered steps, so deleting the copy here
+  // cannot quietly delete the instructions from the product.
   // Card t_7b9f6d18: /docs/guides/<slug> renders every guide; card t_d6a44ec9 linked
   // the six remaining showcase cards at theirs too (wedding-rsvp, qr-table-ordering,
   // tuition-class, design-with-mcp, affiliate-programme, club-membership). Each label
   // names its own guide, so a screen reader's link list does not repeat one string
   // seven times. land.guidesoon is kept in the dictionary for any future showcase
   // without a guide — the landing page no longer renders it.
-  "land.setup": { en: "How to set it up", ms: "Cara menyediakannya", zh: "如何设置", ta: "எப்படி அமைப்பது", ar: "كيف تُعِدّه" },
   "land.guidesoon": { en: "Full step-by-step guide with screenshots. Coming soon.", ms: "Panduan penuh langkah demi langkah dengan gambar — akan datang.", zh: "完整图文分步指南 —— 即将推出。", ta: "படங்களுடன் கூடிய முழு படிப்படியான வழிகாட்டி — விரைவில்.", ar: "دليل كامل خطوة بخطوة بالصور — قريباً." },
   "land.guidedonation": { en: "Read the full step-by-step guide with screenshots →", ms: "Baca panduan penuh langkah demi langkah dengan gambar →", zh: "阅读完整的图文分步指南 →", ta: "படங்களுடன் கூடிய முழு படிப்படியான வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ الدليل الكامل خطوة بخطوة بالصور ←" },
   "land.guidewedding": { en: "Read the full wedding + RSVP guide with screenshots →", ms: "Baca panduan penuh perkahwinan + RSVP dengan gambar →", zh: "阅读完整的婚礼 + RSVP 图文分步指南 →", ta: "படங்களுடன் கூடிய முழு திருமண + RSVP வழிகாட்டியைப் படிக்கவும் →", ar: "اقرأ دليل الزفاف + RSVP الكامل بالصور ←" },
@@ -2115,44 +2143,18 @@ export const DICT = {
   "land.donation4": { en: "Every donor and amount under Sales", ms: "Setiap penderma dan jumlah di Jualan", zh: "每位捐款人与金额都在销售中", ta: "ஒவ்வொரு நன்கொடையாளரும் தொகையும் விற்பனையில்", ar: "كل متبرع ومبلغه في المبيعات" },
   "land.donationcta": { en: "Set up a donation form →", ms: "Sediakan borang derma →", zh: "设置捐款表单 →", ta: "நன்கொடைப் படிவத்தை அமைக்கவும் →", ar: "أعدّ نموذج تبرع ←" },
   "land.donationmcp": { en: "Build it with your AI agent", ms: "Bina dengan agent AI anda", zh: "用 AI 代理创建", ta: "உங்கள் AI முகவருடன் உருவாக்கவும்", ar: "أنشئه مع وكيل الذكاء الاصطناعي" },
-  "land.donationstep1": { en: "Create the donation product. Go to Products → Add product, name it (for example Donation) and set the type to Pay what you want (donation). Then set the minimum, maximum and suggested amount. The minimum cannot go below RM1.00.", ms: "Cipta produk derma — Produk → Tambah produk → namakan (contoh Donation), tetapkan jenis kepada Bayar ikut suka (derma), kemudian tetapkan jumlah minimum, maksimum dan cadangan. Minimum tidak boleh bawah RM1.00.", zh: "创建捐款商品 —— 商品 → 添加商品 → 命名（例如 Donation），类型选「随意支付（捐款）」，然后设定最低、最高和建议金额。最低金额不能低于 RM1.00。", ta: "நன்கொடைத் தயாரிப்பை உருவாக்கவும் — தயாரிப்புகள் → தயாரிப்பு சேர் → பெயரிடுங்கள் (எ.கா. Donation), வகையை விருப்பத் தொகை (நன்கொடை) என அமைத்து, குறைந்தபட்ச, அதிகப்பட்ச, பரிந்துரைக்கப்பட்ட தொகைகளை அமைக்கவும். குறைந்தபட்சம் RM1.00-க்குக் கீழ் செல்ல முடியாது.", ar: "أنشئ منتج التبرع — المنتجات → إضافة منتج → سمِّه (مثل Donation)، واضبط النوع على ادفع ما تشاء (تبرع)، ثم حدد الحد الأدنى والأقصى والمبلغ المقترح. لا يمكن أن يقل الحد الأدنى عن RM1.00." },
-  "land.donationstep2": { en: "Forms → New form → pick the Donation template from the gallery. It opens as a payment form with a product block, name, email and a message field.", ms: "Borang → Borang Baru → pilih templat Derma dari galeri. Ia terbuka sebagai borang bayaran dengan blok produk, nama, e-mel dan medan mesej.", zh: "表单 → 新表单 → 从模板库选择 Donation 模板。它打开时就是付费表单，带有商品区块、姓名、电邮和留言字段。", ta: "படிவங்கள் → புதிய படிவம் → காட்சியகத்தில் Donation வார்ப்புருவைத் தேர்ந்தெடுக்கவும். அது தயாரிப்புத் தொகுதி, பெயர், மின்னஞ்சல், செய்திப் புலத்துடன் கட்டணப் படிவமாகத் திறக்கும்.", ar: "النماذج → نموذج جديد → اختر قالب Donation من المعرض. يُفتح كنموذج دفع فيه كتلة منتج وحقول الاسم والبريد والرسالة." },
-  "land.donationstep3": { en: "In the builder, select the product block and choose that donation product under Product. The form then shows an amount field the donor fills in, and the server checks the typed amount against your limits before it prices the sale. Prefer fixed options? Add one one-time product per amount (RM10.00, RM50.00, RM100.00), a product block for each, and a Total block.", ms: "Dalam pembina pilih blok produk dan tetapkan produk derma itu di bawah Produk — borang kemudian menunjukkan medan jumlah yang diisi penderma, dan server menyemak jumlah yang ditaip terhadap had anda sebelum menetapkan harga jualan. Lebih suka pilihan tetap? Tambah satu produk bayaran sekali bagi setiap jumlah (RM10, RM50, RM100), satu blok produk untuk setiap satu, dan satu blok Jumlah.", zh: "在构建器中选中商品区块，在「商品」下选择那个捐款商品 —— 表单会显示由捐款人填写的金额字段，服务器在定价前会按您设定的限制校验输入金额。偏好固定选项？那就每个金额各建一个一次性商品（RM10、RM50、RM100），每个配一个商品区块，再加一个合计区块。", ta: "பில்டரில் தயாரிப்புத் தொகுதியைத் தேர்ந்தெடுத்து அந்த நன்கொடைத் தயாரிப்பை Product புலத்தில் தேர்ந்தெடுக்கவும் — படிவம் நன்கொடையாளர் நிரப்பும் தொகைப் புலத்தைக் காட்டும், தட்டச்சு செய்த தொகையை உங்கள் வரம்புகளுக்கு எதிராகச் சேவையகம் சரிபார்த்த பின்னரே விற்பனைக்கு விலை நிர்ணயிக்கும். நிலையான விருப்பங்களா? ஒவ்வொரு தொகைக்கும் (RM10, RM50, RM100) ஒரு ஒரு-முறைத் தயாரிப்பையும், ஒவ்வொன்றுக்கும் ஒரு தயாரிப்புத் தொகுதியும், கூடுதலாக ஒரு மொத்தத் தொகுதியும் சேர்க்கவும்.", ar: "في المحرر اختر كتلة المنتج وحدد منتج التبرع ذاك في حقل المنتج — يعرض النموذج عندئذٍ حقل مبلغ يملؤه المتبرع، ويتحقق الخادم من المبلغ المكتوب وفق حدودك قبل تسعير البيع. تفضّل المبالغ الثابتة؟ أضف منتجاً بدفعة لمرة واحدة لكل مبلغ (RM10 وRM50 وRM100)، وكتلة منتج لكل منها، مع كتلة إجمالي." },
-  "land.donationstep4": { en: "Press Publish. The public link is on the Forms page and in Form settings. Share it, embed it (Form settings → allow embedding) or generate a QR there.", ms: "Tekan Publish. Pautan awam ada di halaman Borang dan di Tetapan Borang — kongsi, benamkan (Tetapan Borang → benarkan embed) atau jana kod QR di situ.", zh: "按 Publish 发布。公开链接在表单页和表单设置里 —— 可以分享、嵌入（表单设置 → 允许嵌入），或在其中生成二维码。", ta: "Publish என்பதை அழுத்தவும். பொது இணைப்பு படிவங்கள் பக்கத்திலும் படிவ அமைப்புகளிலும் உள்ளது — பகிருங்கள், உட்பொதிக்கவும் (படிவ அமைப்புகள் → embed அனுமதி) அல்லது அங்கேயே QR உருவாக்கவும்.", ar: "اضغط Publish. الرابط العام موجود في صفحة النماذج وفي إعدادات النموذج — شاركه أو ضمّنه (إعدادات النموذج → السماح بالتضمين) أو أنشئ رمز QR هناك." },
-  "land.donationstep5": { en: "Each paid donation appears under Sales with the donor's name, email and amount.", ms: "Setiap derma berbayar muncul di Jualan dengan nama, e-mel dan jumlah penderma.", zh: "每笔已付款捐款都会连同捐款人姓名、电邮和金额显示在销售中。", ta: "செலுத்தப்பட்ட ஒவ்வொரு நன்கொடையும் நன்கொடையாளரின் பெயர், மின்னஞ்சல், தொகையுடன் விற்பனையில் தோன்றும்.", ar: "يظهر كل تبرع مدفوع في المبيعات مع اسم المتبرع وبريده والمبلغ." },
-  "land.weddingstep1": { en: "Go to Forms → New form and start from a blank form. The gallery has no wedding template.", ms: "Borang → Borang Baru → mula dari borang kosong — galeri tiada templat perkahwinan.", zh: "表单 → 新表单 → 从空白表单开始 —— 模板库没有婚礼模板。", ta: "படிவங்கள் → புதிய படிவம் → காலிப் படிவத்திலிருந்து தொடங்கவும் — காட்சியகத்தில் திருமண வார்ப்புரு இல்லை.", ar: "النماذج → نموذج جديد → ابدأ من نموذج فارغ — لا يوجد قالب زفاف في المعرض." },
-  "land.weddingstep2": { en: "In the builder set Form mode → Response form: an RSVP collects answers, not money.", ms: "Dalam pembina tetapkan Mod borang → Borang respons: RSVP mengumpul jawapan, bukan wang.", zh: "在构建器中把“表单模式”设为“响应表单”：RSVP 收集的是答案，不是钱。", ta: "பில்டரில் படிவ முறை → பதில் படிவம் என அமைக்கவும்: RSVP பதில்களைச் சேகரிக்கிறது, பணத்தை அல்ல.", ar: "في المحرر اضبط وضع النموذج → نموذج ردود: RSVP يجمع إجابات لا أموالاً." },
-  "land.weddingstep3": { en: "Add the blocks you need from the palette: name, email, a select or radio for attending or not, guest count and message. Mark the ones that must be answered as required.", ms: "Tambah blok yang perlu dari palet — nama, e-mel, pilih atau radio untuk hadir atau tidak, bilangan tetamu, mesej — dan tandakan yang wajib dijawab sebagai required.", zh: "从面板添加需要的区块 —— 姓名、电邮、出席与否的下拉或单选、宾客人数、留言 —— 把必答的标记为必填。", ta: "தேவையான தொகுதிகளைச் சேர்க்கவும் — பெயர், மின்னஞ்சல், வருகை அல்லது வராததற்கான தேர்வு, விருந்தினர் எண்ணிக்கை, செய்தி — கட்டாயமானவற்றை required ஆக்கவும்.", ar: "أضف الكتل التي تحتاجها — الاسم، البريد، قائمة أو اختيار للحضور أو عدمه، عدد الضيوف، رسالة — واجعل الإلزامي منها مطلوباً." },
-  "land.weddingstep4": { en: "Set the theme colour in the builder and add a text block and image blocks for the couple's story and photos.", ms: "Tetapkan warna tema dalam pembina dan tambah blok teks serta blok imej untuk cerita dan foto pasangan.", zh: "在构建器中设置主题颜色，并添加文本区块和图片区块，放上两人的故事与照片。", ta: "பில்டரில் தீம் நிறத்தை அமைத்து, தம்பதியரின் கதைக்கும் புகைப்படங்களுக்கும் உரைத் தொகுதியும் படத் தொகுதிகளும் சேர்க்கவும்.", ar: "اضبط لون السمة في المحرر وأضف كتلة نص وكتل صور لقصة الزوجين وصورهما." },
-  "land.weddingstep5": { en: "Publish, then share the form's public link. Or put a full page in front of it: go to Settings → Storefront and enable the landing page (hero, subtitle, body, image, logo, CTA button to the form).", ms: "Terbitkan, kemudian kongsi pautan awam borang — atau letak halaman penuh di hadapannya: Tetapan → Kedai → aktifkan landing page (hero, sub-tajuk, badan, imej, logo, butang CTA ke borang).", zh: "发布后分享表单的公开链接 —— 或加上整页封面：设置 → 店铺 → 启用落地页（主标题、副标题、正文、图片、Logo、指向表单的 CTA 按钮）。", ta: "வெளியிட்டு படிவத்தின் பொது இணைப்பைப் பகிருங்கள் — அல்லது முழுப் பக்கமும் வேண்டுமானால்: அமைப்புகள் → கடை → லேண்டிங் பக்கத்தை இயக்கவும் (hero, துணைத் தலைப்பு, உரை, படம், லோகோ, படிவத்திற்கான CTA பொத்தான்).", ar: "انشر ثم شارك رابط النموذج العام — أو ضع صفحة كاملة أمامه: الإعدادات → المتجر → فعّل صفحة الهبوط (عنوان، عنوان فرعي، نص، صورة، شعار، زر CTA إلى النموذج)." },
-  "land.qrstep1": { en: "Create each dish as a product: go to Products → Add product and fill in name, price and photo.", ms: "Cipta setiap hidangan sebagai produk — Produk → Tambah produk (nama, harga, foto).", zh: "把每道菜建成商品 —— 商品 → 添加商品（名称、价格、照片）。", ta: "ஒவ்வொரு உணவையும் தயாரிப்பாக உருவாக்கவும் — தயாரிப்புகள் → தயாரிப்பு சேர் (பெயர், விலை, புகைப்படம்).", ar: "أنشئ كل طبق كمنتج — المنتجات → إضافة منتج (الاسم، السعر، صورة)." },
-  "land.qrstep2": { en: "Forms → New form → pick the F&B Order + Payment template, then add one product block per dish (Pricing Fields → product).", ms: "Borang → Borang Baru → pilih templat F&B Order + Payment, kemudian tambah satu blok produk bagi setiap hidangan (Medan Harga → produk).", zh: "表单 → 新表单 → 选择 F&B Order + Payment 模板，然后每道菜加一个商品区块（定价字段 → 商品）。", ta: "படிவங்கள் → புதிய படிவம் → F&B Order + Payment வார்ப்புருவைத் தேர்ந்தெடுத்து, ஒவ்வொரு உணவுக்கும் ஒரு தயாரிப்புத் தொகுதி சேர்க்கவும் (விலைப் புலங்கள் → தயாரிப்பு).", ar: "النماذج → نموذج جديد → اختر قالب F&B Order + Payment، ثم أضف كتلة منتج لكل طبق (حقول التسعير → منتج)." },
-  "land.qrstep3": { en: "In Form settings open Restaurant menu, enable it, group the dishes into categories and pick a best-seller. The form's own URL then serves the menu page.", ms: "Dalam Tetapan Borang buka Menu restoran, aktifkan, letakkan hidangan dalam kategori dan pilih best-seller. URL borang itu sendiri kemudian memaparkan halaman menu.", zh: "在表单设置里打开“餐厅菜单”，启用它，把菜品分到分类并选一个畅销品。表单自己的网址随后会显示菜单页。", ta: "படிவ அமைப்புகளில் உணவக மெனுவைத் திறந்து இயக்கவும், உணவுகளை வகைகளில் அடுக்கவும், ஒரு சிறந்த விற்பனைப் பொருளைத் தேர்ந்தெடுக்கவும். படிவத்தின் சொந்த URL பின் மெனு பக்கத்தைக் காட்டும்.", ar: "في إعدادات النموذج افتح قائمة المطعم وفعّلها، ورتّب الأطباق في فئات، واختر منتجاً الأكثر مبيعاً. يصبح رابط النموذج نفسه يعرض صفحة القائمة." },
-  "land.qrstep4": { en: "Publish, then in Form settings → QR code enter the table number, Generate, and download the PNG or open Print stand. The QR carries ?table=N.", ms: "Terbitkan, kemudian di Tetapan Borang → Kod QR masukkan nombor meja, Jana QR, dan muat turun PNG atau buka Cetak stand. Kod QR membawa ?table=N.", zh: "发布，然后在表单设置 → 二维码里输入桌号、生成二维码，下载 PNG 或打开“打印立牌”。二维码带着 ?table=N。", ta: "வெளியிட்டு, படிவ அமைப்புகள் → QR குறியீட்டில் மேசை எண்ணை உள்ளிட்டு, உருவாக்கி, PNG பதிவிறக்கவும் அல்லது அச்சு ஸ்டாண்டைத் திறக்கவும். QR ?table=N-ஐ எடுத்துச் செல்கிறது.", ar: "انشر، ثم في إعدادات النموذج → رمز QR أدخل رقم الطاولة، أنشئ الرمز، ونزّل PNG أو افتح طباعة الحامل. يحمل الرمز ?table=N." },
-  "land.qrstep5": { en: "Guests scan, order and pay online; the order lands under Sales with its table number.", ms: "Tetamu imbas, pesan dan bayar dalam talian; pesanan masuk ke Jualan bersama nombor meja.", zh: "顾客扫码、点餐并在线支付；订单连同桌号进入销售中。", ta: "விருந்தினர்கள் ஸ்கேன் செய்து ஆர்டர் செய்து ஆன்லைனில் செலுத்துகிறார்கள்; ஆர்டர் மேசை எண்ணுடன் விற்பனையில் வரும்.", ar: "يمسح الضيوف ويطلبون ويدفعون عبر الإنترنت؛ يصل الطلب إلى المبيعات مع رقم الطاولة." },
-  "land.tuitionstep1": { en: "Create the products under Products → Add product: a one-time Registration fee and, if you charge monthly, a class fee with type Subscription and billing period Month.", ms: "Cipta produk — Produk → Tambah produk: Yuran pendaftaran sekali, dan jika anda caj bulanan, yuran kelas dengan jenis Langganan dan Tempoh bil bulan.", zh: "创建商品 —— 商品 → 添加商品：一次性的报名费；若按月收费，再建一个类型为订阅、计费周期为月的课程费。", ta: "தயாரிப்புகளை உருவாக்கவும் — தயாரிப்புகள் → தயாரிப்பு சேர்: ஒருமுறை பதிவுக் கட்டணம்; மாதந்தோறும் வசூலித்தால் வகை சந்தா, பில் காலம் மாதம் என்ற வகுப்புக் கட்டணம்.", ar: "أنشئ المنتجات — المنتجات → إضافة منتج: رسم تسجيل لمرة واحدة، وإن كنت تحصّل شهرياً فرسم صف بنوع اشتراك وفترة فوترة شهر." },
-  "land.tuitionstep2": { en: "Forms → New form → pick the Tuition Class Registration template.", ms: "Borang → Borang Baru → pilih templat Tuition Class Registration.", zh: "表单 → 新表单 → 选择 Tuition Class Registration 模板。", ta: "படிவங்கள் → புதிய படிவம் → Tuition Class Registration வார்ப்புருவைத் தேர்ந்தெடுக்கவும்.", ar: "النماذج → نموذج جديد → اختر قالب Tuition Class Registration." },
-  "land.tuitionstep3": { en: "In the builder choose the registration fee in the product block (add a second product block for the monthly fee) and add date and time blocks for the session.", ms: "Dalam pembina pilih yuran pendaftaran pada blok produk (tambah blok produk kedua untuk yuran bulanan) dan tambah blok tarikh dan masa untuk sesi.", zh: "在构建器的商品区块里选报名费（月费再加一个商品区块），并添加日期和时间区块表示上课时段。", ta: "பில்டரில் தயாரிப்புத் தொகுதியில் பதிவுக் கட்டணத்தைத் தேர்ந்தெடுக்கவும் (மாதக் கட்டணத்திற்கு இரண்டாவது தொகுதி), வகுப்பு அமர்வுக்கு தேதி, நேரத் தொகுதிகளைச் சேர்க்கவும்.", ar: "في المحرر حدد رسم التسجيل في كتلة المنتج (أضف كتلة منتج ثانية للرسم الشهري) وأضف كتلتي تاريخ ووقت للحصة." },
-  "land.tuitionstep4": { en: "Publish and share the link. The registration fee is charged when the form is submitted.", ms: "Terbitkan dan kongsi pautan — yuran pendaftaran dicaj apabila borang dihantar.", zh: "发布并分享链接 —— 报名费在提交表单时扣款。", ta: "வெளியிட்டு இணைப்பைப் பகிருங்கள் — படிவம் சமர்ப்பிக்கப்படும்போது பதிவுக் கட்டணம் வசூலாகும்.", ar: "انشر وشارك الرابط — يُخصم رسم التسجيل عند إرسال النموذج." },
-  "land.tuitionstep5": { en: "A monthly fee charges the card saved at checkout every period; cancel or retry it under Subscriptions.", ms: "Yuran bulanan mencaj kad yang disimpan semasa checkout pada setiap tempoh; batal atau cuba semula di Langganan.", zh: "月费会在每个周期向结账时保存的卡扣款；在订阅中取消或重试。", ta: "மாதக் கட்டணம் checkout-இல் சேமித்த கார்டிலிருந்து ஒவ்வொரு காலமும் வசூலாகும்; சந்தாக்களில் ரத்து செய்யவும் அல்லது மீண்டும் முயலவும்.", ar: "يُخصم الرسم الشهري من البطاقة المحفوظة عند الدفع في كل دورة؛ ألغِ أو أعد المحاولة من الاشتراكات." },
-  "land.canvastep1": { en: "Design the look in Canva and export the logo, hero image and brand colours.", ms: "Reka rupa dalam Canva dan eksport logo, imej hero dan warna jenama.", zh: "在 Canva 做设计，导出 Logo、主图和品牌色。", ta: "Canva-இல் தோற்றத்தை வடிவமைத்து லோகோ, hero படம், பிராண்ட் நிறங்களை ஏற்றுமதி செய்யவும்.", ar: "صمّم الشكل في Canva وصدّر الشعار وصورة الواجهة وألوان العلامة." },
-  "land.canvastep2": { en: "Open /mcp, add https://mcp.jomform.com/mcp to your agent's MCP servers and approve the OAuth screen once.", ms: "Buka /mcp, tambah https://mcp.jomform.com/mcp ke pelayan MCP agent anda dan luluskan skrin OAuth sekali.", zh: "打开 /mcp，把 https://mcp.jomform.com/mcp 加到代理的 MCP 服务器，并通过一次 OAuth 授权。", ta: "/mcp திறந்து, https://mcp.jomform.com/mcp-ஐ உங்கள் முகவரின் MCP சர்வர்களில் சேர்த்து ஒருமுறை OAuth திரையை அனுமதிக்கவும்.", ar: "افتح /mcp وأضف https://mcp.jomform.com/mcp إلى خوادم MCP لوكيلك ووافق على شاشة OAuth مرة واحدة." },
-  "land.canvastep3": { en: "Ask the agent to upload the assets (upload_media), set the form theme (set_form_theme) and set the storefront landing page (set_workspace_landing_page).", ms: "Minta agent memuat naik aset (upload_media), tetapkan tema borang (set_form_theme) dan tetapkan landing page kedai (set_workspace_landing_page).", zh: "让代理上传素材（upload_media）、设置表单主题（set_form_theme）和店铺落地页（set_workspace_landing_page）。", ta: "முகவரிடம் கோரிக்கைகளைப் பதிவேற்றச் சொல்லுங்கள் (upload_media), படிவத் தீம் (set_form_theme) மற்றும் கடை லேண்டிங் பக்கத்தை (set_workspace_landing_page) அமைக்கச் சொல்லுங்கள்.", ar: "اطلب من الوكيل رفع الملفات (upload_media) وضبط سمة النموذج (set_form_theme) وصفحة هبوط المتجر (set_workspace_landing_page)." },
-  "land.canvastep4": { en: "Publish the form and open its public link. A visitor sees the theme and the landing page.", ms: "Terbitkan borang dan buka pautan awamnya — tema dan landing page itulah yang dilihat pelawat.", zh: "发布表单并打开公开链接 —— 访客看到的就是主题和落地页。", ta: "படிவத்தை வெளியிட்டு அதன் பொது இணைப்பைத் திறக்கவும் — பார்வையாளர் காண்பது தீமும் லேண்டிங் பக்கமும்தான்.", ar: "انشر النموذج وافتح رابطه العام — ما يراه الزائر هو السمة وصفحة الهبوط." },
-  "land.affstep1": { en: "Publish a payment form with the product the affiliate promotes.", ms: "Terbitkan borang bayaran dengan produk yang dipromosikan affiliate.", zh: "发布一个带联盟要推广商品的付费表单。", ta: "இணைப்பாளர் விளம்பரப்படுத்தும் தயாரிப்புடன் ஒரு கட்டணப் படிவத்தை வெளியிடவும்.", ar: "انشر نموذج دفع بالمنتج الذي يروّج له الشريك." },
-  "land.affstep2": { en: "Settings → Affiliates: enter the affiliate's code, name and commission %, then Add affiliate.", ms: "Tetapan → Affiliate: isi kod, nama dan komisen % affiliate, kemudian Tambah affiliate.", zh: "设置 → 联盟：填写联盟的代码、名称和佣金 %，然后“添加联盟”。", ta: "அமைப்புகள் → இணைப்பாளர்கள்: இணைப்பாளரின் குறியீடு, பெயர், கமிஷன் % உள்ளிட்டு “இணைப்பாளரைச் சேர்”.", ar: "الإعدادات → الشركاء: أدخل رمز الشريك واسمه ونسبة العمولة % ثم إضافة شريك." },
-  "land.affstep3": { en: "Give the affiliate the form link with ?aff=CODE appended.", ms: "Beri affiliate pautan borang dengan ?aff=CODE ditambah di hujungnya.", zh: "把表单链接加上 ?aff=CODE 交给联盟成员。", ta: "படிவ இணைப்புடன் ?aff=CODE சேர்த்து இணைப்பாளருக்கு வழங்கவும்.", ar: "أعطِ الشريك رابط النموذج مع ?aff=CODE في آخره." },
-  "land.affstep4": { en: "Sales that arrive through that link are attributed to the affiliate, and commission is computed on paid sales.", ms: "Jualan yang datang melalui pautan itu dikreditkan kepada affiliate, dan komisen dikira pada jualan berbayar.", zh: "通过该链接产生的销售自动归属该联盟，佣金按已付款销售计算。", ta: "அந்த இணைப்பு வழியாக வரும் விற்பனைகள் இணைப்பாளருக்கு வரவு வைக்கப்படும், கமிஷன் செலுத்தப்பட்ட விற்பனையில் கணக்கிடப்படும்.", ar: "تُنسب المبيعات القادمة عبر ذلك الرابط إلى الشريك، وتُحسب العمولة على المبيعات المدفوعة." },
-  "land.membershipstep1": { en: "Products → Add product → type Subscription, billing period month or year, set the price → Create product.", ms: "Produk → Tambah produk → jenis Langganan, tempoh bil bulan atau tahun, tetapkan harga → Cipta produk.", zh: "商品 → 添加商品 → 类型选订阅，计费周期选月或年，设定价格 → 创建商品。", ta: "தயாரிப்புகள் → தயாரிப்பு சேர் → வகை சந்தா, பில் காலம் மாதம் அல்லது வருடம், விலையை அமைத்து → தயாரிப்பு உருவாக்கு.", ar: "المنتجات → إضافة منتج → النوع اشتراك، فترة الفوترة شهر أو سنة، اضبط السعر → إنشاء منتج." },
-  "land.membershipstep2": { en: "Create a payment form that points at that product. Go to Forms → New form, then Pricing Fields → product.", ms: "Cipta borang bayaran yang blok produknya menunjuk ke produk itu — Borang → Borang Baru, kemudian Medan Harga → produk.", zh: "创建一个付费表单，让商品区块指向该商品 —— 表单 → 新表单，然后定价字段 → 商品。", ta: "அந்தத் தயாரிப்பைச் சுட்டும் தயாரிப்புத் தொகுதியுடன் கட்டணப் படிவம் உருவாக்கவும் — படிவங்கள் → புதிய படிவம், பின் விலைப் புலங்கள் → தயாரிப்பு.", ar: "أنشئ نموذج دفع تشير كتلة منتجه إلى ذلك المنتج — النماذج → نموذج جديد، ثم حقول التسعير → منتج." },
-  "land.membershipstep3": { en: "Publish and share the link: the member pays once by card at checkout and the card is saved.", ms: "Terbitkan dan kongsi pautan: ahli bayar sekali dengan kad semasa checkout dan kad itu disimpan.", zh: "发布并分享链接：会员在结账时用卡付一次，卡会被保存。", ta: "வெளியிட்டு இணைப்பைப் பகிருங்கள்: உறுப்பினர் checkout-இல் கார்டில் ஒருமுறை செலுத்துகிறார், கார்டு சேமிக்கப்படும்.", ar: "انشر وشارك الرابط: يدفع العضو مرة واحدة بالبطاقة عند الدفع وتُحفظ البطاقة." },
-  "land.membershipstep4": { en: "JomForm charges the saved card every period. Cancel or retry under Subscriptions. Cancelling does not revoke the card.", ms: "JomForm mencaj kad yang disimpan itu setiap tempoh; batal atau cuba semula di Langganan — pembatalan tidak membatalkan kad.", zh: "JomForm 每个周期向这张已保存的卡扣款；在订阅中取消或重试 —— 取消不会撤销这张卡。", ta: "JomForm ஒவ்வொரு காலமும் அந்தச் சேமித்த கார்டிலிருந்து வசூலிக்கும்; சந்தாக்களில் ரத்து செய்யவும் அல்லது மீண்டும் முயலவும் — ரத்து கார்டை நீக்காது.", ar: "يخصم JomForm من تلك البطاقة المحفوظة في كل دورة؛ ألغِ أو أعد المحاولة من الاشتراكات — الإلغاء لا يُبطل البطاقة." },
   "land.f5": { en: "Affiliate marketing: referral links, automatic attribution and commission tracking. Your AI agent can manage it over MCP.", ms: "Pemasaran affiliate — pautan rujukan, kredit automatik dan pemantauan komisen. Diurus oleh agent AI anda melalui MCP.", zh: "联盟营销 — 推荐链接、自动归属与佣金追踪。通过 MCP 由您的 AI 代理管理。", ta: "இணைப்பு சந்தைப்படுத்தல் — பரிந்துரை இணைப்புகள், தானியங்கி வரவு மற்றும் கமிஷன் கண்காணிப்பு. MCP வழியாக உங்கள் AI முகவரால் நிர்வகிக்கப்படுகிறது.", ar: "التسويق بالعمولة — روابط إحالة ونسبة تلقائية وتتبع العمولة. يُدار عبر وكيل الذكاء الاصطناعي عبر MCP." },
   "mcp.backHome": { en: "← Back to home", ms: "← Balik ke laman utama", zh: "← 返回首页", ta: "← முகப்புக்குத் திரும்பு", ar: "← العودة إلى الرئيسية" },
   "mcp.title": { en: "Connect your AI agent to JomForm (MCP)", ms: "Sambung agent AI kau ke JomForm (MCP)", zh: "将您的 AI 代理连接到 JomForm（MCP）", ta: "உங்கள் AI முகவரை JomForm (MCP) உடன் இணைக்கவும்", ar: "اربط وكيل الذكاء الاصطناعي الخاص بك بـ JomForm (MCP)" },
   "mcp.subtitle": { en: "JomForm speaks the Model Context Protocol. Connect once, then control your whole store with plain language.", ms: "JomForm cakap Model Context Protocol. Sambung sekali, lepas tu kawal seluruh kedai guna bahasa biasa.", zh: "JomForm 支持 MCP。连接一次，即可用自然语言控制整个商店。", ta: "JomForm MCP ஆதரிக்கிறது. ஒருமுறை இணைத்தால் போதும், உங்கள் கடையை வார்த்தைகளால் கட்டுப்படுத்தலாம்.", ar: "يدعم JomForm بروتوكول MCP. اتصل مرة واحدة ثم تحكم بمتجرك بالكامل بلغة بسيطة." },
   "mcp.urlLabel": { en: "Server URL. Paste this exactly into your MCP client", ms: "URL pelayan — tampal tepat ini ke client MCP kau", zh: "服务器地址 — 请将以下内容原样粘贴到您的 MCP 客户端", ta: "சர்வர் URL — உங்கள் MCP கிளையண்டில் இதைச் சரியாக ஒட்டவும்", ar: "عنوان الخادم — الصقه حرفياً في عميل MCP لديك" },
   "mcp.copy": { en: "Copy", ms: "Salin", zh: "复制", ta: "நகலெடு", ar: "نسخ" },
+  // The accessible NAME of the configuration snippet's scroll box (card
+  // t_804040d3). A horizontal scroller with no tab stop is a keyboard trap
+  // (axe `scrollable-region-focusable`, serious), and the fix axe asks for is a
+  // FOCUSABLE, NAMED region — a bare tab stop on a <pre> is announced as an
+  // unlabelled group, so the name is this key, in the visitor's language.
+  "mcp.configExample": { en: "Example configuration", ms: "Contoh konfigurasi", zh: "配置示例", ta: "உள்ளமைவு எடுத்துக்காட்டு", ar: "مثال على الإعداد" },
   "mcp.copied": { en: "Copied ✓", ms: "Disalin ✓", zh: "已复制 ✓", ta: "நகலெடுக்கப்பட்டது ✓", ar: "تم النسخ ✓" },
   "mcp.whatTitle": { en: "What is a connected agent?", ms: "Apa itu agent bersambung?", zh: "什么是已连接的代理？", ta: "இணைக்கப்பட்ட முகவர் என்றால் என்ன?", ar: "ما هو الوكيل المتصل؟" },
   "mcp.whatBody": { en: "A connected agent is your ChatGPT or Claude AI that has authorised JomForm via OAuth 2.1 (one-click, PKCE). Once connected it can read and manage your products, prices, sales, refunds and analytics.", ms: "Agent bersambung ialah AI ChatGPT/Claude kau yang dah benarkan JomForm melalui OAuth 2.1 (satu klik, PKCE). Lepas sambung, ia boleh baca dan urus produk, harga, jualan, refund dan analitik kau — jadi API borang paling pantas untuk kedai kau.", zh: "已连接的代理是通过 OAuth 2.1（一键、PKCE）授权 JomForm 的 AI。连接后可管理您的商品、价格、销售、退款和分析。", ta: "இணைக்கப்பட்ட முகவர் என்பது OAuth 2.1 (ஒரே கிளிக், PKCE) மூலம் JomForm-க்கு அனுமதி அளித்த AI ஆகும். இணைந்ததும் உங்கள் தயாரிப்புகள், விற்பனை, பணத்திருப்பம் ஆகியவற்றை நிர்வகிக்கலாம்.", ar: "الوكيل المتصل هو ذكاء اصطناعي فوض JomForm عبر OAuth 2.1 (نقرة واحدة، PKCE). بمجرد الاتصال يمكنه إدارة منتجاتك وأسعارك ومبيعاتك." },
@@ -2299,6 +2301,81 @@ export const DICT = {
   "act.title": { en: "Activity", ms: "Aktiviti", zh: "活动", ta: "செயல்பாடு", ar: "النشاط" },
   "act.subtitle": { en: "Every action in this workspace, newest first. Including the ones that deleted something.", ms: "Setiap tindakan yang direkod dalam workspace ini, terbaru dahulu — termasuk yang memadam sesuatu.", zh: "此工作区记录的每一项操作，最新在前 — 包括删除操作。", ta: "இந்த பணியிடத்தில் பதிவுசெய்யப்பட்ட ஒவ்வொரு செயலும், புதியது முதலில் — எதையாவது நீக்கியவை உட்பட.", ar: "كل إجراء مسجَّل في مساحة العمل هذه، الأحدث أولاً — بما في ذلك الإجراءات التي حذفت شيئاً." },
   "act.docs": { en: "How the activity log works", ms: "Cara log aktiviti berfungsi", zh: "活动日志的工作方式", ta: "செயல்பாட்டுப் பதிவு எவ்வாறு செயல்படுகிறது", ar: "كيف يعمل سجل النشاط" },
+  // THE HUMAN LABEL FOR EVERY EVENT THE API RECORDS (card t_804040d3). The
+  // Activity table used to print the machine token (`sale.paid`,
+  // `workspace.renamed`) straight into the merchant's cell. One key per recorded
+  // event name, named `act.event.<event name>`; the population is declared in
+  // src/lib/activityEvents.ts and pinned against the recorder call sites under
+  // api/internal by src/lib/activityPage.test.ts, so a new recorder cannot ship
+  // as a raw token in all five locales.
+  "act.event.admin.super_admin_action": { en: "Super admin action", ms: "Tindakan super admin", zh: "超级管理员操作", ta: "சூப்பர் அட்மின் செயல்", ar: "إجراء من مشرف أعلى" },
+  "act.event.auth.login": { en: "Signed in", ms: "Log masuk", zh: "已登录", ta: "உள்நுழைந்தார்", ar: "تسجيل دخول" },
+  "act.event.auth.logout": { en: "Signed out", ms: "Log keluar", zh: "已退出登录", ta: "வெளியேறினார்", ar: "تسجيل خروج" },
+  "act.event.auth.stepup_required": { en: "Extra verification needed", ms: "Pengesahan tambahan diperlukan", zh: "需要额外验证", ta: "கூடுதல் சரிபார்ப்பு தேவை", ar: "مطلوب تحقق إضافي" },
+  "act.event.chat.message": { en: "Question to the assistant", ms: "Soalan kepada pembantu", zh: "向助手提问", ta: "உதவியாளருக்குக் கேள்வி", ar: "سؤال إلى المساعد" },
+  "act.event.chat.proposal_confirmed": { en: "Assistant change confirmed", ms: "Perubahan pembantu disahkan", zh: "已确认助手变更", ta: "உதவியாளர் மாற்றம் உறுதிசெய்யப்பட்டது", ar: "تم تأكيد تغيير المساعد" },
+  "act.event.feedback.created": { en: "Feedback sent", ms: "Maklum balas dihantar", zh: "已提交反馈", ta: "கருத்து அனுப்பப்பட்டது", ar: "تم إرسال ملاحظات" },
+  "act.event.feedback.replied": { en: "Feedback answered", ms: "Maklum balas dijawab", zh: "已回复反馈", ta: "கருத்துக்குப் பதில் அளிக்கப்பட்டது", ar: "تم الرد على الملاحظات" },
+  "act.event.feedback.admin_replied": { en: "Reply from JomForm support", ms: "Balasan daripada sokongan JomForm", zh: "JomForm 支持团队的回复", ta: "JomForm ஆதரவின் பதில்", ar: "رد من دعم JomForm" },
+  "act.event.feedback.status_changed": { en: "Feedback status changed", ms: "Status maklum balas berubah", zh: "反馈状态已变更", ta: "கருத்து நிலை மாறியது", ar: "تغيّرت حالة الملاحظات" },
+  "act.event.feedback.notify_retried": { en: "Feedback notification re-sent", ms: "Notifikasi maklum balas dihantar semula", zh: "已重新发送反馈通知", ta: "கருத்து அறிவிப்பு மீண்டும் அனுப்பப்பட்டது", ar: "أُعيد إرسال إشعار الملاحظات" },
+  "act.event.form.created": { en: "Form created", ms: "Borang dicipta", zh: "已创建表单", ta: "படிவம் உருவாக்கப்பட்டது", ar: "تم إنشاء نموذج" },
+  "act.event.form.updated": { en: "Form updated", ms: "Borang dikemas kini", zh: "已更新表单", ta: "படிவம் புதுப்பிக்கப்பட்டது", ar: "تم تحديث نموذج" },
+  "act.event.form.deleted": { en: "Form deleted", ms: "Borang dipadam", zh: "已删除表单", ta: "படிவம் நீக்கப்பட்டது", ar: "تم حذف نموذج" },
+  "act.event.form.published": { en: "Form published", ms: "Borang diterbitkan", zh: "已发布表单", ta: "படிவம் வெளியிடப்பட்டது", ar: "تم نشر نموذج" },
+  "act.event.form.purged": { en: "Form permanently deleted", ms: "Borang dipadam selamanya", zh: "表单已永久删除", ta: "படிவம் நிரந்தரமாக நீக்கப்பட்டது", ar: "تم حذف النموذج نهائياً" },
+  "act.event.form.restored": { en: "Form restored", ms: "Borang dipulihkan", zh: "已恢复表单", ta: "படிவம் மீட்டெடுக்கப்பட்டது", ar: "تمت استعادة نموذج" },
+  "act.event.form.slug_renamed": { en: "Form link renamed", ms: "Pautan borang dinamakan semula", zh: "表单链接已改名", ta: "படிவ இணைப்பு மறுபெயரிடப்பட்டது", ar: "أُعيدت تسمية رابط النموذج" },
+  "act.event.form.bulk_publish": { en: "Several forms published", ms: "Beberapa borang diterbitkan", zh: "已批量发布表单", ta: "பல படிவங்கள் வெளியிடப்பட்டன", ar: "تم نشر عدة نماذج" },
+  "act.event.form.bulk_draft": { en: "Several forms moved to draft", ms: "Beberapa borang dipindah ke draf", zh: "多个表单已转为草稿", ta: "பல படிவங்கள் வரைவுக்கு மாற்றப்பட்டன", ar: "نُقلت عدة نماذج إلى المسودة" },
+  "act.event.form.bulk_delete": { en: "Several forms deleted", ms: "Beberapa borang dipadam", zh: "已删除多个表单", ta: "பல படிவங்கள் நீக்கப்பட்டன", ar: "حُذفت عدة نماذج" },
+  "act.event.form.status_draft": { en: "Form is now a draft", ms: "Borang kini draf", zh: "表单现为草稿", ta: "படிவம் இப்போது வரைவில்", ar: "النموذج الآن مسودة" },
+  "act.event.form.status_published": { en: "Form is now published", ms: "Borang kini diterbitkan", zh: "表单现已发布", ta: "படிவம் இப்போது வெளியிடப்பட்டுள்ளது", ar: "النموذج الآن منشور" },
+  "act.event.form.status_unlisted": { en: "Form is now unlisted", ms: "Borang kini tidak tersenarai", zh: "表单现为不公开列出", ta: "படிவம் இப்போது பட்டியலில் இல்லை", ar: "النموذج الآن غير مُدرج" },
+  "act.event.form.status_private": { en: "Form is now private", ms: "Borang kini peribadi", zh: "表单现为私有", ta: "படிவம் இப்போது தனியுரிமை", ar: "النموذج الآن خاص" },
+  "act.event.mcp.tool_call": { en: "AI agent used a tool", ms: "Ejen AI menggunakan alat", zh: "AI 助手调用了工具", ta: "AI முகவர் ஒரு கருவியைப் பயன்படுத்தியது", ar: "استخدم وكيل الذكاء أداة" },
+  "act.event.mcp.agent_disconnected": { en: "AI agent disconnected", ms: "Ejen AI diputuskan", zh: "AI 助手已断开连接", ta: "AI முகவர் துண்டிக்கப்பட்டது", ar: "تم فصل وكيل الذكاء" },
+  "act.event.media.deleted": { en: "Media deleted", ms: "Media dipadam", zh: "已删除媒体", ta: "மீடியா நீக்கப்பட்டது", ar: "تم حذف وسائط" },
+  "act.event.media.purged": { en: "Media permanently deleted", ms: "Media dipadam selamanya", zh: "媒体已永久删除", ta: "மீடியா நிரந்தரமாக நீக்கப்பட்டது", ar: "تم حذف الوسائط نهائياً" },
+  "act.event.media.restored": { en: "Media restored", ms: "Media dipulihkan", zh: "已恢复媒体", ta: "மீடியா மீட்டெடுக்கப்பட்டது", ar: "تمت استعادة الوسائط" },
+  "act.event.product.updated": { en: "Product updated", ms: "Produk dikemas kini", zh: "已更新产品", ta: "தயாரிப்பு புதுப்பிக்கப்பட்டது", ar: "تم تحديث منتج" },
+  "act.event.product.deleted": { en: "Product deleted", ms: "Produk dipadam", zh: "已删除产品", ta: "தயாரிப்பு நீக்கப்பட்டது", ar: "تم حذف منتج" },
+  "act.event.product.purged": { en: "Product permanently deleted", ms: "Produk dipadam selamanya", zh: "产品已永久删除", ta: "தயாரிப்பு நிரந்தரமாக நீக்கப்பட்டது", ar: "تم حذف المنتج نهائياً" },
+  "act.event.product.restored": { en: "Product restored", ms: "Produk dipulihkan", zh: "已恢复产品", ta: "தயாரிப்பு மீட்டெடுக்கப்பட்டது", ar: "تمت استعادة منتج" },
+  "act.event.product.bulk_archive": { en: "Several products archived", ms: "Beberapa produk diarkibkan", zh: "已归档多个产品", ta: "பல தயாரிப்புகள் காப்பகப்படுத்தப்பட்டன", ar: "أُرشفت عدة منتجات" },
+  "act.event.profile.avatar_update": { en: "Profile photo updated", ms: "Gambar profil dikemas kini", zh: "已更新头像", ta: "சுயவிவரப் படம் புதுப்பிக்கப்பட்டது", ar: "تم تحديث صورة الملف" },
+  "act.event.sale.captured": { en: "Payment captured", ms: "Bayaran dikutip", zh: "款项已收取", ta: "பணம் வசூலிக்கப்பட்டது", ar: "تم تحصيل الدفعة" },
+  "act.event.sale.released": { en: "Payment released", ms: "Bayaran dilepaskan", zh: "款项已释放", ta: "பணம் விடுவிக்கப்பட்டது", ar: "تم تحرير الدفعة" },
+  "act.event.sale.refunded": { en: "Sale refunded", ms: "Jualan dikembalikan", zh: "销售已退款", ta: "விற்பனைக்கு பணம் திருப்பப்பட்டது", ar: "تم رد مبلغ البيع" },
+  "act.event.sale.confirmed": { en: "Sale confirmed", ms: "Jualan disahkan", zh: "销售已确认", ta: "விற்பனை உறுதிசெய்யப்பட்டது", ar: "تم تأكيد البيع" },
+  "act.event.sale.bulk_captured": { en: "Several payments captured", ms: "Beberapa bayaran dikutip", zh: "已批量收款", ta: "பல பணம் வசூலிக்கப்பட்டது", ar: "تم تحصيل عدة دفعات" },
+  "act.event.settings.api_key_created": { en: "API key created", ms: "Kunci API dicipta", zh: "已创建 API 密钥", ta: "API விசை உருவாக்கப்பட்டது", ar: "تم إنشاء مفتاح API" },
+  "act.event.settings.api_key_revoked": { en: "API key revoked", ms: "Kunci API dibatalkan", zh: "已撤销 API 密钥", ta: "API விசை ரத்து செய்யப்பட்டது", ar: "تم إلغاء مفتاح API" },
+  "act.event.settings.chip_cleared": { en: "Payment connection removed", ms: "Sambungan bayaran dibuang", zh: "已移除支付连接", ta: "கட்டண இணைப்பு நீக்கப்பட்டது", ar: "تمت إزالة اتصال الدفع" },
+  "act.event.settings.chip_updated": { en: "Payment connection updated", ms: "Sambungan bayaran dikemas kini", zh: "已更新支付连接", ta: "கட்டண இணைப்பு புதுப்பிக்கப்பட்டது", ar: "تم تحديث اتصال الدفع" },
+  "act.event.settings.domain_added": { en: "Domain added", ms: "Domain ditambah", zh: "已添加域名", ta: "டொமைன் சேர்க்கப்பட்டது", ar: "تمت إضافة نطاق" },
+  "act.event.settings.domain_claimed": { en: "Domain claimed", ms: "Domain dituntut", zh: "域名已认领", ta: "டொமைன் கோரப்பட்டது", ar: "تم إثبات ملكية النطاق" },
+  "act.event.settings.domain_cleared": { en: "Domain detached", ms: "Domain dilepaskan", zh: "域名已解绑", ta: "டொமைன் விலக்கப்பட்டது", ar: "تم فصل النطاق" },
+  "act.event.settings.domain_custom_cert": { en: "Custom certificate uploaded", ms: "Sijil tersuai dimuat naik", zh: "已上传自定义证书", ta: "தனிப்பயன் சான்றிதழ் பதிவேற்றப்பட்டது", ar: "تم رفع شهادة مخصصة" },
+  "act.event.settings.domain_removed": { en: "Domain removed", ms: "Domain dibuang", zh: "已移除域名", ta: "டொமைன் நீக்கப்பட்டது", ar: "تمت إزالة النطاق" },
+  "act.event.settings.domain_tls_email": { en: "Certificate email changed", ms: "Emel sijil ditukar", zh: "证书邮箱已更改", ta: "சான்றிதழ் மின்னஞ்சல் மாற்றப்பட்டது", ar: "تم تغيير بريد الشهادة" },
+  "act.event.settings.domain_tls_mode": { en: "Certificate mode changed", ms: "Mod sijil ditukar", zh: "证书模式已更改", ta: "சான்றிதழ் பயன்முறை மாற்றப்பட்டது", ar: "تم تغيير وضع الشهادة" },
+  "act.event.settings.domain_verified": { en: "Domain verified", ms: "Domain disahkan", zh: "域名已验证", ta: "டொமைன் சரிபார்க்கப்பட்டது", ar: "تم التحقق من النطاق" },
+  "act.event.settings.webhook_created": { en: "Webhook added", ms: "Webhook ditambah", zh: "已添加 Webhook", ta: "வெப்ஹூக் சேர்க்கப்பட்டது", ar: "تمت إضافة ويب هوك" },
+  "act.event.settings.webhook_updated": { en: "Webhook updated", ms: "Webhook dikemas kini", zh: "已更新 Webhook", ta: "வெப்ஹூக் புதுப்பிக்கப்பட்டது", ar: "تم تحديث ويب هوك" },
+  "act.event.settings.webhook_deleted": { en: "Webhook removed", ms: "Webhook dibuang", zh: "已移除 Webhook", ta: "வெப்ஹூக் நீக்கப்பட்டது", ar: "تمت إزالة ويب هوك" },
+  "act.event.settings.webhook_retried": { en: "Webhook re-sent", ms: "Webhook dihantar semula", zh: "已重新发送 Webhook", ta: "வெப்ஹூக் மீண்டும் அனுப்பப்பட்டது", ar: "أُعيد إرسال ويب هوك" },
+  "act.event.template.created": { en: "Template saved", ms: "Templat disimpan", zh: "已保存模板", ta: "வார்ப்புரு சேமிக்கப்பட்டது", ar: "تم حفظ قالب" },
+  "act.event.template.updated": { en: "Template updated", ms: "Templat dikemas kini", zh: "已更新模板", ta: "வார்ப்புரு புதுப்பிக்கப்பட்டது", ar: "تم تحديث قالب" },
+  "act.event.template.deleted": { en: "Template deleted", ms: "Templat dipadam", zh: "已删除模板", ta: "வார்ப்புரு நீக்கப்பட்டது", ar: "تم حذف قالب" },
+  "act.event.upload.asset": { en: "File uploaded", ms: "Fail dimuat naik", zh: "已上传文件", ta: "கோப்பு பதிவேற்றப்பட்டது", ar: "تم رفع ملف" },
+  "act.event.upload.avatar": { en: "Profile photo uploaded", ms: "Gambar profil dimuat naik", zh: "已上传头像", ta: "சுயவிவரப் படம் பதிவேற்றப்பட்டது", ar: "تم رفع صورة الملف" },
+  "act.event.upload.image": { en: "Image uploaded", ms: "Imej dimuat naik", zh: "已上传图片", ta: "படம் பதிவேற்றப்பட்டது", ar: "تم رفع صورة" },
+  "act.event.upload.pdf": { en: "PDF uploaded", ms: "PDF dimuat naik", zh: "已上传 PDF", ta: "PDF பதிவேற்றப்பட்டது", ar: "تم رفع ملف PDF" },
+  "act.event.workspace.deleted": { en: "Workspace deleted", ms: "Ruang kerja dipadam", zh: "已删除工作区", ta: "பணியிடம் நீக்கப்பட்டது", ar: "تم حذف مساحة العمل" },
+  "act.event.workspace.purged": { en: "Workspace permanently deleted", ms: "Ruang kerja dipadam selamanya", zh: "工作区已永久删除", ta: "பணியிடம் நிரந்தரமாக நீக்கப்பட்டது", ar: "تم حذف مساحة العمل نهائياً" },
+  "act.event.workspace.renamed": { en: "Workspace renamed", ms: "Ruang kerja dinamakan semula", zh: "工作区已改名", ta: "பணியிடம் மறுபெயரிடப்பட்டது", ar: "أُعيدت تسمية مساحة العمل" },
+  "act.event.workspace.restored": { en: "Workspace restored", ms: "Ruang kerja dipulihkan", zh: "已恢复工作区", ta: "பணியிடம் மீட்டெடுக்கப்பட்டது", ar: "تمت استعادة مساحة العمل" },
   "act.filterEvent": { en: "Event type", ms: "Jenis peristiwa", zh: "事件类型", ta: "நிகழ்வு வகை", ar: "نوع الحدث" },
   "act.allEvents": { en: "All events", ms: "Semua peristiwa", zh: "所有事件", ta: "அனைத்து நிகழ்வுகளும்", ar: "كل الأحداث" },
   "act.filterFrom": { en: "From", ms: "Dari", zh: "起始", ta: "இருந்து", ar: "من" },
@@ -2492,7 +2569,14 @@ export const DICT = {
   "chat.title": { en: "Assistant", ms: "Pembantu", zh: "助手", ta: "உதவியாளர்", ar: "المساعد" },
   "chat.subtitle": { en: "Ask about your own forms, sales and products. It can file feedback, and it can prepare a change for you to confirm. It never changes your account by itself.", ms: "Tanya tentang borang, jualan dan produk anda sendiri. Ia boleh menghantar maklum balas dan menyediakan perubahan untuk anda sahkan — ia tidak pernah mengubah akaun anda sendiri.", zh: "询问您自己的表单、销售和产品。它可以提交反馈，也可以准备变更供您确认——它绝不会自行更改您的账户。", ta: "உங்கள் சொந்த படிவங்கள், விற்பனை மற்றும் தயாரிப்புகள் பற்றி கேளுங்கள். கருத்தை அனுப்பலாம், மேலும் மாற்றத்தை உங்கள் உறுதிப்படுத்தலுக்குத் தயார் செய்யலாம் — உங்கள் கணக்கை அது தானாக மாற்றாது.", ar: "اسأل عن نماذجك ومبيعاتك ومنتجاتك. يمكنه إرسال ملاحظات، ويمكنه تحضير تغيير لتؤكده — لكنه لا يغيّر حسابك من تلقاء نفسه." },
   "chat.readOnlyBadge": { en: "Confirms with you", ms: "Sahkan dengan anda", zh: "由您确认", ta: "நீங்கள் உறுதிப்படுத்துவீர்கள்", ar: "بتأكيدك" },
-  "chat.placeholder": { en: "Ask a question about your data…", ms: "Tanya soalan tentang data anda…", zh: "就您的数据提问…", ta: "உங்கள் தரவு பற்றி கேள்வி கேளுங்கள்…", ar: "اطرح سؤالاً عن بياناتك…" },
+  // SHORT ENOUGH TO FIT THE COMPOSER ON A PHONE (card t_804040d3). Measured at
+  // 390px with the composer's own font (14px Inter, 210px of content box): the
+  // old English string ("Ask a question about your data…") is 217.59px and the
+  // Malay one 222.51px, so both were clipped mid-word in the one-row textarea.
+  // These two measure 144.81px and 175.27px. zh/ta/ar already fit (they are
+  // 98–188px) and are unchanged; e2e/a11y-chat-composer.spec.ts measures every
+  // locale rather than trusting this note.
+  "chat.placeholder": { en: "Ask about your data…", ms: "Tanya tentang data anda…", zh: "就您的数据提问…", ta: "உங்கள் தரவு பற்றி கேளுங்கள்…", ar: "اطرح سؤالاً عن بياناتك…" },
   "chat.send": { en: "Send", ms: "Hantar", zh: "发送", ta: "அனுப்பு", ar: "إرسال" },
   "chat.thinking": { en: "Looking that up…", ms: "Sedang mencari…", zh: "正在查询…", ta: "தேடுகிறது…", ar: "جارٍ البحث…" },
   // ── Streaming, Stop, the live step line and the copy affordance (t_148d7100) ─
@@ -2903,6 +2987,10 @@ export const DICT = {
   "docs.title": { en: "JomForm Docs", ms: "Dokumentasi JomForm", zh: "JomForm 文档", ta: "JomForm ஆவணங்கள்", ar: "وثائق JomForm" },
   "docs.intro": { en: "Everything JomForm does, one line per feature, grouped by what you are trying to get done. Where the full walk-through exists, the entry links to it.", ms: "Semua yang JomForm lakukan, satu baris setiap ciri, dikumpulkan mengikut apa yang anda mahu lakukan. Jika panduan penuh wujud, entri itu berpaut kepadanya.", zh: "JomForm 的每一项功能一句话说明，按您想完成的事分组。若存在完整指南，条目会链接过去。", ta: "JomForm செய்யும் அனைத்தும், ஒரு அம்சத்திற்கு ஒரு வரி, நீங்கள் செய்ய விரும்புவதைப் பொறுத்து தொகுக்கப்பட்டது. முழு வழிகாட்டி இருந்தால், அந்த உருப்படி அதற்கு இணைக்கிறது.", ar: "كل ما يفعله JomForm، سطر واحد لكل ميزة، مجمّعة حسب ما تريد إنجازه. وحين يوجد دليل كامل، يرتبط البند به." },
   "docs.gsTitle": { en: "Start here", ms: "Mula di sini", zh: "从这里开始", ta: "இங்கே தொடங்குங்கள்", ar: "ابدأ من هنا" },
+  // Card t_ff973d0b: the label over the reference-shortcut row. It is a group
+  // label, not a heading a reader reads as page structure, so the /docs index
+  // renders it small and uppercase over the chips.
+  "docs.popularTitle": { en: "Popular references", ms: "Rujukan popular", zh: "常用参考", ta: "பிரபலமான குறிப்புகள்", ar: "مراجع شائعة" },
   "docs.featuresTitle": { en: "Features", ms: "Ciri-ciri", zh: "功能", ta: "அம்சங்கள்", ar: "الميزات" },
   "docs.faqTitle": { en: "FAQ", ms: "Soalan lazim", zh: "常见问题", ta: "அடிக்கடி கேட்கப்படும் கேள்விகள்", ar: "الأسئلة الشائعة" },
   "docs.next": { en: "Full guide →", ms: "Panduan penuh →", zh: "完整指南 →", ta: "முழு வழிகாட்டி →", ar: "الدليل الكامل →" },
@@ -2916,13 +3004,14 @@ export const DICT = {
   "docs.catGrowth": { en: "Growth", ms: "Pertumbuhan", zh: "增长", ta: "வளர்ச்சி", ar: "النمو" },
   "docs.catSecurity": { en: "Security", ms: "Keselamatan", zh: "安全", ta: "பாதுகாப்பு", ar: "الأمان" },
   "docs.catDev": { en: "For developers", ms: "Untuk pembangun", zh: "开发者", ta: "டெவலப்பர்களுக்கு", ar: "للمطوّرين" },
-  "docs.linkDesign": { en: "Design → AI agent → MCP guide", ms: "Panduan reka bentuk → ejen AI → MCP", zh: "设计 → AI 智能体 → MCP 指南", ta: "வடிவமைப்பு → AI முகவர் → MCP வழிகாட்டி", ar: "دليل التصميم → وكيل الذكاء الاصطناعي → MCP" },
   "docs.linkPlaceholders": { en: "Placeholders reference", ms: "Rujukan placeholder", zh: "占位符参考", ta: "இடமாற்றி குறிப்பு", ar: "مرجع العناصر النائبة" },
-  "docs.linkEmbed": { en: "Embed on your site", ms: "Benamkan di laman anda", zh: "嵌入到您的网站", ta: "உங்கள் தளத்தில் இணைக்கவும்", ar: "التضمين في موقعك" },
   "docs.linkMCP": { en: "MCP tool reference", ms: "Rujukan alat MCP", zh: "MCP 工具参考", ta: "MCP கருவி குறிப்பு", ar: "مرجع أدوات MCP" },
-  // Card t_7b9f6d18: the screenshot guides (docs/guides/<slug>) now have a route, and the
-  // /docs index's quick-link row is how a reader on /docs reaches them (docsIndex.test.ts
-  // requires every sidebar row to be reachable from the index).
+  // Card t_ff973d0b: the chip that carried this label is gone from the index —
+  // /docs/embed is an ENTRY on the page with the same title and a sidebar row —
+  // so the key went with it. ("Design → AI agent → MCP guide" left for the same
+  // reason: an entry and a sidebar row already carry that destination.)
+  // Card t_7b9f6d18: the screenshot guides (docs/guides/<slug>) now reach the
+  // index through START_LINKS ("Start here"), not through the shortcut row.
   "docs.linkGuides": { en: "Screenshot guides", ms: "Panduan bergambar", zh: "图文指南", ta: "பட வழிகாட்டிகள்", ar: "أدلة مصوّرة" },
   // t_5425c958: the workspace guide is reached from its own two entries on the
   // index (which render `docs.next`), not from the quick-link row — so it needs

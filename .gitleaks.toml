@@ -3,16 +3,27 @@
 # ⚠️  [extend] useDefault = true is REQUIRED, do not remove it.
 #
 # Supplying `--config <this file>` REPLACES gitleaks' embedded default ruleset
-# with the file's contents. This file defines only an [allowlist] and no
-# [[rules]], so without [extend] the scan runs with an EMPTY ruleset: nothing
-# can ever match, `gitleaks detect` always exits 0, and the secrets gate is a
-# permanent green no-op that looks exactly like a clean history.
+# with the file's contents. This file defines only allowlists and no [[rules]],
+# so without [extend] the scan runs with an EMPTY ruleset: nothing can ever
+# match, `gitleaks detect` always exits 0, and the secrets gate is a permanent
+# green no-op that looks exactly like a clean history.
 #
 # That is not hypothetical — it is how this repo's gitleaks gate behaved until
 # 2026-09-19. Verified against a standalone repo: with the old config a GitHub
 # PAT, an AWS secret key and an OpenSSH private key were ALL missed (rc=0); with
-# [extend] useDefault = true all three are caught (rc=1), and the allowlist
-# below still suppresses the historical false positive.
+# [extend] useDefault = true all three are caught (rc=1), and the allowlists
+# below still suppress the historical false positives.
+#
+# TWO ALLOWLISTS, and each says what it is scoped to. They are separate
+# `[[allowlists]]` entries rather than one because a `regexTarget` applies to the
+# whole entry it sits in: the path entry's regexes are matched against the found
+# SECRET (their default), and the fixture entry's regex is matched against the
+# whole LINE. Merging them would silently change what the existing entries match.
+[extend]
+  useDefault = true
+
+# ---------------------------------------------------------------------------
+# 1. Test fixtures, scoped by PATH.
 #
 # The allowlist entries are the fixtures that legitimately contain secret-shaped
 # strings (a `SESSION_SECRET: "x"` test fixture and similar). They are scoped by
@@ -29,10 +40,8 @@
 # trees whose own diff could not possibly contain it). Keep the entries
 # PATH-scoped: widening them to `web/` would stop a real secret in `web/src/` being
 # reported, which is half the reason the list exists.
-[extend]
-  useDefault = true
-
-[allowlist]
+# ---------------------------------------------------------------------------
+[[allowlists]]
   description = "Test fixtures and non-secret placeholders"
   paths = [
     '''api/internal/config/config_test\.go''',
@@ -43,4 +52,34 @@
   regexes = [
     '''SESSION_SECRET["']?\s*[:=]\s*["']x["']''',
     '''ENCRYPTION_KEY["']?\s*[:=]\s*["']short["']''',
+  ]
+
+# ---------------------------------------------------------------------------
+# 2. `deploy/biteproof_ship_static_purge.sh` case 0, scoped to the LINE.
+#
+# Case 0 fixtures the purge credentials the way prod has them — SET and EMPTY —
+# as `env JF_CF_PURGE_TOKEN= JF_CF_PURGE_ZONE_ID=`. `generic-api-key` reads the
+# empty assignment as its keyword, takes the space after it as the separator, and
+# then takes the SIBLING VARIABLE'S NAME as the secret: `JF_CF_PURGE_ZONE_ID=`,
+# 20 characters, entropy 3.72. Nothing was leaked — the "credential" is the name
+# of an empty variable, and no value exists in the tree or the history.
+#
+# WHY THE HISTORY NEEDS THIS ENTRY AND THE TIP DOES NOT. The fixture has since
+# been reshaped (one `NAME=''` per line, so two empty names can no longer read as
+# each other's value) and the tip produces no match at all. But
+# `gitleaks detect --source .` reads EVERY ref, so the commit that carried the
+# old shape is still scanned until something covers it — the same repo-wide trap
+# the path entries above exist for. A path entry would cover it too, and that is
+# exactly why it is NOT used here: the harness drives real curl requests against
+# a real CDN, so a token pasted into it while debugging is a plausible thing to
+# find, and a path entry would stop it ever being reported. This entry can only
+# match a line where a token assignment is followed by nothing but another empty
+# assignment — a shape a REAL credential cannot have, because a real one carries
+# a value after its `=`.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+  description = "Empty-credential fixture: a bare token assignment followed by a bare sibling assignment"
+  regexTarget = "line"
+  regexes = [
+    '''JF_CF_PURGE_TOKEN=\s+JF_CF_PURGE_ZONE_ID=''',
   ]

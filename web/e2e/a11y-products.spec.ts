@@ -161,6 +161,25 @@ async function openProducts(page: Page) {
   ).toHaveCount(PRODUCTS.length, { timeout: 30_000 });
 }
 
+/**
+ * Opens /products AND the create row (card t_bb0d0bee).
+ *
+ * The create row is a REVEAL now — the page's one creation entry point is the
+ * header's "New product" button, and the row is collapsed until it is pressed.
+ * A test that means to census / axe the row's controls has to open it the way a
+ * merchant does instead of assuming it renders on load; the arm that pins the
+ * collapsed default is `the create row is behind one entry point` below, so this
+ * helper cannot hide a regression back to an always-open form.
+ */
+async function openCreateRow(page: Page) {
+  await openProducts(page);
+  await page.getByRole("button", { name: EN["prod.newTitle"].en }).click();
+  await expect(
+    page.locator("form.jf-card"),
+    "the create row must be revealed by the New product button",
+  ).toBeVisible();
+}
+
 test.describe("a11y: the products table and create row", () => {
   test("the sort state is on the column header, never on a button", async ({ page }) => {
     await openProducts(page);
@@ -201,8 +220,41 @@ test.describe("a11y: the products table and create row", () => {
     ).toBeVisible();
   });
 
-  test("every select on the page has an accessible name", async ({ page }) => {
+  test("the create row is behind ONE entry point, and that button announces it", async ({ page }) => {
+    // Card t_bb0d0bee: /products used to render the create row ALWAYS, plus a
+    // second "New product" link above it. One surface now — the header button —
+    // and this arm is what stops the always-open row coming back (which also
+    // pushed the catalogue below the fold at 390px).
     await openProducts(page);
+
+    await expect(
+      page.locator("form.jf-card"),
+      "the create row must NOT render until the New product button is pressed",
+    ).toHaveCount(0);
+
+    const trigger = page.getByRole("button", { name: EN["prod.newTitle"].en });
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    const controls = await trigger.getAttribute("aria-controls");
+    expect(controls, "the button must name the region it reveals").toBeTruthy();
+
+    await trigger.click();
+    await expect(page.getByRole("button", { name: EN["common.cancel"].en })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(page.locator(`#${controls}`)).toBeVisible();
+
+    // Exactly one creation control on the page: no second "New product" link.
+    await expect(page.getByRole("link", { name: EN["prod.newTitle"].en })).toHaveCount(0);
+
+    // …and it collapses again, so the catalogue is what a phone lands on.
+    await page.getByRole("button", { name: EN["common.cancel"].en }).click();
+    await expect(page.locator("form.jf-card")).toHaveCount(0);
+  });
+
+  test("every select on the page has an accessible name", async ({ page }) => {
+    await openCreateRow(page);
 
     const selects = page.locator("select");
     const count = await selects.count();
@@ -254,7 +306,7 @@ test.describe("a11y: the products table and create row", () => {
   // class is shared with `a11y-authed-pages.spec.ts` (`e2e/controlNames.ts`) and
   // runs here on the whole page, with the plant arm below proving it bites.
   test("no control on /products is named only by its placeholder", async ({ page }) => {
-    await openProducts(page);
+    await openCreateRow(page);
 
     // REACHABILITY FIRST: this is the surface the class shipped on. A census of
     // a page that rendered only its table would pass without looking at the row.
@@ -281,7 +333,11 @@ test.describe("a11y: the products table and create row", () => {
   });
 
   test("/products has no critical/serious axe violations", async ({ page }) => {
-    await openProducts(page);
+    // The create row is scanned REVEALED (card t_bb0d0bee): it is behind the
+    // New product button now, and scanning only the collapsed page would drop
+    // every one of its controls from the axe run — the same silent coverage loss
+    // this spec exists to prevent.
+    await openCreateRow(page);
 
     const results = await new AxeBuilder({ page }).analyze();
     const blockers = blockersOf(results);

@@ -676,6 +676,42 @@ test("the five start-here steps are above the feature list", () => {
     steps < features,
     '"Start here" renders below the feature list — it is supposed to be the first thing on the page',
   );
+
+  // Card t_ff973d0b, the same claim one level up: "Start here" is the page's
+  // PRIMARY path, so it renders above the reference-shortcut row too. Before
+  // this the page opened with six chips whose first was filled purple — the
+  // shortcut read as the CTA and the onboarding path started below it.
+  //
+  // Read as POSITIONS in the render, not as "the section element exists": the
+  // section is ordered by where <section id="start"> is written, and the chip row
+  // by where its QUICK_LINKS map is rendered. A page that listed the chips first
+  // in JSX and still declared the arrays in this order would fail here.
+  const startSection = docsSrc.indexOf('<section id="start"');
+  const chipRow = docsSrc.indexOf("{QUICK_LINKS.map(");
+  assert.ok(
+    startSection !== -1,
+    `${DOCS_PAGE} no longer renders <section id="start"> — the guard's anchor moved`,
+  );
+  assert.ok(
+    chipRow !== -1,
+    `${DOCS_PAGE} no longer renders {QUICK_LINKS.map( — the guard's anchor moved`,
+  );
+  assert.ok(
+    startSection < chipRow,
+    '"Start here" renders below the reference chip row — the onboarding path is supposed to ' +
+      "be the page's first action and the chips a secondary shortcut group under it",
+  );
+
+  // And no chip is filled: a filled chip in that row is exactly what made a
+  // reference shortcut read as the page's primary action. The row's own opening
+  // tag is the whole surface checked — the primary-button class cannot come back
+  // without appearing in it.
+  const chipRowTag = docsSrc.slice(chipRow, docsSrc.indexOf("</Link>", chipRow));
+  assert.ok(
+    !/bg-\[var\(--jf-primary\)\]|bg-\[var\(--jf-primary-strong\)\]/.test(chipRowTag),
+    `${DOCS_PAGE} renders a FILLED chip in the reference row — a shortcut in that group must be ` +
+      "outlined; the filled primary action on this page is \"Start here\"",
+  );
 });
 
 test("every category is a named, translated group", () => {
@@ -1046,12 +1082,13 @@ test("the agent-facing llms-full.txt index points at the same pages", () => {
 //       reads: the sidebar's own deep links are `href:` data, so the app-wide
 //       `href="/docs..."` scan above never sees them.
 //   (b) every sidebar route is REACHABLE from the index — an entry's href, a
-//       group's `more` link, or the quick-link row — unless it is named in
-//       NOT_INDEXED_BY_DESIGN, and each of those must really be linked from the
-//       app's own source outside the docs tree, so the allowlist cannot be used
-//       to park a nav row that nothing links to at all.
+//       group's `more` link, the quick-link row, or a "Start here" link (card
+//       t_ff973d0b moved the screenshot guides onto that last surface) — unless
+//       it is named in NOT_INDEXED_BY_DESIGN, and each of those must really be
+//       linked from the app's own source outside the docs tree, so the allowlist
+//       cannot be used to park a nav row that nothing links to at all.
 //   (c) every route the index links is in the sidebar — the direction that did
-//       exist, widened from `entries` to all three ways the index links.
+//       exist, widened from `entries` to all four ways the index links.
 //
 // The allowlist is checked in both directions too (an entry the index can now
 // reach is dead weight; an entry for a route the sidebar does not carry means
@@ -1175,6 +1212,20 @@ function indexLinkedRoutes(src: string): Map<string, string> {
   assert.ok(qEnd !== -1, `could not find the end of the QUICK_LINKS row in ${DOCS_PAGE}`);
   for (const h of stripUnrendered(src.slice(qStart, qEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
     out.set(h[1].split("#")[0], "a quick link");
+  }
+  // Card t_ff973d0b moved the screenshot guides OUT of the shortcut row and into
+  // "Start here" — the onboarding path's own link — so the index reaches a route
+  // from a FOURTH surface now. It is READ here rather than dropped from the
+  // contract: a route the page links from "Start here" is still a route the page
+  // links, and the sidebar/reachability check below must see it. (Without this,
+  // the alternative would be to keep a chip alive only to satisfy the guard,
+  // which is the "one destination, two homes" shape this card removes.)
+  const sStart = src.indexOf("const START_LINKS");
+  assert.ok(sStart !== -1, `${DOCS_PAGE} no longer declares START_LINKS — the guard's anchor moved`);
+  const sEnd = src.indexOf("\n];", sStart);
+  assert.ok(sEnd !== -1, `could not find the end of the START_LINKS row in ${DOCS_PAGE}`);
+  for (const h of stripUnrendered(src.slice(sStart, sEnd)).matchAll(/href:\s*"([^"]+)"/g)) {
+    out.set(h[1].split("#")[0], 'a "Start here" link');
   }
   return out;
 }

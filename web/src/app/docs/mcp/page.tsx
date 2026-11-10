@@ -132,7 +132,7 @@ const TOOL_GROUPS: { group: string; note?: string; tools: { name: string; desc: 
     group: "CHIP account",
     tools: [
       { name: "get_chip_settings", desc: "Read the account's CHIP credential status: configured, verified, mode, brand_id, secret_key_masked, email_fallback, whitelist. The full secret is never returned. Read-only." },
-      { name: "set_chip_settings", desc: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only." },
+      { name: "set_chip_settings", desc: "Set the account's CHIP credentials (brand_id + secret_key + mode). mode is test or live: the mode you created the key in, in the CHIP portal. Empty mode keeps the stored one (test when none is stored); the key carries no prefix, so the mode is never inferred. Empty secret = keep the existing key. Validated against CHIP before saving. Admin only." },
       { name: "clear_chip_settings", desc: "Clear the account's CHIP credentials. Admin only." },
     ],
   },

@@ -221,10 +221,17 @@ test.describe("the document declaration matches the prose (WCAG 3.1.1)", () => {
     await page.goto("/docs", { waitUntil: "networkidle" });
     await expect(page.locator("html")).toHaveAttribute("dir", "ltr");
 
-    // A real click path a reader can run: the docs chrome's own back link. The
+    // A real click path a reader can run: the docs chrome's own brand link. The
     // route changes and the language does NOT, so an implementation that read
     // the path once on mount leaves the next page declared English.
-    await page.getByRole("link", { name: /Back to JomForm/ }).click();
+    //
+    // Card t_ff973d0b replaced the plain "← Back to JomForm" text link with the
+    // branded lockup (JF tile + wordmark) that also reaches `/`. The link carries
+    // no aria-label — its accessible name is its own text, "JomForm Docs", so a
+    // speech-input label can never disagree with what is on screen at any width.
+    // The path this case walks — click the docs chrome's own way out, land on `/`,
+    // and watch the declaration follow — is unchanged; only the control moved.
+    await page.getByRole("link", { name: /JomForm Docs/ }).click();
     await expect.poll(() => new URL(page.url()).pathname, { timeout: 30_000 }).toBe("/");
 
     await expect(page.getByText(DICT["land.hero1"].ar).first()).toBeVisible({ timeout: 30_000 });

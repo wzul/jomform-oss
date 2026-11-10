@@ -79,8 +79,10 @@
 //   * The `/50` admin message bubble (both on /admin and on /feedback) sits on a
 //     WHITE panel: painted surface #f6f9ff, `--jf-muted` 4.584:1, axe scoped 0
 //     violations — a measured PASS, so it is untouched.
-//   * The /forms template picker's blank card is `/40` on hover over white:
-//     #f8faff -> 4.629:1, a measured PASS.
+//   * The builder's template-picker blank card no longer carries a hover tint
+//     (`/40` over white, measured 4.629:1) — card t_bb0d0bee made it a card with
+//     its own filled CTA instead of a clickable tinted button, so there is no
+//     tinted surface left to audit.
 //   * The builder canvas drop ghost is `bg-indigo-50/50` with text
 //     `--jf-primary-on-tint` (`#4338ca`, 7.36:1 on that composite) and its tinted
 //     state is not reachable in a held drag: `canvasDragOver` reads `dragging` from

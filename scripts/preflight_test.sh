@@ -2108,6 +2108,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     lint)     printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)      printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    menufixture) printf '%s\n' 'scripts/menu-fixture-e2e.sh' 'api/cmd/menu-fixture/*' 'api/internal/menufixture/*' 'web/e2e/menu-checkout-option-group.spec.ts' 'web/playwright.menufixture.config.ts' ;;
     speccounts) printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)  printf '%s\n' 'deploy/monitoring/*' ;;

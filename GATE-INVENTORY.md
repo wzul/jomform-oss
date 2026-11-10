@@ -12,8 +12,9 @@ theoretical failure — `t_59df76bb` (dev) blocked on exactly this, and the same
 class of edit has been attempted repeatedly (`t_7f89fdf4`, `t_14d9456f`,
 `t_fe89f2f6`, `t_a170e5de`, `t_0060e4f0`). Every gate-table update therefore
 became a human-only edit, which is why the table fell **five** gates behind the
-runner at one point. It is level again: **25 rows for the 25 gates**
-`./scripts/preflight.sh --list` prints (measured 2026-11-01, after card
+runner at one point. It is level again: **26 rows for the 26 gates**
+`./scripts/preflight.sh --list` prints (measured 2026-11-10, after card
+`t_ef32ea3b` added `menufixture`; 25 for 25 when measured 2026-11-01, after card
 `t_28a06494` added `selfhost` and card `t_e2f3a553` added `design`; 23 for 23
 when measured 2026-10-28, after card `t_87634d31` added `mediaprobe`;
 `t_d9cf1ddd` added `prunesync`; 20 for 20 when measured 2026-10-12 (card
@@ -104,6 +105,7 @@ conflict.
 | `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the shipping web artifact — no other gate builds the web image — see [`gate-inventory/webimage.md`](gate-inventory/webimage.md) |
 | `a11y` | web | `cd web && npm run a11y` | axe-core critical/serious violations — the axe family only (project `a11y`) — see [`gate-inventory/a11y.md`](gate-inventory/a11y.md) |
 | `e2e` | web | `cd web && npm run e2e` | the feature end-to-end specs under `web/e2e/` (project `feature-e2e`) — see [`gate-inventory/e2e.md`](gate-inventory/e2e.md) |
+| `menufixture` | web | `bash scripts/menu-fixture-e2e.sh` | the menu checkout's option-group **layout** in Chromium at 1200px and 375px, against the real public handler on a scratch schema — see [`gate-inventory/menufixture.md`](gate-inventory/menufixture.md) |
 | `speccounts` | web | `bash scripts/spec-counts.sh` | the two spec counts the `a11y` and `e2e` detail files quote, re-read from the tree — see [`gate-inventory/speccounts.md`](gate-inventory/speccounts.md) |
 | `npmaudit` | web | `cd web && npm run audit:gate` | high/critical npm advisories, plus a self-expiring exception list — see [`gate-inventory/npmaudit.md`](gate-inventory/npmaudit.md) |
 | `gitleaks` | secrets | `gitleaks detect` over the **full git history** | committed secrets over the full git history (the repo may go public) — see [`gate-inventory/gitleaks.md`](gate-inventory/gitleaks.md) |

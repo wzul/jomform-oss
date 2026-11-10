@@ -18,9 +18,7 @@ Either way the money lands in the same sale list and receipt flow as any other p
 
 ![Settings with the CHIP tab open and the Brand ID field boxed](01-settings-chip.png)
 
-Settings → **CHIP**. Paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal and save.
-The mode is auto-detected from the key (`sk_test_…` = Test, `sk_live_…` = Live), and this is what
-turns the form's pay button into a working payment.
+Settings → **CHIP**. Paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal, pick the **Mode** the key was created in there (Test or Live), and save. The mode is a label you choose, because the key itself carries no hint of which one it is. That save is what turns the form's pay button into a working payment.
 
 ## 2. Add your first donation amount in Products
 

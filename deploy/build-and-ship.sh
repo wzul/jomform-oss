@@ -44,6 +44,22 @@
 #   6. verify: docker compose logs <service> | head   → startup line shows
 #      version=... commit=... matching the tag; then curl the health route
 #                                                      [--ship does this]
+#   7. purge the CDN's cached `/_next/static/*` entries on the deploy host
+#                                                      [--ship does this]
+#
+# Step 7 exists because `/ _next/static/*` is served `public, max-age=31536000,
+# immutable` and the CDN caches the RESPONSE INCLUDING ITS HEADERS. A release that
+# changes headers but not asset bytes keeps the same hashed chunk names, so the
+# edge keeps answering with the OLD header set for up to a year: measured on prod
+# 2026-11-09, 39 of the shipped image's 60 assets came from the edge with ZERO
+# security headers (ages up to 23.8 days) while the origin had carried them since
+# v1.30.0. It runs ONLY after the ship is PROVEN (step 8b) — a failed recreate
+# leaves the old image serving, and purging then would only fill the edge from the
+# old origin. deploy/edge-purge-static.sh decides the rest: with
+# JF_CF_PURGE_TOKEN + JF_CF_PURGE_ZONE_ID set on the deployment host it purges the
+# prefix and logs the CDN's answer; with either unset or EMPTY it prints a LOUD
+# warning and the release continues (the ship already happened, and no exit code
+# brings the asset bytes back).
 #
 # WITHOUT --ship this is a BUILDER: it builds, saves the tarball and PRINTS steps 2-6 for a
 # human. It never claims the image shipped, and it says nothing that could be read as a ship:
@@ -229,6 +245,87 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # reading both as a generic 1.
 die_rc() { local rc=$1; shift; echo "ERROR: $*" >&2; exit "$rc"; }
 info() { echo "==> $*"; }
+
+# ---------------------------------------------------------------------------
+# purge_static_edge — drop the CDN's cached `/_next/static/*` entries (step 8c).
+#
+# THE CREDENTIAL IS NOT HERE. JF_CF_PURGE_TOKEN / JF_CF_PURGE_ZONE_ID live in the
+# deployment host's compose `.env` (that is where cdnpurge reads them from, in the
+# API container), and this shell is a different machine that never holds them. So
+# the step runs WHERE THE TOKEN IS: this function builds one stdin stream — the
+# four purge vars read out of `$SP_COMPOSE_DIR/.env` by NAME, then
+# deploy/edge-purge-static.sh's own bytes — and pipes it into `bash -s` on
+# $SP_DEST. The .env is READ, never sourced: it belongs to compose, not to bash,
+# and a value containing `$(…)` must not become a command here.
+#
+# WHY READ THE VARS RATHER THAN LET THE SCRIPT DO IT: the script must also be
+# runnable by hand with a plain environment (that is how its own suite drives it),
+# so it reads the environment it is given and nothing else.
+#
+# NOTHING IN THIS PATH FAILS THE RELEASE. The ship has already been PROVEN by the
+# time this runs; a CDN that refuses, a missing curl, an unreachable .env, or an
+# unprovisioned token leave prod running the bytes it is running. What must NOT
+# happen is a silent "purged" claim, so every non-purged outcome prints the same
+# canonical sentence, and `edge not purged:` is what a log search finds.
+purge_static_edge() {
+  local script="$REPO_ROOT/deploy/edge-purge-static.sh" rc=0 stream
+  local canon='edge not purged: stale `_next/static` headers may be served for up to a year after a header-only release'
+  if [ ! -r "$script" ]; then
+    info "WARNING: $canon"
+    info "         $script is missing — restore it from the gated tree (git checkout -- deploy/edge-purge-static.sh)"
+    return 0
+  fi
+  info "purging the static edge prefix through $SP_DEST (deploy/edge-purge-static.sh)"
+  stream="$(mktemp "${TMPDIR:-/tmp}/static-edge-purge.XXXXXX" 2>/dev/null)" || stream=""
+  if [ -z "$stream" ]; then
+    info "WARNING: $canon"
+    info "         could not create a temp file to build the purge stream"
+    return 0
+  fi
+  {
+    printf 'set -uo pipefail\n'
+    printf 'cd %q || exit 3\n' "$SP_COMPOSE_DIR"
+    printf '%s\n' '[ -r .env ] || exit 4'
+    # Read one var by NAME out of .env, last definition wins, surrounding quotes
+    # stripped. Deliberately not `set -a; . .env`: compose's .env is not a bash
+    # script and sourcing it could execute what it holds.
+    cat <<'PROLOGUE'
+val() { awk -v k="$1" '{ line=$0; sub(/^[ \t]+/, "", line); if (index(line, k "=") == 1) { v=substr(line, length(k)+2); out=v } } END { printf "%s", out }' .env; }
+unq() { local v="$1"; case "$v" in \"*\") v="${v#\"}"; v="${v%\"}" ;; \'*\') v="${v#\'}"; v="${v%\'}" ;; esac; printf '%s' "$v"; }
+JF_CF_PURGE_TOKEN="$(unq "$(val JF_CF_PURGE_TOKEN)")"
+JF_CF_PURGE_ZONE_ID="$(unq "$(val JF_CF_PURGE_ZONE_ID)")"
+JF_CF_PURGE_HOSTS="$(unq "$(val JF_CF_PURGE_HOSTS)")"
+JF_CF_PURGE_API_BASE="$(unq "$(val JF_CF_PURGE_API_BASE)")"
+APP_BASE_URL="$(unq "$(val APP_BASE_URL)")"
+export JF_CF_PURGE_TOKEN JF_CF_PURGE_ZONE_ID JF_CF_PURGE_HOSTS JF_CF_PURGE_API_BASE APP_BASE_URL
+PROLOGUE
+    cat "$script"
+  } >"$stream" || {
+    rm -f "$stream"
+    info "WARNING: $canon"
+    info "         could not write the purge stream"
+    return 0
+  }
+  ssh "${SP_SSH_OPTS[@]}" "$SP_DEST" 'bash -s' <"$stream" || rc=$?
+  rm -f "$stream"
+  case "$rc" in
+    0) : ;;
+    3)
+      info "WARNING: $canon"
+      info "         the purge step on $SP_DEST exited 3 (see the reason above)"
+      ;;
+    4)
+      info "WARNING: $canon"
+      info "         $SP_DEST has no $SP_COMPOSE_DIR/.env — the purge credentials could not be read"
+      ;;
+    *)
+      info "WARNING: $canon"
+      info "         ssh/bash on $SP_DEST exited $rc — no purge was attempted"
+      ;;
+  esac
+  return 0
+}
+
 
 # usage() prints this script's own header comment (from line 2 down to the
 # `set -euo pipefail` line) with the leading "# " stripped.
@@ -693,6 +790,10 @@ if [ "$SHIP_RAN" = "1" ]; then
     die_rc 7 "SHIP NOT PROVEN — '$SERVICE' on $SP_DEST is not running $VERSION (see above). The image exists on the host, but prod is serving something else: do NOT report this release as shipped. Fix the service (docker tag/skip-latest/compose recreate) and re-run, or roll back deliberately."
   fi
   info "SHIPPED $IMAGE:$VERSION — '$SERVICE' on $SP_DEST is running it (org.opencontainers.image.version=$VERSION)"
+  # 8c. The roll is PROVEN, so the static edge prefix may be purged. This is the
+  # only call site: on an unproven roll die_rc 7 above already exited, because
+  # purging while the OLD image serves would just refill the edge from it.
+  purge_static_edge
 fi
 
 # ---------------------------------------------------------------------------
@@ -709,6 +810,15 @@ Image:      $IMAGE:$VERSION
 
 SHIPPED to $SP_DEST and VERIFIED: service '$SERVICE' is running it
   (org.opencontainers.image.version=$VERSION read from the running container).
+
+Step 8c asked the CDN to drop its cached /_next/static/ entries. Read the step's own line
+above, because it is the only thing that knows the answer:
+  'edge purge: … success=true'  -> the CDN ACCEPTED the purge (a following request should
+                                   answer CF-Cache-Status: MISS)
+  'edge not purged: …'          -> it did NOT happen: the edge still holds the previous
+                                   header set for up to a year, so set JF_CF_PURGE_TOKEN and
+                                   JF_CF_PURGE_ZONE_ID in $SP_COMPOSE_DIR/.env and re-run this
+                                   script, or purge the zone once by hand.
 
 Nothing is left to run by hand. Rollback: put the previous tag back on :latest
 and recreate, e.g.

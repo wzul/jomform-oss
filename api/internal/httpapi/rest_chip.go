@@ -3,9 +3,9 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/wzul/jomform/api/internal/cryptoutil"
+	"github.com/wzul/jomform/api/internal/dbstore"
 )
 
 // setChipCreds saves Brand ID + Secret Key (AES-256-GCM encrypted at rest).
@@ -17,7 +17,7 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	var in struct {
 		BrandID         string   `json:"brand_id"`
 		SecretKey       string   `json:"secret_key"`
-		Mode            string   `json:"mode"` // optional label; auto-derived from secret prefix
+		Mode            string   `json:"mode"` // "test"|"live": the merchant's choice; empty keeps the stored mode
 		EmailFallback   string   `json:"email_fallback"`
 		MethodWhitelist []string `json:"payment_method_whitelist"`
 	}
@@ -30,19 +30,23 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 	// secret_key keeps the existing stored key (so the merchant can edit
 	// other fields without re-entering the secret); a non-empty value
 	// replaces it. Brand ID is always required.
+	//
+	// Card t_8f38dc34: the stored mode and verified state are read on BOTH
+	// paths now, because an omitted mode keeps what the account already says
+	// (dbstore.ResolveChipMode) — a save that only edits the fallback email
+	// must not relabel live credentials as test.
 	secretKey := in.SecretKey
 	secretEnc := ""
 	existingMode := ""
 	existingVerified := false
-	if secretKey == "" {
-		// Preserve the existing encrypted secret (and its mode + verified
-		// state) when none was provided.
-		if acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID); err == nil {
+	if acc, err := h.Accounts.ByID(r.Context(), actx.Account.ID); err == nil {
+		existingMode = acc.ChipMode
+		existingVerified = acc.ChipVerified
+		if secretKey == "" {
 			secretEnc = acc.ChipSecretKeyEnc
-			existingMode = acc.ChipMode
-			existingVerified = acc.ChipVerified
 		}
-	} else {
+	}
+	if secretKey != "" {
 		enc, err := cryptoutil.Encrypt(h.SecretsKey, []byte(secretKey))
 		if err != nil {
 			respondErr(w, r, err)
@@ -55,20 +59,17 @@ func (h *RESTHandlers) setChipCreds(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 
-	// Mode semantics follow CHIP WooCommerce: one API endpoint; test vs live is
-	// decided by WHICH secret key the merchant pastes (sk_test_… vs sk_live_…).
-	// Derive the label automatically; in.Mode is only a fallback. When the
-	// secret is unchanged (blank), keep the existing mode.
-	mode := strings.ToLower(in.Mode)
-	if secretKey == "" && existingMode != "" {
-		mode = existingMode
-	} else if strings.HasPrefix(strings.ToLower(secretKey), "sk_live") {
-		mode = "live"
-	} else if strings.HasPrefix(strings.ToLower(secretKey), "sk_test") {
-		mode = "test"
-	}
-	if mode != "live" && mode != "test" {
-		mode = "test"
+	// Card t_8f38dc34: the mode is the merchant's CHOICE, never a reading of
+	// the secret key. CHIP issues a separate key per mode in the merchant
+	// portal and the key is an opaque bearer token with no published prefix,
+	// so there is nothing to infer from it. dbstore.ResolveChipMode is the ONE
+	// rule this door shares with the MCP door: an explicit choice wins, an
+	// omitted mode keeps the stored one, and a request that names neither
+	// test nor live is rejected rather than coerced.
+	mode, modeOK := dbstore.ResolveChipMode(in.Mode, existingMode)
+	if !modeOK {
+		writeErr(w, http.StatusBadRequest, `mode must be "test" or "live"`)
+		return
 	}
 
 	// Validate against CHIP before storing (Woo parity) — save is REJECTED

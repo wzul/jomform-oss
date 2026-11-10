@@ -36,6 +36,7 @@ test.beforeEach(async ({ page, baseURL }) => {
 import AxeBuilder from "@axe-core/playwright";
 import type { AxeResults, Result } from "axe-core";
 import { DICT } from "../src/components/i18nDict";
+import { EVENT_LABEL_KEYS } from "../src/lib/activityEvents";
 
 // The gate's own rule: critical/serious fail, everything else is reported.
 // Kept identical to e2e/a11y.spec.ts so the two cannot drift.
@@ -165,14 +166,24 @@ test.describe("activity page (dashboard audit trail)", () => {
     });
     await expect(page.getByText(EN.subtitle)).toBeVisible();
 
-    // The rows: the event NAME is the load-bearing cell, and the card's whole
-    // point is that `workspace.deleted` is now visible to the merchant who did
-    // the delete.
+    // The rows: the label is the load-bearing cell, and the card's whole point
+    // is that a workspace deletion is now visible to the merchant who did it —
+    // as a SENTENCE, not as `workspace.deleted` (card t_804040d3). The English
+    // labels are read out of the app's own dictionary, and the machine name must
+    // still be reachable: it is the cell's title.
     const rows = page.locator("tbody tr");
     await expect(rows).toHaveCount(EVENTS.length);
-    await expect(page.getByRole("cell", { name: "workspace.deleted" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "settings.api_key_created" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "mcp.tool_call" })).toBeVisible();
+    for (const name of ["workspace.deleted", "settings.api_key_created", "mcp.tool_call"]) {
+      const cell = page.getByRole("cell", { name: DICT[EVENT_LABEL_KEYS[name]].en });
+      await expect(cell, `the row for ${name} does not render its dictionary label`).toBeVisible();
+      await expect(cell, `the machine event name must stay reachable as the cell's title`).toHaveAttribute(
+        "title",
+        name,
+      );
+      // And the raw token is NOT the cell's text any more — that was the defect.
+      await expect(page.getByRole("cell", { name, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByText("workspace.deleted")).toHaveCount(0);
 
     // The detail payload and the timestamp column are both rendered.
     await expect(page.getByText('"slug":"acme-store"')).toBeVisible();
@@ -275,6 +286,41 @@ test.describe("activity page (dashboard audit trail)", () => {
     // The server's PROSE must never be rendered (issue #6177's rule) — an
     // unknown code falls back to the page's own localized sentence.
     await expect(page.getByText("ralat dalaman")).toHaveCount(0);
+  });
+
+  test("the From/To pair reads as ONE range on a phone, not a ragged pair", async ({ page, baseURL }) => {
+    // Measured BEFORE the fix at 390x844 (card t_804040d3): the event-type select
+    // and `From` shared the first filter row (y=217) and `To` sat alone on the
+    // second (y=284), so the range read as two unrelated fields. The pair is now
+    // one flex item: same row, side by side, both inside the viewport.
+    await stubAPI(page);
+    await freshState(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/activity`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: EN.title, exact: true })).toBeVisible({ timeout: 15_000 });
+
+    const from = await page.getByLabel(EN.filterFrom).boundingBox();
+    const to = await page.getByLabel(EN.filterTo).boundingBox();
+    expect(from, "the From field has no box — it did not render").toBeTruthy();
+    expect(to, "the To field has no box — it did not render").toBeTruthy();
+
+    expect(
+      Math.abs(from!.y - to!.y),
+      `From and To are not on the same row: From y=${from!.y}, To y=${to!.y}. The range must read as one pair, ` +
+        "not as two fields that wrapped apart.",
+    ).toBeLessThanOrEqual(2);
+    expect(
+      from!.x + from!.width,
+      `To (x=${to!.x}) is not to the RIGHT of From (ends at ${from!.x + from!.width}) — the range is not in reading order`,
+    ).toBeLessThanOrEqual(to!.x + 1);
+    expect(
+      to!.x + to!.width,
+      `the To field runs past the 390px viewport (ends at ${to!.x + to!.width}) — it is clipped on a phone`,
+    ).toBeLessThanOrEqual(390);
+    // Both boxes stay usable: the pair shares the row, it does not squeeze either
+    // field to a sliver.
+    expect(from!.width, `the From field is only ${from!.width}px wide`).toBeGreaterThan(100);
+    expect(to!.width, `the To field is only ${to!.width}px wide`).toBeGreaterThan(100);
   });
 
   test("has no critical/serious axe violations", async ({ page, baseURL }) => {

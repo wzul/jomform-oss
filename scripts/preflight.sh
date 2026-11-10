@@ -54,6 +54,24 @@
 #                         jomform-web tag behind on every card.
 #              a11y       cd web && npm run a11y    (axe-core family only)
 #              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
+#              menufixture bash scripts/menu-fixture-e2e.sh
+#                         (the LAYOUT half of the menu checkout's option groups:
+#                         the fixture serves the real public handler from a
+#                         scratch schema of the test database, and Chromium
+#                         measures each option control at 1200px and 375px. It
+#                         runs AFTER `e2e` on purpose — it reuses the browser
+#                         cache that gate just warmed — and it is deliberately
+#                         NOT a second copy of the Go half: the `test` gate
+#                         already proves the page carries both groups and that
+#                         the order route stores an answer, which is a fact no
+#                         layout engine is needed for. Card t_664549fc is why
+#                         this gate exists: `.sheetfoot input {width:100%;
+#                         height:44px}` also matched each option's radio, so a
+#                         buyer saw a 399x44 control with the merchant's label
+#                         pushed off a 375px screen, and every guard above was
+#                         green. The spec SKIPS inside `e2e` (no MENU_FIXTURE_URL
+#                         there), so without THIS gate the only guard that can
+#                         see that class never runs. ~18s with the Go build warm)
 #              speccounts scripts/spec-counts.sh   (RE-READS the two spec counts the
 #                         `a11y`/`e2e` gates' detail files (gate-inventory/<gate>.md)
 #                         quote: it runs each project's `--list` on THIS tree and reds
@@ -253,6 +271,10 @@
 #                               refuses), so the count can never be read as
 #                               evidence from an uninstalled tree.
 #   playwright chromium         `cd web && npx playwright install chromium`
+#                               (`menufixture` also needs the TEST DATABASE and the
+#                               Go toolchain: it builds api/cmd/menu-fixture and
+#                               seeds a scratch SCHEMA of that database. Both are
+#                               refused loudly, with the fix named, in preflight_env.)
 #   docker daemon               the webimage gate. If `docker info` cannot
 #                               reach a daemon the gate is REFUSED (loudly),
 #                               it does not skip: a skipped gate is not a
@@ -267,6 +289,16 @@
 #   0 skipped in 753s`: build 7s, vet 1s, test 279s, govuln 6s, web 45s,
 #   webimage 73s, a11y 29s, e2e 123s, npmaudit 1s, gitleaks 9s, monitor 8s,
 #   tmpkey 3s, backup 30s, prunewt 16s, refguard 4s, selftest 111s.
+#   (That sample predates several gates — it is the per-gate SHAPE of a full run,
+#   not the current total; `--list` is the current set.)
+#
+#   `menufixture` (added by card t_ef32ea3b, so it is not in the 2026-10-03
+#   sample): MEASURED 18s — `bash scripts/menu-fixture-e2e.sh` -> `3 passed
+#   (3.3s)`, real 0m18.4s with the Go build already warm (2026-11-09). Cold, on
+#   a tree whose fixture package has never been built, the same command took 39s
+#   (measured 2026-11-10 on a fresh worktree: 39s including `go build
+#   ./cmd/menu-fixture`), which is why it runs AFTER `e2e`/`build` rather than
+#   before them. The 18s is the figure a full run pays.
 #
 #   THAT IS ONE SAMPLE, NOT A BUDGET, and the error bar is wide by construction:
 #   wall clock tracks host load and the gate set, not the tree. Across the runs
@@ -340,7 +372,7 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e npmaudit gitleaks monitor tmpkey mediaprobe backup host selfhost prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e menufixture npmaudit gitleaks monitor tmpkey mediaprobe backup host selfhost prunewt prunesync prunehost refguard selftest)
 
 ONLY=""
 SKIP=""
@@ -644,6 +676,12 @@ pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
     web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
+    # `menufixture` is the layout half of the menu checkout, so BOTH halves of the
+    # stack are its area: the page it measures is served by api/internal/httpapi
+    # (the `.sheetfoot` stylesheet) through the fixture, and the measurement is a
+    # web/e2e spec with its own playwright config. Its own runner is a claim too —
+    # a diff to the script that does not run it is how a gate stops measuring.
+    menufixture)           printf '%s\n' 'api/*' 'web/e2e/*' 'web/playwright.menufixture.config.ts' 'scripts/menu-fixture-e2e.sh' ;;
     # `speccounts` reads the two spec FAMILIES (it enumerates them) and the
     # per-gate detail files that quote their sizes. All of it matters: a new spec
     # file must select it (that is the change that rots a count), and so must an
@@ -684,6 +722,7 @@ pw_sources() {
     lint)                  printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
     e2e)                   printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    menufixture)           printf '%s\n' 'scripts/menu-fixture-e2e.sh' 'api/cmd/menu-fixture/*' 'api/internal/menufixture/*' 'web/e2e/menu-checkout-option-group.spec.ts' 'web/playwright.menufixture.config.ts' ;;
     speccounts)            printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
     monitor)               printf '%s\n' 'deploy/monitoring/*' ;;
@@ -2312,7 +2351,7 @@ _node_refuse_web() {  # <tests|playwright>
 # proves nothing.
 # ---------------------------------------------------------------------------
 preflight_env() {
-  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4" need_lint="$5" need_web_tests="${6:-0}"
+  local need_api="$1" need_web="$2" need_a11y="$3" need_docker="$4" need_lint="$5" need_web_tests="${6:-0}" need_menufixture="${7:-0}"
 
   if [ "$need_api" = 1 ]; then
     [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
@@ -2366,6 +2405,22 @@ preflight_env() {
   if [ "$need_lint" = 1 ]; then
     [ -x "$REPO_ROOT/web/node_modules/.bin/eslint" ] || die \
       "web/node_modules/.bin/eslint is missing — the lint gate would report nothing (npm exits non-zero with 'eslint: not found' rather than linting). Seed it with: cd web && npm ci"
+  fi
+
+  # `menufixture` — the layout half of the menu checkout. Three prerequisites, each
+  # refused LOUDLY with the command that fixes it: a test database (the fixture seeds
+  # a scratch SCHEMA of it), the Go toolchain (it builds api/cmd/menu-fixture), and
+  # the playwright binary (web/node_modules). A missing Chromium is caught by
+  # playwright itself with an "Executable doesn't exist … npx playwright install"
+  # failure, which is a red gate, not a skip. NOTHING here may fall through: a layout
+  # gate that silently measured nothing is exactly the shape card t_664549fc shipped.
+  if [ "$need_menufixture" = 1 ]; then
+    [ -n "${JOMFORM_TEST_DATABASE_URL:-}" ] || die \
+      "JOMFORM_TEST_DATABASE_URL is unset — the menufixture gate seeds a scratch SCHEMA of the shared test database and cannot measure the menu checkout without it. Run: source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}"
+    command -v go >/dev/null 2>&1 || die \
+      "go is not on PATH — the menufixture gate builds the fixture from api/cmd/menu-fixture, which is the server it measures"
+    [ -x "$REPO_ROOT/web/node_modules/.bin/playwright" ] || die \
+      "web/node_modules/.bin/playwright is missing — the menufixture gate measures the served page in Chromium and would run NO test without it. Seed it with: cd web && npm ci && npx playwright install chromium"
   fi
 
   # `webimage` — the one gate that covers the SHIPPING artifact, so a host that
@@ -2650,7 +2705,7 @@ summary() {
 }
 
 # --- which gates are selected, for the env preflight ------------------------
-g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_speccounts=0; g_a11y=0; g_npmaudit=0; g_gitleaks=0; g_prunehost=0
+g_build=0; g_vet=0; g_test=0; g_govuln=0; g_web=0; g_lint=0; g_webimage=0; g_speccounts=0; g_a11y=0; g_menufixture=0; g_npmaudit=0; g_gitleaks=0; g_prunehost=0
 selected build    && g_build=1
 selected vet      && g_vet=1
 selected test     && g_test=1
@@ -2660,11 +2715,12 @@ selected lint     && g_lint=1
 selected webimage && g_webimage=1
 selected speccounts && g_speccounts=1
 selected a11y     && g_a11y=1
+selected menufixture && g_menufixture=1
 selected npmaudit && g_npmaudit=1
 selected gitleaks && g_gitleaks=1
 selected prunehost && g_prunehost=1
 
-need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0; need_web_tests=0
+need_api=0; need_web=0; need_a11y=0; need_docker=0; need_lint=0; need_web_tests=0; need_menufixture=0
 if [ $g_build = 1 ] || [ $g_vet = 1 ] || [ $g_test = 1 ] || [ $g_govuln = 1 ]; then need_api=1; fi
 # `web` is the gate whose node floor is the type-stripping one (`npm run build`
 # starts with `node --test … *.test.ts`); an a11y-only run needs only playwright's
@@ -2685,7 +2741,14 @@ if [ $g_prunehost = 1 ]; then need_docker=1; fi
 # web/node_modules — it does NOT need the full `web` build. Keeping them separate
 # means a lint failure is reported as a lint failure, not as a failed build.
 if [ $g_lint = 1 ]; then need_lint=1; fi
-preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker" "$need_lint" "$need_web_tests"
+# `menufixture` builds the Go fixture command (toolchain), seeds a scratch SCHEMA of
+# the shared TEST database, and drives Chromium through web/node_modules/.bin/playwright.
+# It needs NO Valkey — the fixture's handler reads Postgres only — so it does not set
+# `need_api` (which would demand a Valkey URL it never uses). All three checks live in
+# preflight_env so a missing prerequisite is a REFUSAL with the fix named, not a gate
+# that quietly measures nothing.
+if [ $g_menufixture = 1 ]; then need_menufixture=1; fi
+preflight_env "$need_api" "$need_web" "$need_a11y" "$need_docker" "$need_lint" "$need_web_tests" "$need_menufixture"
 
 # ---------------------------------------------------------------------------
 # api/build — the module still compiles.
@@ -3344,6 +3407,46 @@ e2e_run() {
 
 run a11y "cd web && npm run a11y (axe-core family; the feature specs are gate \`e2e\`)" a11y_run
 run e2e "cd web && npm run e2e (the feature specs under web/e2e)" e2e_run
+
+# ---- menufixture: the menu checkout's option-group LAYOUT (card t_ef32ea3b) ---
+#
+# WHAT IT ADDS THAT NOTHING ELSE CAN. The `test` gate's menufixture Go test pins the
+# served page's markup and the order route's storage; the cascade of the anti-defect
+# rule is pinned in httpapi/menu_radio_size_t_664549fc_test.go. Neither can resolve a
+# flex row or an intrinsic control size, which is exactly the shape card t_664549fc
+# shipped: `.sheetfoot input { width:100%; height:44px }` (the buyer-field rule) also
+# matched each option's radio, so the control took the row (399x44) and pushed the
+# merchant's label to the row's edge, off a 375px screen. Every gate above was green.
+#
+# WHY IT DID NOT EXIST BEFORE. web/e2e/menu-checkout-option-group.spec.ts has been in
+# the tree since t_2244109a, but it SKIPS: it needs MENU_FIXTURE_URL, which only
+# scripts/menu-fixture-e2e.sh sets, and that script's header used to say "NOT A GATE"
+# because the cost looked like it belonged on demand. MEASURED 2026-11-09: 3 passed
+# (3.3s), real 0m18.4s with the Go build warm — cheaper than `speccounts`, and it
+# leaves no schema, listener or process behind. So the only guard that can see this
+# class now runs on every release instead of when a lane remembers.
+#
+# ORDER MATTERS: it runs immediately AFTER `e2e`, which has just warmed the browser
+# cache. It binds an EPHEMERAL loopback port (:0) and its own `test_menufixture_fx_p<pid>`
+# schema, so it collides with neither the a11y/e2e server port claim nor the `test`
+# gate's `test_<pkg>_p<pid>` schemas, and two lanes may run it at once.
+#
+# IT FAILS LOUDLY, NEVER SKIPS: the prerequisites are refused in preflight_env (the
+# test database, the Go toolchain, the playwright binary) and the script itself dies
+# on each of them; a missing Chromium is playwright's own loud failure. There is no
+# path here that exits 0 without having measured the page.
+#
+# CPU: nothing in this gate caps itself, and it does not need to — the DISCIPLINE is
+# the one the whole preflight already runs under. deploy/build-and-ship.sh wraps this
+# script in `systemd-run -p CPUQuota=$GATE_CPU_QUOTA` (default 300% = 3 cores) and
+# deploy/merge-train.sh wraps it the same way, so `menufixture` is inside that budget
+# like every other gate. Its own measured CPU footprint is small: the browser step is
+# 3 tests / ~4-7s, and the rest is one `go build` of api/cmd/menu-fixture.
+menufixture_run() {
+  cd "$REPO_ROOT" || return 1
+  bash scripts/menu-fixture-e2e.sh
+}
+run menufixture "bash scripts/menu-fixture-e2e.sh (option-group layout at 1200px and 375px, real handler on a scratch schema)" menufixture_run
 
 # ---------------------------------------------------------------------------
 # web/npmaudit — fail on high/critical advisories. Never `|| true`.

@@ -316,6 +316,18 @@ test("the scan is looking at a real tree and resolving the bulk of it", () => {
   //     the five locales — the same trade the chatProposal/chatsSteps sites make,
   //     so a new button cannot ship as a raw key or a blank label.
   //
+  //   * card t_804040d3 took the last of that headroom, with no raise: app/activity/
+  //     page.tsx renders `t(labelKey)`, where `labelKey` is the `act.event.*` key
+  //     src/lib/activityEvents.ts resolves from the event name the SERVER sent.
+  //     The event vocabulary lives in Go (the `Events.Record(...)` sites), so no
+  //     static scan can name these keys. Paid for by the guard appended to
+  //     src/lib/activityPage.test.ts: it reads every recorded event name out of
+  //     api/internal, expands the three names built at the call site
+  //     (`form.status_*`, `form.bulk_*`, `product.bulk_*`), and fails when one has
+  //     no `act.event.*` entry in any of the five locales — and in the other
+  //     direction when a label names an event nothing records. The count is 65 of
+  //     65, so the NEXT dynamic site fails this assertion until someone pays for it.
+  //
   // 65 is MEASURED on the merged tree (main + this branch), not the sum guessed in
   // the card: the assertion below names tree.dynamic.length when it is exceeded.
   assert.ok(

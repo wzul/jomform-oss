@@ -10,24 +10,29 @@ Playwright E2E scaffolding in `e2e/` and the money-invariant unit tests in
 
 JomForm stores CHIP credentials **per account** (`accounts.chip_brand_id`,
 `accounts.chip_secret_key_enc`, `accounts.chip_mode`). There is a single CHIP
-API endpoint; **test vs live is decided by which secret key the merchant
-pastes** (WooCommerce parity):
+API endpoint, and CHIP issues **separate keys for test and for live** in the
+merchant portal. The key itself is an opaque bearer token with no published
+prefix, so JomForm cannot tell which one it is holding.
 
-- `sk_test_…` → `chip_mode = 'test'`
-- `sk_live_…` → `chip_mode = 'live'`
+That is why **the mode is a choice, not a detection**: Settings → CHIP has a
+**Test / Live** control, defaulting to Test, and whatever the merchant picks is
+what `chip_mode` stores. It is a label: the key decides what CHIP actually does,
+so a test key never charges a real card whichever label it carries. If the label
+does not match the key, the badge is wrong but payments still follow the key.
 
-The mode label is auto-derived from the secret prefix in
-`api/internal/httpapi/rest_chip.go` (`setChipCreds`). A test-mode brand/secret
-pair is therefore just a normal account whose stored secret starts with
-`sk_test_`. No separate "sandbox flag" is needed — the sandbox is the account's
-test-mode credentials.
+`chip_mode` is decided by `dbstore.ResolveChipMode`, the one rule both write
+doors use (`api/internal/httpapi/rest_chip.go` for REST,
+`api/internal/mcpsrv/parity_issue396.go` for MCP). An omitted mode keeps the
+stored one, and a value that is neither `test` nor `live` is refused.
 
 ### Confirming a test-mode brand/secret exists for automated tests
 
 1. Create a CHIP **test** brand in the CHIP portal (Sandbox / Test mode).
-2. Copy its **Brand ID** and **Secret Key** (`sk_test_…`).
-3. In JomForm, set the account's CHIP credentials to that pair (dashboard
-   Settings → CHIP, or the `set_chip_credentials` MCP tool). The save is
+2. Copy its **Brand ID** and **Secret Key**. The key is an opaque token; there
+   is no prefix to recognise it by.
+3. In JomForm, set the account's CHIP credentials to that pair and pick
+   **Test** in the mode control (dashboard Settings → CHIP, or the
+   `set_chip_settings` MCP tool with `"mode": "test"`). The save is
    **validated against CHIP** (`ValidateCredentials`) before it is stored, so
    a wrong pair is rejected.
 4. Confirm the account now reports `chip_mode = 'test'` (dashboard Settings →

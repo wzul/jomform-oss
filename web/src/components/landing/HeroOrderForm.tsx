@@ -27,6 +27,7 @@
 import { useState } from "react";
 
 import { useI18n } from "../i18n";
+import { LANDING_PAY_METHODS } from "../i18nDict";
 import { formatMoney } from "../../lib/money";
 
 /** 8900 sen = RM89.00, the price of each row. */
@@ -163,17 +164,27 @@ export default function HeroOrderForm() {
         >
           {t("land.fmpay", { amount: formatMoney(totalSen) })}
         </button>
-        <p className="mt-2 text-center text-jf-3xs text-[var(--jf-muted)]">
-          Card · FPX · DuitNow QR · GrabPay
-        </p>
 
+        {/* ONE method list, brand names only (card t_b4e5881d).
+            This used to print the methods TWICE — a caption ("Card · FPX · DuitNow QR ·
+            GrabPay") and, right under it, a five-chip strip — and the two copies
+            disagreed: "Card" in the caption where the chips said "VISA" (a buyer reads
+            those as two different methods), four methods in one and five in the other, in
+            a different order. The caption is deleted; the strip stays, once.
+            The names are not written in this file: they come from `LANDING_PAY_METHODS`
+            in components/i18nDict.ts, because this page is translated into five locales
+            and the strip used to be hardcoded English. What IS translated is the claim
+            that these methods are accepted (`land.path2b`, `land.f2`); the brand tokens
+            read the same everywhere, so they live in one list rather than five entries a
+            translator could "fix". src/lib/landingPayMethods.test.ts fails if a landing
+            component names a method in its own source. */}
         <ul className="mt-2 flex flex-wrap justify-center gap-1.5">
-          {["FPX", "DuitNow QR", "VISA", "GrabPay", "Boost"].map((chip) => (
+          {LANDING_PAY_METHODS.map((method) => (
             <li
-              key={chip}
+              key={method}
               className="rounded-md bg-[var(--jf-bg)] px-2 py-0.5 text-jf-3xs font-semibold text-[var(--jf-text-secondary)]"
             >
-              {chip}
+              {method}
             </li>
           ))}
         </ul>

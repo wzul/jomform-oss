@@ -101,7 +101,18 @@ function Specimen({ label, children }: { label: string; children: React.ReactNod
 
 function ContrastTable({ rows, caption }: { rows: readonly ContrastPair[]; caption: string }) {
   return (
-    <div className="overflow-x-auto">
+    // A SCROLL BOX MUST BE A KEYBOARD-REACHABLE REGION (card t_804040d3). At
+    // 390px this table is 444px wide inside a 358px box, and a scroller with no
+    // tab stop cannot be scrolled from the keyboard — axe reports
+    // `scrollable-region-focusable` (serious) on each of these two nodes. The
+    // shape is the one `app/docs/docsProse.tsx` already uses for every docs
+    // table: `tabIndex={0}` for the tab stop, `role="region"` + a name so the
+    // focusable box is announced as a named region rather than a bare group (the
+    // name is the table's own caption, which is unique per instance, so axe's
+    // `landmark-unique` stays green).
+    // e2e/a11y-scroll-regions.spec.ts drives /design at 390px and fails if the
+    // tab stop or the name is dropped.
+    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={caption}>
       <Table>
         <caption className="pb-jf-2 text-left text-jf-read-sm text-[var(--jf-muted)]">{caption}</caption>
         <TableHead>
@@ -199,7 +210,7 @@ export default function DesignSystemPage() {
           <SectionHeading id="type" title="Type scale">
             Seven steps, each with its paired line-height. Set ONE utility and the line box follows.
           </SectionHeading>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Type scale table">
             <Table>
               <TableHead>
                 <TableRow>
@@ -514,7 +525,7 @@ export default function DesignSystemPage() {
             A native table with the surface decisions made once, and an empty state that is a ROW in the same table
             — so an empty result cannot render as a header over nothing.
           </SectionHeading>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Table specimen with rows">
             <Table>
               <TableHead>
                 <TableRow>
@@ -545,7 +556,7 @@ export default function DesignSystemPage() {
             </Table>
           </div>
 
-          <div className="mt-jf-6 overflow-x-auto">
+          <div className="mt-jf-6 overflow-x-auto" tabIndex={0} role="region" aria-label="Table specimen with no rows">
             <Table>
               <caption className="pb-jf-2 text-left text-jf-read-sm text-[var(--jf-muted)]">
                 The same table with no rows.

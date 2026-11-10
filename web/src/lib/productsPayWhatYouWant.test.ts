@@ -171,7 +171,17 @@ test("both write paths build the custom payload through the shared helper", () =
 test("the add row does not require a price for a pay-what-you-want product", () => {
   // The price input is `required`; leaving it mounted while the type is
   // custom_amount makes the browser refuse to submit a donation product.
-  const addForm = src.slice(src.indexOf("<form onSubmit={add}"), src.indexOf("</form>", src.indexOf("<form onSubmit={add}")));
+  //
+  // The anchor moved in card t_bb0d0bee: the row now carries an `id` (it is the
+  // reveal behind the header's "New product" button, whose `aria-controls`
+  // names it), so `<form onSubmit={add}` is no longer the literal opening tag.
+  // Anchor on the handler instead of on the attribute ORDER — that is the thing
+  // this test means, and a new attribute must not be able to hide the row.
+  const open = src.search(/<form\b[^>]*onSubmit=\{add\}/);
+  assert.notEqual(open, -1, "the quick-create form must still submit through add()");
+  const close = src.indexOf("</form>", open);
+  assert.notEqual(close, -1, "the add form never closes");
+  const addForm = src.slice(open, close);
   assert.ok(
     /type === "custom_amount"\s*\?/.test(addForm),
     "the add row must branch on custom_amount instead of always rendering the price field",
