@@ -71,9 +71,12 @@ import (
 	"github.com/wzul/jomform/api/internal/testdb"
 )
 
-// disable2faDocsPage is the docs page the parity guards treat as the reference
-// for this tool (api/internal/mcpsrv → ../../../web/src/app/docs/mcp/page.tsx).
-const disable2faDocsPage = "../../../web/src/app/docs/mcp/page.tsx"
+// The docs entry for disable_2fa is located through docsToolRowFor
+// (docs_surface_test.go), which reads the whole /docs/mcp surface — the hub plus
+// the four task pages plus the tool-list module they render. A single hard-coded
+// page was correct only while /docs/mcp was one page; after the split the row
+// lives in web/src/lib/mcpToolGroups.ts and a page-path constant made this guard
+// red against a correct tree (card t_ee4114af).
 
 // currentTOTPCode generates the code an authenticator app would show right now.
 func currentTOTPCode(t *testing.T, secret string) string {
@@ -219,29 +222,21 @@ func TestDisable2FAInputSchemaMatchesDocs(t *testing.T) {
 			"without this a call with BOTH proofs (or with neither) is accepted", got)
 	}
 
-	// The prose side. Both the docs page an agent reads and the tool Description
-	// an agent is handed must name each declared field.
-	docs, err := os.ReadFile(disable2faDocsPage)
-	if err != nil {
-		t.Fatalf("read %s: %v", disable2faDocsPage, err)
-	}
-	line := ""
-	for _, l := range strings.Split(string(docs), "\n") {
-		if strings.Contains(l, `name: "disable_2fa"`) {
-			line = l
-		}
-	}
-	if line == "" {
-		t.Fatalf("no docs entry for disable_2fa on %s — DOCUMENTATION PARITY requires one", disable2faDocsPage)
-	}
+	// The prose side. Both the docs entry an agent reads and the tool Description
+	// an agent is handed must name each declared field. The entry is located on
+	// the whole /docs/mcp surface — after the split the rows live in the module
+	// the pages render (card t_ee4114af) — and a missing or duplicated entry is a
+	// FAILURE here, never a skip.
+	entry := docsToolRowFor(t, "disable_2fa")
+	line := entry.text
 	desc := listTool(t, "disable_2fa").Description
 	if desc == "" {
 		t.Fatal("disable_2fa has an empty Description")
 	}
 	for _, field := range []string{"password", "totp_code"} {
 		if !strings.Contains(line, field) {
-			t.Errorf("the disable_2fa docs entry does not name %q, but the tool's inputSchema "+
-				"declares it.\ndocs: %s", field, strings.TrimSpace(line))
+			t.Errorf("the disable_2fa docs entry (%s) does not name %q, but the tool's inputSchema "+
+				"declares it.\ndocs: %s", entry, field, strings.TrimSpace(line))
 		}
 		if !strings.Contains(desc, field) {
 			t.Errorf("the disable_2fa Description does not name %q, but the inputSchema declares "+

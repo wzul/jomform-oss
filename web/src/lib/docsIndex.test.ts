@@ -478,6 +478,35 @@ function destinationText(file: string): string {
   return [prose, ...templates, ...headerText].join("\n");
 }
 
+// Card t_0356ed4c: a HUB page owns its sub-routes. /docs/api is a short index now
+// and its facts live on /docs/api/authentication, which the hub links one hop away —
+// exactly the contract the split was made under ("cross-links from the hub must
+// reach every page in one hop"). So the destination's text is the page PLUS the
+// sub-route pages it actually links: a fact that MOVED is still readable at the
+// destination, and a fact that moved nowhere is still reported missing. The union
+// is only taken for a page that links the child itself, so this cannot search the
+// whole tree for a phrase — one hop, named by the hub.
+function destinationTextDeep(file: string, pathname: string): string {
+  const out = [destinationText(file)];
+  if (pathname === "/docs") return out.join("\n");
+  const src = read(file);
+  const base = file.slice(0, file.lastIndexOf("/"));
+  const seg = pathname.slice("/docs/".length);
+  let names: string[] = [];
+  try {
+    names = readdirSync(path(`${base}/`));
+  } catch {
+    names = [];
+  }
+  for (const name of names.sort()) {
+    if (!src.includes(`(/docs/${seg}/${name}`)) continue;
+    const sub = `${base}/${name}/page.tsx`;
+    if (!existsSync(path(sub))) continue;
+    out.push(destinationText(sub));
+  }
+  return out.join("\n");
+}
+
 // Every `href="/docs..."` in the app's own JSX (the inline "?" doc links), read
 // from the source tree so a new one cannot be added without a destination.
 function docsHrefsOutsideDocs(dirs: string[]): { file: string; href: string }[] {
@@ -993,7 +1022,7 @@ test("every cut entry's facts are readable at the destination (not just its anch
       continue;
     }
     // Markers are styling, not words: a **bold** fact still states the fact.
-    const lower = destinationText(file).replace(/\*\*/g, "").toLowerCase();
+    const lower = destinationTextDeep(file, pathname).replace(/\*\*/g, "").toLowerCase();
     for (const fact of facts) {
       if (!lower.includes(fact.toLowerCase())) missing.push(`${e.title} → ${e.href}: "${fact}"`);
     }

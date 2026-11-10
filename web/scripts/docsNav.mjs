@@ -52,6 +52,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 import ts from "typescript";
 
@@ -207,7 +208,64 @@ function markdownText(md) {
 
 /** Plain text of one docs page, read through the TypeScript parser so a comment can never
  *  become prose (the same reason docsProseConvention.test.ts parses rather than greps). */
-const PROSE_PROPS = new Set(["body", "purpose", "summary", "description", "q", "a", "title", "label", "text"]);
+// `steps` is an array of strings, not one: card t_0356ed4c split the reference pages
+// into TASK pages, and a task page's prose is mostly its numbered steps. Without them
+// in the set, "Settings → Connectors" or "Sign in now" was unsearchable — the connect
+// page indexed 184 characters, i.e. its lead and note only.
+const PROSE_PROPS = new Set(["body", "purpose", "summary", "description", "q", "a", "title", "label", "text", "steps", "caption"]);
+
+// ── a property whose initializer is an ARRAY of prose (card t_2799edde) ──────────────
+//   `steps: [...]`  a task page's numbered steps.
+//   `body: [...]`   a SECTIONS body — the prose of every page that renders through
+//                   /docs/docsProse, i.e. most of the tree.
+//
+// WHY `body` WAS MISSING AND WHAT IT COST (t_2799edde): a converted page writes its prose
+// as `body: [ "paragraph", { list: [...] }, { tip: "…" } ]`. The old extractor only read
+// a property whose initializer was a STRING, so every element of that array was skipped:
+// /docs/builder indexed 470 characters — its description, its lead and its h3 headings —
+// while its sections held thousands of words. "Drag a palette item onto the canvas" was
+// unsearchable on the page that says it. JSX text and headings still arrived, which is
+// why the page was never EMPTY and no smoke test noticed.
+const ARRAY_PROSE_PROPS = new Set(["steps", "body"]);
+
+/** The reader-visible strings of one SECTIONS body block, in source order: a paragraph is
+ *  itself, `{ list }`/`{ steps }` are their items, `{ tip | note | warn }` is its sentence,
+ *  `{ table }` is its cells and header, `{ heading }` is its line.
+ *
+ *  A `{ code }` sample is SKIPPED: it is a command to copy, not a phrase to search, and on
+ *  the API pages it is the largest single block — indexing it would pay bundle bytes for
+ *  text no reader types into a search box. */
+function blockStrings(node, out) {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    out.push(node.text);
+    return;
+  }
+  if (ts.isArrayLiteralExpression(node)) {
+    for (const element of node.elements) blockStrings(element, out);
+    return;
+  }
+  if (!ts.isObjectLiteralExpression(node)) return;
+  for (const prop of node.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue;
+    const key = ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : "";
+    if (key === "code") continue;
+    blockStrings(prop.initializer, out);
+  }
+}
+
+/** The words of a prose string with the inline markers removed. The renderer consumes
+ *  `**bold**`, `` `code` ``, `[label](href)` and `[[zh|中文]]`; none of those characters are
+ *  words a reader searches for, and leaving them in put `**field palette**` and
+ *  `[templates](/docs/customize#templates)` verbatim in a result snippet. */
+export function proseText(text) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[\[([a-z]{2,3})\|([^\]]+)\]\]/g, "$2")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 function flattenJsx(node) {
   let out = "";
@@ -233,7 +291,63 @@ function flattenJsx(node) {
   return out.replace(/\s+/g, " ").trim();
 }
 
-function readPage(file, route) {
+/**
+ * THE PER-PAGE PROSE BUDGET OF THE SEARCH INDEX, in characters (card t_2799edde).
+ *
+ * The index is a static import in src/app/docs/docsSearch.tsx, so every byte of it is in
+ * the docs route's client bundle on every docs page. Measured on this tree by running the
+ * generator at several budgets and gzipping the emitted file (38 pages, 8 guides; the full
+ * table is in docsSearch.test.ts):
+ *
+ *   body prose not indexed at all   60,714 B / 17,786 B gzip   (what this file emitted)
+ *   budget  800                     64,535 B / 19,062 B gzip
+ *   budget 1200                     75,016 B / 22,722 B gzip
+ *   budget 2400                    101,604 B / 31,538 B gzip
+ *   no cap at all                  194,354 B / 62,731 B gzip
+ *
+ * 1,800 is where the curve flattens: most pages are indexed WHOLE at that size (the 90th
+ * percentile of a page's prose is just under it), and the handful of 5,000-word reference
+ * pages stop paying for prose their headings and lead already cover — a reader who needs
+ * more than the first 1,800 characters of a page is on the page already.
+ *
+ * The cut is made at a SENTENCE boundary (trimToBudget), never mid-word, so a phrase is
+ * either in the index or wholly absent — a half-indexed phrase matches nothing and makes
+ * the stored snippet end in "consi…".
+ */
+export const PAGE_TEXT_BUDGET = 1800;
+
+/**
+ * THE WHOLE-INDEX CEILING, in bytes of the generated `docsSearch.gen.json` (t_2799edde).
+ *
+ * The per-page budget bounds ONE page; this bounds the file. Both numbers exist because the
+ * cost that matters is the total: the index is a static import in docsSearch.tsx, so every
+ * page of the tree rides in the docs route's client chunk. Measured on this tree (38 pages):
+ * the emitted index is 77,359 B / 23,406 B gzip, against 60,714 B / 17,786 B gzip when body
+ * prose was not indexed — the feature costs about 5.4 KiB gzip. The built chunk that carries
+ * the index went from 81,000 B / 23,890 B gzip to 97,680 B / 29,451 B gzip.
+ *
+ * 96 KiB is that measured size plus room for roughly four more pages. A tree that grows past
+ * it is not broken — it is a cost decision that has to be made on purpose, which is exactly
+ * what a silently-growing index never got.
+ */
+export const SEARCH_PAYLOAD_BUDGET = 96 * 1024;
+
+/** Cut `text` to `budget` characters at a sentence end, or failing that a word end. */
+function trimToBudget(text, budget = PAGE_TEXT_BUDGET) {
+  if (text.length <= budget) return text;
+  const window = text.slice(0, budget);
+  const sentence = window.lastIndexOf(". ");
+  if (sentence > budget * 0.5) return window.slice(0, sentence + 1);
+  const space = window.lastIndexOf(" ");
+  return (space > 0 ? window.slice(0, space) : window).trim();
+}
+
+/**
+ * The index entry of one docs page. `budget` is a parameter so the coverage guard can ask
+ * for the WHOLE page (`docsSearch.test.ts` passes a huge budget and checks that every
+ * SECTIONS paragraph reached the extractor) without duplicating this walk.
+ */
+export function readPage(file, route, budget = PAGE_TEXT_BUDGET) {
   const src = readFileSync(file, "utf8");
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const texts = [];
@@ -246,6 +360,11 @@ function readPage(file, route) {
       } else if (ts.isTemplateExpression(init)) {
         const staticText = [init.head.text, ...init.templateSpans.map((s) => s.literal.text)].join(" ");
         if (staticText.trim().length > 1) texts.push(staticText);
+      } else if (ts.isArrayLiteralExpression(init) && ARRAY_PROSE_PROPS.has(node.name.text)) {
+        // `steps: [...]` / `body: [...]` — every reader-visible string in the array.
+        const strings = [];
+        blockStrings(init, strings);
+        for (const text of strings) if (text.trim().length > 1) texts.push(text);
       }
     }
     if (ts.isJsxText(node)) {
@@ -278,20 +397,23 @@ function readPage(file, route) {
   })();
 
   // De-duplicate identical strings (a page often renders the same heading and body line),
-  // then cap the text so one page cannot dominate the shared index payload.
+  // normalize the inline markers away, then cut to the page's prose budget so one page
+  // cannot dominate the shared index payload (PAGE_TEXT_BUDGET).
   const seen = new Set();
-  const body = texts
-    .map((t) => t.replace(/\s+/g, " ").trim())
-    .filter((t) => {
-      if (!t || seen.has(t)) return false;
-      seen.add(t);
-      // Class-name-ish and path-ish strings are attributes, never prose.
-      if (/^(?:[a-z-]+:)?(?:flex|grid|block|inline|hidden|text-|bg-|border|rounded|shadow|p[xy]?-|m[xy]?-|w-|h-|min-|max-|gap-|space-|font-|leading-|tracking-|items-|justify-|overflow|sticky|absolute|relative|uppercase|underline|hover:|sm:|md:|lg:|xl:)/.test(t)) return false;
-      if (/^[./@\w-]+\.(?:tsx?|mjs|css|png)$/.test(t)) return false;
-      return true;
-    })
-    .join(" ")
-    .slice(0, 2400);
+  const body = trimToBudget(
+    texts
+      .map((t) => proseText(t))
+      .filter((t) => {
+        if (!t || seen.has(t)) return false;
+        seen.add(t);
+        // Class-name-ish and path-ish strings are attributes, never prose.
+        if (/^(?:[a-z-]+:)?(?:flex|grid|block|inline|hidden|text-|bg-|border|rounded|shadow|p[xy]?-|m[xy]?-|w-|h-|min-|max-|gap-|space-|font-|leading-|tracking-|items-|justify-|overflow|sticky|absolute|relative|uppercase|underline|hover:|sm:|md:|lg:|xl:)/.test(t)) return false;
+        if (/^[./@\w-]+\.(?:tsx?|mjs|css|png)$/.test(t)) return false;
+        return true;
+      })
+      .join(" "),
+    budget,
+  );
 
   return { description, headings, body };
 }
@@ -434,7 +556,7 @@ export function buildRegistry({
       ? {
           description: row.summary,
           headings: [...row.body.matchAll(/^(#{2,3})\s+(.+)$/gm)].map((m) => ({ level: m[1].length, text: m[2].trim() })),
-          body: markdownText(row.body),
+          body: trimToBudget(markdownText(row.body)),
         }
       : readPage(row.file, row.path);
     const digest = pageDigest(row.file);
@@ -560,6 +682,21 @@ function run() {
     process.exit(1);
   }
 
+  // The index rides in the docs route's client chunk, so its size is a budget, not an
+  // observation. Failing here is the point: a tree that outgrows SEARCH_PAYLOAD_BUDGET has
+  // to raise the number (with the measurement that justifies it) instead of growing.
+  const payloadBytes = Buffer.byteLength(searchSource, "utf8");
+  const payloadGzip = gzipSync(searchSource).length;
+  if (payloadBytes > SEARCH_PAYLOAD_BUDGET) {
+    console.error(
+      `error: the search index is ${(payloadBytes / 1024).toFixed(1)} KiB ` +
+        `(${(payloadGzip / 1024).toFixed(1)} KiB gzip) and the budget is ` +
+        `${(SEARCH_PAYLOAD_BUDGET / 1024).toFixed(0)} KiB — ${entries.length} pages are indexed; ` +
+        `trim PAGE_TEXT_BUDGET or raise SEARCH_PAYLOAD_BUDGET with the measured reason`,
+    );
+    process.exit(1);
+  }
+
   if (CHECK) {
     const stale = [];
     if (!existsSync(OUT_NAV) || readFileSync(OUT_NAV, "utf8") !== navSource) stale.push(relative(WEB_DIR, OUT_NAV));
@@ -572,7 +709,8 @@ function run() {
 
   console.log(
     `docs: ${entries.length} pages indexed (${entries.filter((e) => e.kind === "guide").length} guides), ` +
-      `${entries.length} registry entries, search payload ${(searchSource.length / 1024).toFixed(1)} KiB`,
+      `${entries.length} registry entries, search payload ${(payloadBytes / 1024).toFixed(1)} KiB ` +
+      `(${(payloadGzip / 1024).toFixed(1)} KiB gzip, budget ${(SEARCH_PAYLOAD_BUDGET / 1024).toFixed(0)} KiB)`,
   );
 }
 

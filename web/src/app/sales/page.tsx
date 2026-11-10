@@ -7,13 +7,15 @@
 // skip-capture sales, and CSV export. Deep-linked from the forms list /
 // builder via /sales?form=<id> which pre-applies the form filter.
 //
-// Mobile-first table approach mirrors #122/#59: the table scrolls
-// horizontally inside a card on small screens (min-width), and the controls
-// wrap into a clean stack.
+// A phone gets the ROW CARD below (card t_c83ecf3e), not a scrolled table: the
+// table kept 18 columns switched off below `sm` with no scroll fallback, so the
+// items, the email status, the form and the date were simply absent on a 390px
+// screen. The table is unchanged from `sm` up.
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { MobileRecord, MobileRecordList } from "../../components/MobileRecord";
 import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
@@ -683,6 +685,15 @@ function SalesPageInner() {
   // enabled/disabled still comes from the server.
   const rowSaleActions = (sale: Sale) => enabledSaleActions(saleActions(sale.available_events, SALE_ROW_EVENTS));
 
+  // The label of a server-driven sale action: `label_key` arrives on the wire, so
+  // no static scan can name the key. Resolved in ONE place because the phone card,
+  // the table cell and the detail drawer render the same button — and
+  // `src/lib/i18nKeys.test.ts` counts every unresolved call site and refuses
+  // growth. What pays for this one is `src/lib/saleActions.test.ts`, which reads
+  // every `LabelKey:` out of api/internal/lifecycle/sales.go and fails when one is
+  // missing from any of the five locales.
+  const actionLabel = (a: { labelKey: string }) => t(a.labelKey as Key);
+
   async function captureAllPending() {
     const awaiting = rows.filter(isCapturePending);
     if (awaiting.length === 0) return;
@@ -999,8 +1010,176 @@ function SalesPageInner() {
           </p>
         )}
 
-        {/* Table */}
-        <div className="jf-card mt-4 overflow-x-auto">
+        {/* PHONE LAYOUT (card t_c83ecf3e). Every branch of the table below
+            switches columns OFF below `sm` — 18 cells on this page — and
+            `overflow-x-auto` cannot scroll to a `display:none` column, so on a
+            390px screen the items, the email status, the form and the date were
+            absent with no way to reveal them. Below `sm` each row is a card:
+            identity, amount and status (plus the refund state) stay visible, and
+            every column the table hides sits one disclosure away. The table
+            above `sm` is unchanged. */}
+        <div className="jf-card mt-4 overflow-hidden sm:hidden">
+          {rows.length > 0 && (
+            <MobileRecordList>
+              {/* The callback is `(s: Sale)` — explicitly typed — because two
+                  source guards read this file: `src/lib/money.test.ts` requires
+                  every formatting call to pass the ROW's `s.currency`, and
+                  `src/lib/salesRows.test.ts` locates the TABLE's row map by the
+                  literal spelling of its callback, so the phone arm must not be
+                  spelled the same way above the table. Neither is affected by
+                  the annotation. */}
+              {rows.map((s: Sale) => {
+                const isResponse = rowKind(s) === "response";
+                const itemsText =
+                  Array.isArray(s.items) && s.items.length
+                    ? s.items
+                        .map(
+                          (i) =>
+                            `${i.qty}× ${i.name}${i.variation_name ? ` (${i.variation_name})` : ""}`,
+                        )
+                        .join(", ")
+                    : "—";
+                const answersText = answersPreview(s) || "—";
+                const formField = {
+                  key: "form",
+                  label: t("sales.form"),
+                  value: s.form_id ? formName.get(s.form_id) || "—" : "—",
+                };
+                return (
+                  <MobileRecord
+                    key={rowKey(s)}
+                    title={responsesView || isResponse ? s.buyer || "—" : s.ref_code}
+                    titleMono={!responsesView && !isResponse}
+                    subtitle={
+                      <>
+                        {!responsesView && !isResponse && (s.buyer || "—")}
+                        {s.buyer_email && <span className="block break-words">{s.buyer_email}</span>}
+                        {isResponse && s.buyer_phone && (
+                          <span className="block break-words">{s.buyer_phone}</span>
+                        )}
+                        {!isResponse && s.table_number && (
+                          <span className="mt-1 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
+                            {t("sales.table")} {s.table_number}
+                          </span>
+                        )}
+                        {responsesView && (
+                          <span className="block">{formatDateTime(s.created_at, user?.timezone)}</span>
+                        )}
+                      </>
+                    }
+                    meta={isResponse ? undefined : money(s.total_sen, s.currency)}
+                    badges={
+                      isResponse ? (
+                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
+                          {t("bld.responses")}
+                        </span>
+                      ) : (
+                        <>
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${saleBadge(s.status)}`}
+                          >
+                            {s.status}
+                          </span>
+                          {isPartiallyRefunded(s) && (
+                            <span
+                              className={`inline-block rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${refundBadge}`}
+                              title={`${t("sales.refundedLabel")}: ${money(s.refunded_sen || 0, s.currency)} · ${t("sales.outstanding")}: ${money(s.outstanding_sen || 0, s.currency)}`}
+                            >
+                              {t("sales.partiallyRefunded")}
+                            </span>
+                          )}
+                        </>
+                      )
+                    }
+                    fields={
+                      responsesView
+                        ? [
+                            { key: "answers", label: t("bld.responseAnswers"), value: answersText },
+                            formField,
+                          ]
+                        : mixedView
+                          ? [
+                              {
+                                key: "items",
+                                label: t("sales.itemsOrAnswers"),
+                                value: isResponse ? answersText : itemsText,
+                              },
+                              formField,
+                              {
+                                key: "date",
+                                label: t("prod.date"),
+                                value: formatDate(s.created_at, user?.timezone),
+                              },
+                            ]
+                          : [
+                              { key: "items", label: t("sales.items"), value: itemsText },
+                              {
+                                key: "email",
+                                label: t("dash.email"),
+                                value: s.email_status
+                                  ? emailStatusLabel(s.email_status, t)
+                                  : t("dash.emailNotSent"),
+                              },
+                              formField,
+                              {
+                                key: "date",
+                                label: t("prod.date"),
+                                value: formatDate(s.created_at, user?.timezone),
+                              },
+                            ]
+                    }
+                    detailsLabel={t("common.details")}
+                    actions={
+                      <>
+                        <button onClick={() => setDetail(s)} className="jf-btn-ghost">
+                          {t("sales.viewDetail")}
+                        </button>
+                        {!isResponse &&
+                          canWrite &&
+                          rowSaleActions(s).map((a) => (
+                            <button
+                              key={a.event}
+                              onClick={() => runSaleAction(a.event, s.ref_code)}
+                              disabled={busyRef !== null}
+                              className={
+                                a.event === "capture"
+                                  ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                                  : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              }
+                            >
+                              {busyRef === s.ref_code ? "…" : actionLabel(a)}
+                            </button>
+                          ))}
+                      </>
+                    }
+                  />
+                );
+              })}
+            </MobileRecordList>
+          )}
+          {rows.length === 0 && !checking && (
+            <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
+              {err || (responsesView ? t("bld.responsesEmpty") : t("sales.empty"))}
+              {err && (
+                <span className="mt-2 block">
+                  <button
+                    type="button"
+                    onClick={() => void loadSales(safePage)}
+                    className="text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </span>
+              )}
+            </p>
+          )}
+          {checking && (
+            <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("sales.loading")}</p>
+          )}
+        </div>
+
+        {/* Table (sm and up — the phone arm above owns everything below that) */}
+        <div className="jf-card mt-4 hidden overflow-x-auto sm:block">
           <table className="w-full text-sm">
             <thead>
               {responsesView ? (
@@ -1201,7 +1380,7 @@ function SalesPageInner() {
                                 : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                             }
                           >
-                            {busyRef === s.ref_code ? "…" : t(a.labelKey as Key)}
+                            {busyRef === s.ref_code ? "…" : actionLabel(a)}
                           </button>
                         ))
                       ) : (
@@ -1543,7 +1722,7 @@ function SalesPageInner() {
                 {canWrite && saleActions(detail.available_events).map((a) => {
                   // Resolved once per action: the two button shapes below must not
                   // each carry their own t() call (one key, one lookup).
-                  const label = busyRef === detail.ref_code ? "…" : t(a.labelKey as Key);
+                  const label = busyRef === detail.ref_code ? "…" : actionLabel(a);
                   return a.event === "capture" ? (
                     <button
                       key={a.event}

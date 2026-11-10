@@ -27,11 +27,23 @@ const APEX_PAGES = [
   "/docs/embed",
   "/docs/placeholders",
   "/docs/mcp",
+  // Card t_0356ed4c: /docs/mcp is a hub now; its four task pages are real routes
+  // and sitemapCoverage.test.ts requires every page on disk in this list.
+  "/docs/mcp/connect",
+  "/docs/mcp/tools",
+  "/docs/mcp/oauth",
+  "/docs/mcp/troubleshooting",
   "/docs/subscriptions",
   "/docs/variations",
   // t_bac29e18: the public REST API reference. It is a product surface — the
   // entry point for a developer integrating with JomForm.
   "/docs/api",
+  // Card t_0356ed4c: /docs/api is a hub now; its four task pages are real routes
+  // and sitemapCoverage.test.ts requires every page on disk in this list.
+  "/docs/api/authentication",
+  "/docs/api/endpoints",
+  "/docs/api/webhooks",
+  "/docs/api/errors",
   // Card t_eb09b25a: the activity log — the audit-trail surface the dashboard
   // Activity page links to.
   "/docs/activity",

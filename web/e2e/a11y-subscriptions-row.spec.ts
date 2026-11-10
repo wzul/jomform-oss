@@ -199,9 +199,18 @@ async function freshState(page: Page) {
 /** The row, by the customer its own data renders. */
 const ROW = "table tbody tr";
 
-/** The two write buttons of the row, by the `title` their own markup carries. */
-const UPDATE_BTN = `button[title="${EN.updateCard}"]`;
-const CANCEL_BTN = `button[title="${DICT["sub.tokenRetained"].en}"]`;
+/**
+ * The two write buttons of the row, by the `title` their own markup carries.
+ *
+ * SCOPED TO THE TABLE ROW (card t_c83ecf3e). Below `sm` the page renders the
+ * same row as a CARD and the table is `display:none` — the same two buttons
+ * therefore exist twice in the DOM, and a page-wide selector matched the card's
+ * copy first (which is not the node this file measures). The subject here is the
+ * TABLE's action row, and the card reuses the identical `.jf-btn-ghost` tokens,
+ * so the table row is where the selector belongs.
+ */
+const UPDATE_BTN = `table tbody tr button[title="${EN.updateCard}"]`;
+const CANCEL_BTN = `table tbody tr button[title="${DICT["sub.tokenRetained"].en}"]`;
 
 /** Get the subscriptions row on screen and return its locator. */
 async function openRow(page: Page) {

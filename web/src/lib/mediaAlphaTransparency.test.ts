@@ -40,8 +40,11 @@ const mediaPicker = readFileSync(
   fileURLToPath(new URL("../components/MediaPicker.tsx", import.meta.url)),
   "utf8",
 );
+// Card t_0356ed4c: the MCP tool rows moved to src/lib/mcpToolGroups.ts when
+// /docs/mcp was split by task. The row for upload_media — and the sentence this
+// guard reads out of it — lives there, one home for every consumer.
 const docsMCP = readFileSync(
-  fileURLToPath(new URL("../app/docs/mcp/page.tsx", import.meta.url)),
+  fileURLToPath(new URL("../lib/mcpToolGroups.ts", import.meta.url)),
   "utf8",
 );
 

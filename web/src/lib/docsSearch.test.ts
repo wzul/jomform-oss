@@ -4,8 +4,23 @@
 //   The search dialog's whole value is ranking: a query that returns the right page first,
 //   and a query whose tokens must ALL match. A scorer that quietly degrades to a substring
 //   sweep still "works" on the happy path, so this checks the cases a reader actually types
-//   (a product name, a guide topic, a two-word query) and the index's coverage — 30 pages,
+//   (a product name, a guide topic, a two-word query) and the index's coverage — 38 pages,
 //   8 guides, real prose on every entry.
+//
+// WHAT THE COVERAGE HALF MISSED (card t_2799edde)
+//   "every indexed page carries ≥200 characters" was TRUE while the extractor skipped a
+//   converted page's whole SECTIONS body: its description, lead and h3 headings were enough
+//   to clear 200, so every page passed while no body paragraph was searchable at all —
+//   /docs/builder indexed 470 characters of a page with thousands of words. A floor is not
+//   a coverage check. The guard below instead DERIVES a body-only phrase from each page's
+//   source and requires it in that page's index entry, so a page shape the extractor stops
+//   reading fails here by name.
+//
+// THE BUDGET IS ASSERTED, NOT DESCRIBED
+//   The index is a static import in the docs layout, so every byte is in the docs route's
+//   client chunk. `web/scripts/docsNav.mjs` refuses to emit an index over
+//   SEARCH_PAYLOAD_BUDGET and this file asserts the same ceiling on the committed bytes,
+//   plus the gzip number and the per-page budget — see the measurements in the test below.
 //
 // NO NETWORK: the acceptance says typing must not issue a request. The dialog filters the
 // generated JSON in memory; the last test pins that the client code has no fetch/XHR/axios.
@@ -14,15 +29,27 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
-import { flattenHits, searchDocs, searchTokens, type SearchDoc } from "./docsSearch.ts";
+import ts from "typescript";
+
+import { PAGE_TEXT_BUDGET, SEARCH_PAYLOAD_BUDGET, proseText, readPage } from "../../scripts/docsNav.mjs";
+import {
+  flattenHits,
+  searchDocs,
+  searchTokens,
+  type SearchDoc,
+} from "./docsSearch.ts";
+import { sectionsOf, usesDocsProse } from "./docsProseReader.ts";
 
 const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const INDEX_PATH = join(WEB_DIR, "src", "lib", "docsSearch.gen.json");
+const INDEX_BYTES = readFileSync(INDEX_PATH);
 const DOCS = (
-  JSON.parse(readFileSync(join(WEB_DIR, "src", "lib", "docsSearch.gen.json"), "utf8")) as {
+  JSON.parse(INDEX_BYTES.toString("utf8")) as {
     docs: SearchDoc[];
   }
 ).docs;
@@ -46,6 +73,149 @@ test("every indexed page carries prose, a title and a section", () => {
     DOCS.reduce((sum, doc) => sum + doc.headings.length, 0) >= 30,
     "too few headings were indexed — the extractor is not reading the page headings",
   );
+});
+
+/** Every `page.tsx` under src/app/docs, as `{ route, file, source }`. */
+function docsPages(): { route: string; file: string; source: string }[] {
+  const root = join(WEB_DIR, "src", "app", "docs");
+  const out: { route: string; file: string; source: string }[] = [];
+  for (const file of readdirSync(root, { recursive: true }) as string[]) {
+    if (!file.endsWith("page.tsx")) continue;
+    const rel = relative(root, join(root, file)).split(file.includes("\\") ? "\\" : "/").join("/");
+    const dir = rel.slice(0, -"/page.tsx".length);
+    out.push({
+      route: dir === "" ? "/docs" : `/docs/${dir}`,
+      file: join(root, file),
+      source: readFileSync(join(root, file), "utf8"),
+    });
+  }
+  return out.sort((a, b) => a.route.localeCompare(b.route));
+}
+
+const CONVERTED = docsPages().filter(
+  (page) => usesDocsProse(page.source) && sectionsOf(page.source, page.route).length > 0,
+);
+
+/**
+ * The strings a page writes inside `{ code: … }` blocks. The extractor skips them on purpose
+ * (a command to copy is not a phrase a reader types into a search box), so the coverage
+ * guard has to know which strings were never owed rather than treat them as gaps.
+ */
+function codeSamplesOf(source: string): Set<string> {
+  const sf = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out = new Set<string>();
+  const collect = (node: ts.Node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) out.add(node.text);
+    else ts.forEachChild(node, collect);
+  };
+  const walk = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText() === "code") {
+      collect(node.initializer);
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(sf);
+  return out;
+}
+
+test("a phrase that only a converted page's BODY prose carries finds that page", () => {
+  // The acceptance for card t_2799edde, as a reader would type it: this sentence is a
+  // `body:` string on /docs/builder and appears in no title, description or heading, so
+  // before the extractor read SECTIONS bodies the search below returned nothing for it.
+  const phrase = "Drag a palette item onto the canvas";
+  const builder = DOCS.find((doc) => doc.path === "/docs/builder");
+  assert.ok(builder, "the index has no /docs/builder entry");
+  const metadata = [builder.title, builder.description, ...builder.headings].join(" ").toLowerCase();
+  assert.ok(
+    !metadata.includes("drag a palette item"),
+    "this phrase now sits in the page's title/description/headings — it is no longer a body-only probe",
+  );
+
+  const hits = flattenHits(searchDocs(DOCS, phrase));
+  assert.ok(hits.length > 0, `'${phrase}' matched nothing — body prose is not in the index`);
+  assert.equal(
+    hits[0].path,
+    "/docs/builder",
+    `'${phrase}' ranked ${hits.map((hit) => hit.path).join(", ")} — the page that says it must be first`,
+  );
+});
+
+test("every converted page indexes its SECTIONS body, not only its lead and headings", () => {
+  // Derived from the page SOURCE, not from a hand-listed phrase: a page shape the extractor
+  // stops reading (a new block kind, a renamed prop, an array it no longer walks) fails here
+  // with the page and the missing paragraph named. This is the arm the ≥200-char floor could
+  // not supply — headings and leads cleared it while every body paragraph was skipped.
+  assert.ok(
+    CONVERTED.length >= 20,
+    `only ${CONVERTED.length} pages render through docsProse — the walk under src/app/docs found almost nothing`,
+  );
+  for (const page of CONVERTED) {
+    // The extractor with an unbounded budget: what it READ, before the per-page cut. Asking
+    // for the whole page is what makes this a shape guard rather than a truncation test.
+    const whole = readPage(page.file, page.route, Number.MAX_SAFE_INTEGER).body;
+    const code = codeSamplesOf(page.source);
+    for (const section of sectionsOf(page.source, page.route)) {
+      const paragraph = section.strings.find((text) => text.length >= 24 && !code.has(text));
+      assert.ok(paragraph, `${page.route} section "${section.id}" has no prose paragraph`);
+      assert.ok(
+        whole.includes(proseText(paragraph)),
+        `${page.route} section "${section.id}" is not read: "${paragraph.slice(0, 60)}…" never reaches the index`,
+      );
+    }
+
+    // And the SHIPPED entry carries the opening body prose, not just the lead and headings.
+    const doc = DOCS.find((entry) => entry.path === page.route);
+    assert.ok(doc, `${page.route} renders through docsProse but is not in the search index`);
+    const opening = sectionsOf(page.source, page.route)[0].strings.find(
+      (text) => text.length >= 24 && !code.has(text),
+    );
+    assert.ok(opening, `${page.route} has no prose in its first section`);
+    assert.ok(
+      doc.text.includes(proseText(opening)),
+      `${page.route} does not index its body prose: "${opening.slice(0, 60)}…" is missing`,
+    );
+  }
+});
+
+test("the index stays inside its measured payload budget", () => {
+  // MEASURED on this tree (38 pages, 8 guides) by running the generator at each budget and
+  // gzipping the file it emitted. This sweep ran BEFORE guides were capped, which is why
+  // 1800 here is not the shipped 77,359 B — the shipped file is the last row of the comment
+  // in docsNav.mjs, and the assertion below is what keeps it there.
+  //
+  //   body prose NOT indexed (before t_2799edde)  60,714 B / 17,786 B gzip
+  //   PAGE_TEXT_BUDGET  800                       64,535 B / 19,062 B gzip
+  //   PAGE_TEXT_BUDGET 1200                       75,016 B / 22,722 B gzip
+  //   PAGE_TEXT_BUDGET 1800                       88,578 B / 27,307 B gzip
+  //   PAGE_TEXT_BUDGET 2400                      101,604 B / 31,538 B gzip
+  //   no cap at all                              194,354 B / 62,731 B gzip
+  //
+  // 1,800 characters per page is the choice: most pages are indexed whole at that size, the
+  // index lands at 77,359 B / 23,406 B gzip with the guide cap, and the feature costs about
+  // 5.4 KiB gzip over headings-only. Uncapped it is 3.5x that, which is why the generator
+  // REFUSES to emit past SEARCH_PAYLOAD_BUDGET instead of leaving the ceiling to whoever
+  // notices.
+  const rawBytes = INDEX_BYTES.byteLength;
+  const gzipBytes = gzipSync(INDEX_BYTES).byteLength;
+  const GZIP_BUDGET = 26 * 1024; // measured 22.9 KiB + room for five more pages
+
+  assert.ok(
+    rawBytes <= SEARCH_PAYLOAD_BUDGET,
+    `docsSearch.gen.json is ${(rawBytes / 1024).toFixed(1)} KiB, over the ` +
+      `${(SEARCH_PAYLOAD_BUDGET / 1024).toFixed(0)} KiB budget — trim PAGE_TEXT_BUDGET or raise it with the measurement`,
+  );
+  assert.ok(
+    gzipBytes <= GZIP_BUDGET,
+    `docsSearch.gen.json gzips to ${(gzipBytes / 1024).toFixed(1)} KiB, over the ` +
+      `${(GZIP_BUDGET / 1024).toFixed(0)} KiB budget — the docs layout imports this file on every docs page`,
+  );
+  for (const doc of DOCS) {
+    assert.ok(
+      doc.text.length <= PAGE_TEXT_BUDGET,
+      `${doc.path} indexed ${doc.text.length} characters, over the ${PAGE_TEXT_BUDGET}-character page budget`,
+    );
+  }
 });
 
 test("a product name ranks its own page first", () => {

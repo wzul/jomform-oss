@@ -177,10 +177,13 @@ const SECTIONS: Section[] = [
     title: "Form mode and everything else",
     icon: "🧭",
     body: [
-      "The panel also carries the form-level **mode**.",
-      "**Payment** is the default: the form takes payment and its entries are sales.",
-      "**Response** means no products and no payment, and its entries are stored as responses.",
-      "Everything else about a form lives in **Form Settings**, not the builder: status, confirmation, restrictions, notifications, the per-form CHIP feed and the restaurant menu.",
+      "The form's **mode** is in the builder's top bar, next to the slug — not in the settings panel. The button reads the current mode.",
+      "Press it to change it. No block has to be selected first: the panel on the right stays the selected block's settings.",
+      "**Payment** is the default: entries are sales. **Response** means no products, no payment, and entries are stored as responses.",
+      "Changing the mode asks you to **confirm** first, because two consequences are not visible from the two choices.",
+      "Product blocks carry a price, a quantity, an add-on, shipping or a total. A response form does not show them, so nothing is collected for them.",
+      "A saved form's default notification is re-pointed to the event the new mode fires — unless you edited that rule.",
+      "**Form Settings** sits next to the mode. Everything else about the form lives there: status, confirmation, restrictions, notifications, the CHIP feed, the menu.",
     ],
   },
 ];

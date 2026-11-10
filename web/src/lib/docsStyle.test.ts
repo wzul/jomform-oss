@@ -19,11 +19,15 @@
 //   7. no marker in a section title   — the renderer only parses `body`
 
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import ts from "typescript";
+
+// Card t_0356ed4c: a docs page can be a NESTED route (/docs/mcp/tools), so the
+// walk is recursive and the renderer import may be any relative depth.
+import { filesUnder } from "./docsRoutes.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docsRoot = join(here, "..", "app", "docs");
@@ -97,18 +101,19 @@ function sectionsOf(source: string, file: string): Section[] {
 
 function convertedPages(): { name: string; file: string; source: string }[] {
   const out: { name: string; file: string; source: string }[] = [];
-  for (const entry of readdirSync(docsRoot)) {
-    const dir = join(docsRoot, entry);
-    if (!statSync(dir).isDirectory()) continue;
-    const file = join(dir, "page.tsx");
+  for (const file of filesUnder(docsRoot)) {
+    if (!file.endsWith("/page.tsx")) continue;
     let source: string;
     try {
       source = readFileSync(file, "utf8");
     } catch {
       continue;
     }
-    if (!/from "\.\.\/docsProse"/.test(source)) continue;
-    out.push({ name: entry, file, source });
+    // Any relative depth: /docs/<page> imports "../docsProse", a nested task page
+    // (/docs/mcp/tools) imports "../../docsProse". A page that stops importing the
+    // renderer is not measured by this gate, so the shape is what is checked.
+    if (!/from "(?:\.\.\/)+docsProse"/.test(source)) continue;
+    out.push({ name: relative(docsRoot, dirname(file)) || "docs", file, source });
   }
   return out;
 }

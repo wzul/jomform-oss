@@ -120,7 +120,8 @@ func TestPurgeMediaDescriptionQualifiesEdgeURLs(t *testing.T) {
 			"key at all — cdnpurge.Result.Fields() publishes it only when len(URLs) > 0 (see "+
 			"TestPurgeReplyOmitsEdgeURLsWhenNoURLWasSent). Say so in the clause that names the field, "+
 			"e.g. \"'edge_urls' only when the CDN accepted at least one purge request\". "+
-			"web/src/app/docs/mcp/page.tsx must carry the same corrected sentence — "+
+			"The tool list's row (web/src/lib/mcpToolGroups.ts, the module the /docs/mcp pages "+
+			"render) must carry the same corrected sentence — "+
 			"docs_mcp_page_description_test.go compares the two.", clause)
 	}
 

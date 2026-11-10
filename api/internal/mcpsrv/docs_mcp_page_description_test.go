@@ -3,6 +3,16 @@ package mcpsrv
 // /docs/mcp's per-tool descriptions must be the REGISTERED description, not a
 // hand copy that nothing keeps in step.
 //
+// WHERE THE ROWS LIVE (card t_ee4114af). This guard used to name
+// web/src/app/docs/mcp/page.tsx, because /docs/mcp was ONE page and the rows
+// were inline on it. Card t_0356ed4c split that page into a hub plus four task
+// pages and moved the rows into the module the pages import
+// (web/src/lib/mcpToolGroups.ts). The guard now RESOLVES the source instead of
+// naming a file — see docsToolGroupsSource in docs_surface_test.go — so the same
+// assertion holds whichever file the array is declared in, and a failure names
+// the file the rows are actually in. Everything below is the reason the rule
+// exists; the paths it mentions are the pre-split ones.
+//
 // WHY THIS FILE EXISTS (card t_3a0d74d2). web/src/app/docs/mcp/page.tsx is the
 // public tool reference: it is the copy a merchant, a search engine and an agent
 // scraping the page read. Its rows were written by hand from the Go `Description`
@@ -85,9 +95,6 @@ package mcpsrv
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,13 +103,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// docsMCPPageRelPath is the tool reference, relative to this package.
-const docsMCPPageRelPath = "web/src/app/docs/mcp/page.tsx"
-
+// docsMCPRow is one `{ name: "…", desc: "…" }` row of the tool list.
 type docsMCPRow struct {
 	name string
 	desc string
-	line int // 1-based line in page.tsx, for a failure a reader can open
+	line int // 1-based line in the source that declares the row, for a failure a reader can open
 }
 
 // decodeTSStringLiteral decodes the BODY of a double-quoted TypeScript string
@@ -185,35 +190,31 @@ func scanTSQuoted(s string, from int) (string, int, error) {
 	return "", 0, fmt.Errorf("unterminated string literal at byte %d", from)
 }
 
-// docsMCPRows reads the page's TOOL_GROUPS array and returns one entry per
-// `{ name: "…", desc: "…" }` row. It fails (never skips) when the page is
-// missing or the array cannot be found — a guard that goes quiet when its subject
-// disappears is the hole it exists to close.
+// docsMCPRows reads the tool list's `TOOL_GROUPS` array and returns one entry
+// per `{ name: "…", desc: "…" }` row. It fails (never skips) when the array
+// cannot be found — a guard that goes quiet when its subject disappears is the
+// hole it exists to close.
+//
+// WHERE THE ARRAY LIVES IS RESOLVED, NOT ASSUMED (card t_ee4114af). It used to
+// be inline on web/src/app/docs/mcp/page.tsx; the split moved it into a module
+// the pages import (web/src/lib/mcpToolGroups.ts). docsToolGroupsSource follows
+// the page's own `import` and returns whatever declares the array, so this
+// extractor judges the rendered rows on either shape — and names the pages and
+// modules it looked in when it can find neither.
 func docsMCPRows(t *testing.T) []docsMCPRow {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed — cannot locate the docs page")
-	}
-	// api/internal/mcpsrv → ../../../web/src/app/docs/mcp/page.tsx
-	pagePath := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", docsMCPPageRelPath))
-	raw, err := os.ReadFile(pagePath)
-	if err != nil {
-		t.Fatalf("read %s: %v — the tool reference is documented nowhere a user reads "+
-			"without it, and this guard must not pass by absence", pagePath, err)
-	}
-	src := string(raw)
+	relPath, src := docsToolGroupsSource(t)
 
 	start := strings.Index(src, "const TOOL_GROUPS")
 	if start < 0 {
 		t.Fatalf("%s no longer declares `const TOOL_GROUPS` — the row extractor cannot find the "+
-			"tool list, so this guard would be judging nothing", docsMCPPageRelPath)
+			"tool list, so this guard would be judging nothing", relPath)
 	}
 	end := strings.Index(src[start:], "\n];")
 	if end < 0 {
 		t.Fatalf("%s's TOOL_GROUPS array has no closing `];` — the extractor has drifted from the "+
-			"page's shape", docsMCPPageRelPath)
+			"file's shape", relPath)
 	}
 	block := src[start : start+end]
 	// Row line numbers are reported against the FILE, not the block, so a failure
@@ -235,18 +236,21 @@ func docsMCPRows(t *testing.T) []docsMCPRow {
 		}
 		name, next, err := scanTSQuoted(line, obj+len("{ name: "))
 		if err != nil {
-			t.Fatalf("%s:%d: read row name: %v", docsMCPPageRelPath, i+1, err)
+			t.Fatalf("%s:%d: read row name: %v", relPath, lineOffset+i+1, err)
 		}
 		descAt := strings.Index(line[next:], "desc: \"")
 		if descAt < 0 {
-			t.Fatalf("%s:%d: row %q has no `desc:` — the extractor has drifted from the page's "+
-				"row shape, so this row's prose would go unjudged", docsMCPPageRelPath, i+1, name)
+			t.Fatalf("%s:%d: row %q has no `desc:` — the extractor has drifted from the row "+
+				"shape, so this row's prose would go unjudged", relPath, lineOffset+i+1, name)
 		}
 		desc, _, err := scanTSQuoted(line, next+descAt+len("desc: "))
 		if err != nil {
-			t.Fatalf("%s:%d: read desc for %s: %v", docsMCPPageRelPath, i+1, name, err)
+			t.Fatalf("%s:%d: read desc for %s: %v", relPath, lineOffset+i+1, name, err)
 		}
 		rows = append(rows, docsMCPRow{name: name, desc: desc, line: lineOffset + i + 1})
+	}
+	if strings.TrimSpace(relPath) == "" {
+		t.Fatal("the extractor resolved no source for the tool list — every row would be unjudged")
 	}
 	return rows
 }
@@ -319,13 +323,17 @@ func firstDifference(want, got string) string {
 // TestDocsMCPPageRowsCarryTheRegisteredDescription pins the rule above: every
 // /docs/mcp row carries the description the registry actually returns.
 func TestDocsMCPPageRowsCarryTheRegisteredDescription(t *testing.T) {
+	// The rows' home is RESOLVED, not assumed (card t_ee4114af): the tool list
+	// moved out of the /docs/mcp hub into the module its pages import, and a
+	// failure must name the file the rows actually live in.
+	relPath, _ := docsToolGroupsSource(t)
 	rows := docsMCPRows(t)
 	reg := registeredDescriptions(t)
 
 	// ── 1. the guard is looking at real data (it cannot pass vacuously) ──────
 	if len(rows) < 150 {
 		t.Fatalf("parsed only %d row(s) from %s — the extractor has drifted from that page's "+
-			"shape, so a row's prose would go unjudged", len(rows), docsMCPPageRelPath)
+			"shape, so a row's prose would go unjudged", len(rows), relPath)
 	}
 	if len(reg) < 150 {
 		t.Fatalf("enumerated only %d registered tool(s) over tools/list — registerTools did not "+
@@ -338,7 +346,7 @@ func TestDocsMCPPageRowsCarryTheRegisteredDescription(t *testing.T) {
 	for _, anchor := range []string{"list_products", "get_account", "purge_workspace"} {
 		if len(byName[anchor]) == 0 {
 			t.Fatalf("%s has no row for %s, so the row extractor is not reading the tool list",
-				docsMCPPageRelPath, anchor)
+				relPath, anchor)
 		}
 		if _, ok := reg[anchor]; !ok {
 			t.Fatalf("%s is not registered, so the protocol enumeration is not reading the registry",
@@ -367,22 +375,22 @@ func TestDocsMCPPageRowsCarryTheRegisteredDescription(t *testing.T) {
 	for _, r := range rows {
 		if _, ok := reg[r.name]; !ok && !seen[r.name] {
 			seen[r.name] = true
-			phantom = append(phantom, fmt.Sprintf("%s (%s:%d)", r.name, docsMCPPageRelPath, r.line))
+			phantom = append(phantom, fmt.Sprintf("%s (%s:%d)", r.name, relPath, r.line))
 		}
 	}
 	if len(missing) > 0 {
 		t.Errorf("%s omits %d registered tool(s):\n  %s\nThe page says it lists the whole "+
 			"registry, so add the row carrying the registered Description.",
-			docsMCPPageRelPath, len(missing), strings.Join(missing, "\n  "))
+			relPath, len(missing), strings.Join(missing, "\n  "))
 	}
 	if len(duplicated) > 0 {
 		t.Errorf("%s lists %d tool(s) more than once:\n  %s\nThe guard cannot tell which row a "+
 			"reader sees, so a duplicate could carry the registered text while the rendered row "+
-			"does not.", docsMCPPageRelPath, len(duplicated), strings.Join(duplicated, "\n  "))
+			"does not.", relPath, len(duplicated), strings.Join(duplicated, "\n  "))
 	}
 	if len(phantom) > 0 {
 		t.Errorf("%s advertises %d tool(s) this package does not register:\n  %s",
-			docsMCPPageRelPath, len(phantom), strings.Join(phantom, "\n  "))
+			relPath, len(phantom), strings.Join(phantom, "\n  "))
 	}
 
 	// ── 3/4. the description itself ─────────────────────────────────────────
@@ -408,12 +416,12 @@ func TestDocsMCPPageRowsCarryTheRegisteredDescription(t *testing.T) {
 				"(it documents a fact the registry lacks), the registry description must gain that "+
 				"fact in the same change — one edit, two surfaces — rather than the two drifting "+
 				"apart again.",
-			n, docsMCPPageRelPath, byName[n][0].line, firstDifference(want, got)))
+			n, relPath, byName[n][0].line, firstDifference(want, got)))
 	}
 	if len(mismatched) > 0 {
 		sort.Strings(mismatched)
 		t.Errorf("%d of %d row(s) on %s do NOT carry the registered description:\n\n  %s\n",
-			len(mismatched), len(names), docsMCPPageRelPath, strings.Join(mismatched, "\n\n  "))
+			len(mismatched), len(names), relPath, strings.Join(mismatched, "\n\n  "))
 	}
 }
 

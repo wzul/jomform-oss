@@ -301,6 +301,9 @@ export const DICT = {
   // otherwise get no signal at all that the page is still loading.
   "common.loading": { en: "Loading…", ms: "Memuatkan…", zh: "正在加载…", ta: "ஏற்றுகிறது…", ar: "جارٍ التحميل…" },
   "common.retry": { en: "Retry", ms: "Cuba semula", zh: "重试", ta: "மீண்டும் முயற்சி", ar: "إعادة المحاولة" },
+  // Card t_c83ecf3e: the label on the phone layout's per-row disclosure — it
+  // holds the table columns that the desktop layout shows as their own columns.
+  "common.details": { en: "Details", ms: "Butiran", zh: "详情", ta: "விவரங்கள்", ar: "التفاصيل" },
   // Card t_48319be9: the session bootstrap read did not produce an answer (a
   // fault — a 5xx or a dropped connection), which is NOT the same as being signed
   // out, so the app says what happened and offers a retry instead of silently
@@ -1532,6 +1535,12 @@ export const DICT = {
   "bld.modePaymentHint": { en: "Collect payments with products (current behaviour).", ms: "Kutip bayaran dengan produk (tingkah laku semasa).", zh: "通过商品收款（当前行为）。", ta: "தயாரிப்புகளுடன் கட்டணங்களை வசூலிக்கவும் (தற்போதைய நடத்தை).", ar: "تحصيل المدفوعات مع المنتجات (السلوك الحالي)." },
   "bld.modeResponseHint": { en: "Collect responses only. No products, no payment.", ms: "Kutip respons sahaja — tiada produk, tiada bayaran.", zh: "仅收集响应 — 无商品、无付款。", ta: "பதில்களை மட்டும் சேகரிக்கவும் — தயாரிப்புகள் இல்லை, கட்டணம் இல்லை.", ar: "جمع الردود فقط — بدون منتجات وبدون دفع." },
   "bld.modeDocs": { en: "How the form mode changes the default notification", ms: "Bagaimana mod borang mengubah notifikasi lalai", zh: "表单模式如何更改默认通知", ta: "படிவ பயன்முறை இயல்புநிலை அறிவிப்பை எவ்வாறு மாற்றுகிறது", ar: "كيف يغيّر وضع النموذج الإشعار الافتراضي" },
+  // Card t_6dbc1e16: the mode now switches from a header dialog, and that
+  // dialog states the two consequences a merchant cannot see from two buttons.
+  // {n} = how many payment blocks are already placed; {event} = the event the
+  // new mode's default notification fires.
+  "bld.modePricingNote": { en: "{n} payment block(s) on this form carry a price, a quantity, an add-on, shipping or an order total. A response form does not draw them, so the buyer never sees them and no money is collected for them.", ms: "{n} blok bayaran pada borang ini membawa harga, kuantiti, tambahan, penghantaran atau jumlah pesanan. Borang respons tidak memaparkannya, jadi pembeli tidak nampak dan tiada wang dikutip untuknya.", zh: "此表单有 {n} 个付款模块带有价格、数量、附加项、运费或订单总额。响应表单不会绘制它们，因此买家看不到，也不会为其付款。", ta: "இந்தப் படிவத்தில் விலை, அளவு, கூடுதல், டெலிவரி கட்டணம் அல்லது மொத்தத் தொகையைக் கொண்ட {n} கட்டண தொகுதிகள் உள்ளன. பதில் படிவம் அவற்றை வரையாது, எனவே வாங்குபவர் அவற்றைப் பார்க்க மாட்டார், அவற்றுக்கு பணமும் வசூலாகாது.", ar: "يحتوي هذا النموذج على {n} كتلة دفع تحمل سعراً أو كمية أو إضافة أو شحناً أو إجمالي طلب. نموذج الرد لا يرسمها، فلا يراها المشتري ولا يُحصَّل مال مقابلها." },
+  "bld.modeNotifyNote": { en: "Saving re-points this form's untouched default notification to the event the new mode fires ({event}). A rule you have edited is left alone.", ms: "Menyimpan akan mengalihkan notifikasi lalai borang ini yang belum diubah ke peristiwa mod baharu ({event}). Peraturan yang anda telah ubah tidak disentuh.", zh: "保存后，此表单未修改的默认通知将改为新模式的触发事件（{event}）。您已编辑过的规则不会被改动。", ta: "சேமிக்கும்போது இந்தப் படிவத்தின் மாற்றப்படாத இயல்புநிலை அறிவிப்பு புதிய பயன்முறையின் நிகழ்வுக்கு ({event}) மாற்றப்படும். நீங்கள் திருத்திய விதி தொடப்படாது.", ar: "سيؤدي الحفظ إلى إعادة توجيه الإشعار الافتراضي غير المعدَّل لهذا النموذج إلى الحدث الذي يطلقه الوضع الجديد ({event}). القاعدة التي عدّلتها لا تُمَس." },
   "bld.responsesThisForm": { en: "Responses (this form)", ms: "Respons (borang ini)", zh: "响应（此表单）", ta: "பதில்கள் (இந்த படிவம்)", ar: "الردود (هذا النموذج)" },
   "bld.noResponsesForm": { en: "No responses yet for this form.", ms: "Belum ada respons untuk borang ini.", zh: "此表单暂无响应。", ta: "இந்த படிவத்திற்கு இன்னும் பதில்கள் இல்லை.", ar: "لا توجد ردود لهذا النموذج بعد." },
   "bld.loadResponsesErr": { en: "Failed to load responses.", ms: "Gagal memuatkan respons.", zh: "加载响应失败。", ta: "பதில்களை ஏற்ற முடியவில்லை.", ar: "فشل تحميل الردود." },

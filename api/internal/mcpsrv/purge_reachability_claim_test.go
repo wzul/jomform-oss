@@ -408,9 +408,12 @@ var correctedClaimSites = []struct {
 			"tell the owner the tool is for them and that the in-app chat may never propose it.",
 	},
 	{
-		file:  "web/src/app/docs/mcp/page.tsx",
+		file:  "web/src/lib/mcpToolGroups.ts",
 		wants: []string{"NEVER SUGGESTED BY CHAT"},
-		why:   "The tool reference is the merchant-facing copy of the same description.",
+		why: "The tool reference is the merchant-facing copy of the same description. The rows moved " +
+			"off web/src/app/docs/mcp/page.tsx into this module when /docs/mcp was split (card " +
+			"t_0356ed4c), and /docs/mcp/tools renders them from here — so this is still the copy a " +
+			"merchant reads, and the path a guard has to follow (card t_ee4114af).",
 	},
 	{
 		file: "web/src/app/docs/workspaces/page.tsx",

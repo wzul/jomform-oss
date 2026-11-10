@@ -214,13 +214,26 @@ function anchorAttributes(src: string): string[] {
   return out;
 }
 
-const PAGE = "../app/docs/api/page.tsx";
-const pageRaw = read(PAGE);
+// Card t_0356ed4c: the REST reference is FIVE pages now — a hub plus four task
+// pages (authentication, endpoints, webhooks, errors). Every assertion below is a
+// question about the REFERENCE, not about one file, so the guard reads all five
+// and asks of the union. Split or not, the claim still has to be true somewhere in
+// the set: a page that moves cannot drop a statement through the gap between two
+// files, and a route that moves cannot escape the reachability checks.
+const API_PAGES = [
+  "../app/docs/api/page.tsx",
+  "../app/docs/api/authentication/page.tsx",
+  "../app/docs/api/endpoints/page.tsx",
+  "../app/docs/api/webhooks/page.tsx",
+  "../app/docs/api/errors/page.tsx",
+];
+const PAGE = API_PAGES[0];
+const pageRaw = API_PAGES.map(read).join("\n");
 const pageSrc = pageRaw;
-/** The page's reader-visible prose (the SECTIONS strings) and its section anchors. */
-const pageProseText = pageProse(pageRaw, PAGE);
+/** The reader-visible prose of the whole reference, and every section anchor in it. */
+const pageProseText = API_PAGES.map((rel) => pageProse(read(rel), rel)).join("\n\n");
 const pageText = normalized(pageProseText);
-const pageSections = sectionsOf(pageRaw, PAGE);
+const pageSections = API_PAGES.flatMap((rel) => sectionsOf(read(rel), rel));
 const sectionIds = pageSections.map((s) => s.id);
 const LAYOUT = "../app/docs/layout.tsx";
 const LANDING = "../app/landing/page.tsx";
@@ -413,7 +426,7 @@ test("the in-page nav covers every section, and every link lands on one", () => 
   // What still has to be true, and is asserted here: the page passes its sections
   // to the renderer, every section id is unique, and the renderer emits one
   // <section id={s.id}> with an <h2> for each. DocsToc reads exactly that shape.
-  const ids = sectionsOf(pageSrc, PAGE).map((s) => s.id);
+  const ids = pageSections.map((s) => s.id);
   assert.equal(
     new Set(ids).size,
     ids.length,
@@ -688,8 +701,11 @@ test("the page links the machine-readable contract it is generated from", () => 
   // every OTHER name while OPENAPI_PUBLIC_URL comes from a second module that
   // exports its own copy, and then both anchors render that copy's URL while
   // every href check and every constant check stays green. (t_2285b2ef, shape 1.)
-  const bound = importSourcesFor(pageRaw, "OPENAPI_PUBLIC_URL").map((spec) =>
-    resolveModuleSpecifier(spec, path(PAGE)),
+  // t_0356ed4c: the binding is resolved per FILE, because the reference is five
+  // pages at three directory depths now. Resolving every specifier against the
+  // hub's path would have judged "../../../../lib/openapi" by the wrong base.
+  const bound = API_PAGES.flatMap((rel) =>
+    importSourcesFor(read(rel), "OPENAPI_PUBLIC_URL").map((spec) => resolveModuleSpecifier(spec, path(rel))),
   );
   assert.deepEqual(
     bound,

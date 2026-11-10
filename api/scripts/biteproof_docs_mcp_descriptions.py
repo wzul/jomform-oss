@@ -4,27 +4,35 @@
 WHAT IT BACKS. The guard this drives pins the rule that a /docs/mcp row carries the
 REGISTERED description (the string an MCP client receives over tools/list) verbatim,
 because 40 of the 181 rows had drifted from it and nothing checked the prose at all.
-A guard whose subject is a hand-copied page can look identical to a working guard
+A guard whose subject is a hand-copied list can look identical to a working guard
 while checking nothing, so this harness sabotages one thing at a time and requires
 the guard to go RED for that case's OWN reason — then restores every touched file and
 re-checks its sha256 byte for byte.
 
+WHICH FILE (card t_ee4114af): the rows used to be inline on
+web/src/app/docs/mcp/page.tsx. Card t_0356ed4c split that page into a hub plus four
+task pages and moved the rows into web/src/lib/mcpToolGroups.ts, which the pages
+render. The guard now FOLLOWS the page's import to find the array, so this harness
+has to sabotage the module — mutating the hub would prove nothing, because the guard
+no longer reads it for rows.
+
 CASES (7):
   0  CONTROL          the untouched tree is GREEN (so a red below cannot be this tree)
-  1  page row revert  archive_product's row back to its pre-fix short text — the page
-                      advertises less than the tool does, the shape that shipped
+  1  row revert       archive_product's row back to its pre-fix short text — the docs
+                      advertise less than the tool does, the shape that shipped
   2  registry revert  get_workspace_settings' registered description back to the text
                       that NEVER listed the three fields its output returns, with the
                       page left corrected — proves the expectation comes from the
                       REGISTRY (read over the protocol), not from a source regex or
                       from the page itself
-  3  row deleted      refund_sale's row removed — the page omits a registered tool
+  3  row deleted      refund_sale's row removed — the list omits a registered tool
   4  row duplicated   list_products' row duplicated — a duplicate could carry the
                       registered text while the row a reader sees does not
   5  unknown escape   a `\\q` planted in purge_form's desc — the TS literal decoder
                       must REFUSE an escape it does not know instead of passing the
                       raw bytes through (which would red a correct row as prose drift)
-  6  page missing     page.tsx renamed away — the guard must fail loudly, never skip
+  6  module missing   mcpToolGroups.ts renamed away — the guard must fail loudly, never
+                      skip, and must name every file it looked in
 
 Nothing here is a gate. Run it before handing off a change that touches the guard,
 the tool registry's descriptions (api/internal/mcpsrv/*.go) or the /docs/mcp page.
@@ -38,14 +46,21 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 API = os.path.join(ROOT, "api")
-PAGE = os.path.join(ROOT, "web/src/app/docs/mcp/page.tsx")
+ROWS = os.path.join(ROOT, "web/src/lib/mcpToolGroups.ts")
 TOOLS = os.path.join(API, "internal/mcpsrv/tools.go")
 GUARD = "TestDocsMCPPageRowsCarryTheRegisteredDescription"
 
 # The PRE-FIX text of two rows (measured on the card's base, main af72e713).
 PRE_FIX_ARCHIVE_PRODUCT = "Nyahaktifkan produk (dulang tanpa padam data)."
-PRE_FIX_GET_WORKSPACE_SETTINGS = ("Baca tetapan storefront satu workspace: footer, company_reg, "
-                                  "privacy/terms/refund URL, contact, menu.")
+# The registry description of get_workspace_settings with the three field names
+# (indexing, sound_enabled, spam_judge_enabled) taken back OUT — the shape that
+# made 40 rows disagree with the tools/list contract. This used to be the pre-fix
+# MALAY sentence; that sentence was translated to English afterwards, so anchoring
+# on it stopped matching anything and the case crashed instead of proving a bite
+# (found and re-anchored on card t_ee4114af). The anchor is now the FACT the row
+# gained, not a wording that can be translated out from under it.
+PRE_FIX_GET_WORKSPACE_SETTINGS = ("Read the storefront settings of one workspace: footer, "
+                                  "company_reg, privacy/terms/refund URL, contact, menu.")
 
 
 def digest(path):
@@ -99,9 +114,9 @@ def write_back(path, text):
 
 def main():
     started = time.time()
-    page = open(PAGE, encoding="utf-8").read()
+    page = open(ROWS, encoding="utf-8").read()
     tools = open(TOOLS, encoding="utf-8").read()
-    before = {PAGE: digest(PAGE), TOOLS: digest(TOOLS)}
+    before = {ROWS: digest(ROWS), TOOLS: digest(TOOLS)}
     status_before = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
                                    capture_output=True, text=True).stdout
 
@@ -111,20 +126,20 @@ def main():
     record("control (untouched tree is GREEN)", rc == 0 and "--- PASS" in out,
            f"guard rc={rc}, printed --- PASS: {('--- PASS' in out)}")
 
-    # 1 — the page stops carrying what the tool says
+    # 1 — the row list stops carrying what the tool says
     def mutate_page_row():
         m = re.search(r'(\{\s*name: "archive_product",\s*desc: ")(?:[^"\\]|\\.)*(")', page)
         assert m, "harness anchor missing: the archive_product row"
-        open(PAGE, "w", encoding="utf-8").write(
+        open(ROWS, "w", encoding="utf-8").write(
             page[:m.start()] + m.group(1) + PRE_FIX_ARCHIVE_PRODUCT + m.group(2) + page[m.end():])
-        return {PAGE: page}
+        return {ROWS: page}
 
-    with_mutation("1 page row reverts to its pre-fix text (archive_product)",
+    with_mutation("1 a row reverts to its pre-fix text (archive_product)",
                   "archive_product", mutate_page_row, wanted="do NOT carry the registered description")
 
-    # 2 — the REGISTRY reverts, the page stays corrected
+    # 2 — the REGISTRY reverts, the row list stays corrected
     def mutate_registry():
-        m = re.search(r'(Description: ")([^"]*tetapan storefront satu workspace[^"]*)(")', tools)
+        m = re.search(r'(Description: ")([^"]*storefront settings of one workspace[^"]*)(")', tools)
         assert m, "harness anchor missing: get_workspace_settings' description"
         open(TOOLS, "w", encoding="utf-8").write(
             tools[:m.start()] + m.group(1) + PRE_FIX_GET_WORKSPACE_SETTINGS + m.group(3) + tools[m.end():])
@@ -136,42 +151,42 @@ def main():
     # 3 — a registered tool's row is gone
     def mutate_delete_row():
         new = "\n".join(l for l in page.split("\n") if 'name: "refund_sale"' not in l)
-        open(PAGE, "w", encoding="utf-8").write(new)
-        return {PAGE: page}
+        open(ROWS, "w", encoding="utf-8").write(new)
+        return {ROWS: page}
 
-    with_mutation("3 a page row is DELETED (refund_sale)", "omits 1 registered tool(s)",
+    with_mutation("3 a row is DELETED (refund_sale)", "omits 1 registered tool(s)",
                   mutate_delete_row)
 
     # 4 — a row is listed twice
     def mutate_dup_row():
         row = [l for l in page.split("\n") if 'name: "list_products"' in l][0]
-        open(PAGE, "w", encoding="utf-8").write(page.replace(row, row + "\n" + row))
-        return {PAGE: page}
+        open(ROWS, "w", encoding="utf-8").write(page.replace(row, row + "\n" + row))
+        return {ROWS: page}
 
-    with_mutation("4 a page row is DUPLICATED (list_products)", "more than once", mutate_dup_row)
+    with_mutation("4 a row is DUPLICATED (list_products)", "more than once", mutate_dup_row)
 
     # 5 — an escape the decoder does not know is refused, not passed through
     def mutate_unknown_escape():
         m = re.search(r'(\{\s*name: "purge_form",\s*desc: ")((?:[^"\\]|\\.)*)(")', page)
         assert m, "harness anchor missing: the purge_form row"
-        open(PAGE, "w", encoding="utf-8").write(
+        open(ROWS, "w", encoding="utf-8").write(
             page[:m.start()] + m.group(1) + m.group(2) + "\\qX" + m.group(3) + page[m.end():])
-        return {PAGE: page}
+        return {ROWS: page}
 
     with_mutation("5 an unknown escape in a row is REFUSED (purge_form)", "unknown escape",
                   mutate_unknown_escape)
 
-    # 6 — the page is gone: fail loudly, never skip
-    print("CASE 6 the page is MISSING")
-    os.rename(PAGE, PAGE + ".biteproof-moved")
+    # 6 — the module is gone: fail loudly, never skip
+    print("CASE 6 the module holding the rows is MISSING")
+    os.rename(ROWS, ROWS + ".biteproof-moved")
     rc, out = run_guard()
-    os.remove(PAGE + ".biteproof-moved")
-    restored = write_back(PAGE, page)
+    os.remove(ROWS + ".biteproof-moved")
+    restored = write_back(ROWS, page)
     named = "read " in out and "no such file" in out
-    record("6 the page is MISSING (renamed away)", rc != 0 and named and restored,
-           f"guard rc={rc}, names the missing file={named}, page restored byte-identical={restored}")
+    record("6 the rows module is MISSING (renamed away)", rc != 0 and named and restored,
+           f"guard rc={rc}, names the missing file={named}, module restored byte-identical={restored}")
 
-    after = {PAGE: digest(PAGE), TOOLS: digest(TOOLS)}
+    after = {ROWS: digest(ROWS), TOOLS: digest(TOOLS)}
     status_after = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
                                   capture_output=True, text=True).stdout
     print()

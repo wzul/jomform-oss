@@ -29,6 +29,7 @@ import {
   publishOutcome,
 } from "../../lib/publishResult";
 import TemplatePicker from "../../components/TemplatePicker";
+import FormModeControl, { type FormMode } from "../../components/FormModeControl";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { rateLimitErr } from "../../lib/rateLimitErr";
 import { formDescription } from "../../lib/formDescription";
@@ -416,7 +417,7 @@ export default function Builder() {
   const [chipMapping, setChipMapping] = useState<Record<string, string>>({});
 
   // Issue #171: form collection mode — "payment" (default) or "response".
-  const [mode, setMode] = useState<"payment" | "response">("payment");
+  const [mode, setMode] = useState<FormMode>("payment");
 
   // Real drag state: which palette type or block index is being dragged, and
   // which index the insertion indicator currently points at.
@@ -1942,6 +1943,12 @@ export default function Builder() {
   // duties every session page owes: an anonymous visitor is sent to /landing,
   // and a SETTLED bootstrap fault renders the shared fault surface instead of a
   // sentence-less canvas (sessionFault.test.ts / card t_d1c9a43a).
+  // Card t_6dbc1e16: how many payment blocks are already placed. A response
+  // form never draws them (render_blocks.go renderResponseForm deliberately
+  // skips product/quantity/option/shipping/total), so the mode dialog states
+  // that consequence before the merchant confirms.
+  const pricingBlockCount = blocks.filter((b) => pricingTypes.includes(b.type)).length;
+
   if (sessionError) return <SessionFault />;
 
   return (
@@ -2005,7 +2012,7 @@ export default function Builder() {
             </button>
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-2 border-t border-[var(--jf-border)] pt-1.5 md:ml-auto md:border-0 md:pt-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-[var(--jf-border)] pt-1.5 md:ml-auto md:border-0 md:pt-0">
           {controls.slug && (
             <input
               value={slug}
@@ -2028,6 +2035,36 @@ export default function Builder() {
           )}
           {editingTemplate && (
             <span className="shrink-0 font-mono text-xs text-[var(--jf-muted)]">{t("tplmg.editLabel")}</span>
+          )}
+          {/* Card t_6dbc1e16: the FORM's collection mode, beside the slug row —
+              a form-level control belongs to the form chrome, not to the
+              selected block's settings. The button reads the current mode and
+              opens a dialog that states the consequences before applying. */}
+          <FormModeControl
+            mode={mode}
+            saved={!!currentId}
+            pricingBlockCount={pricingBlockCount}
+            onApply={(m) => {
+              setMode(m);
+              setDirty(true);
+            }}
+          />
+          {/* Issue #177: everything else about the form (status, display,
+              restrictions, notifications, CHIP feed, sales) lives in the
+              dedicated Form Settings view — the builder is fields-only, and
+              that link is form-level too, so the header carries it next to the
+              mode rather than the block panel (card t_6dbc1e16). A TEMPLATE has
+              no such view: its whole definition is this canvas, and Form
+              Settings edits a `forms` row by id (not owner-scoped for
+              templates), so the link is hidden in template mode. */}
+          {controls.formSettings && currentId && (
+            <a
+              href={`/form-settings?form=${currentId}`}
+              title={t("fs.subtitle")}
+              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-slate-50"
+            >
+              {t("fs.title")} →
+            </a>
           )}
           <span className="shrink-0">
             {dirty && <span className="text-xs text-[var(--jf-warning-text)]">• {t("builder.unsaved")}</span>}
@@ -2464,6 +2501,16 @@ export default function Builder() {
           {tplMsg && <p className="mt-2 text-center text-xs text-[var(--jf-muted)]">{tplMsg}</p>}
         </section>
 
+        {/* ── Form mode + Form settings moved to the HEADER (card t_6dbc1e16) ──
+            The aside below is titled "Block settings" and edits ONE selected
+            block. The form's collection mode and the "Form settings →" card
+            used to be drawn here unconditionally, under that label: two scopes,
+            one heading, no divider — and on a phone the mode control sat at the
+            bottom of a ~1,450px field-editor scroll. Both are form-level, so
+            both now live in the header, which is visible on every viewport
+            without selecting a block. The aside is field settings only, as its
+            label and the builder's "fields-only" comment always claimed. */}
+
         {/* ── right: inspector − desktop: always visible (3-col grid, unchanged);
              mobile (#652): the canvas column's alternate face. It is shown only
              when the Canvas tab is active AND the panel is open, so tapping a
@@ -2504,87 +2551,6 @@ export default function Builder() {
           </a>
           {!selectedBlock && <p className="text-xs text-[var(--jf-muted-on-tint)]">{t("bld.selectBlock")}</p>}
           {selectedBlock && renderFieldSettings(selectedBlock)}
-
-
-        {/* ── Form mode (issue #171) ── */}
-        <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
-              {t("bld.mode")}
-            </p>
-            {/* The mode decides which default notification the form gets, and
-                switching it re-points an untouched default (t_a58848bd). That is
-                not visible from two buttons labelled Payment/Response, so the
-                guide that explains it is one link away — same "?" pattern every
-                sibling control uses (issue #924: title + aria-label + new tab). */}
-            <a
-              href="/docs/email#notifications"
-              target="_blank"
-              rel="noreferrer"
-              title={t("bld.modeDocs")}
-              aria-label={t("bld.modeDocs")}
-              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-[var(--jf-border)] text-jf-2xs font-semibold text-[var(--jf-muted)] hover:bg-slate-50 hover:text-slate-700"
-            >
-              ?
-            </a>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                setMode("payment");
-                setDirty(true);
-              }}
-              className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
-                mode === "payment"
-                  ? "border-[var(--jf-accent)]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-slate-50"
-              }`}
-            >
-              {t("bld.modePayment")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMode("response");
-                setDirty(true);
-              }}
-              className={`rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
-                mode === "response"
-                  ? "border-[var(--jf-accent)]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-slate-50"
-              }`}
-            >
-              {t("bld.modeResponse")}
-            </button>
-          </div>
-          <p className="mt-1.5 text-jf-2xs text-[var(--jf-muted)]">
-            {mode === "response" ? t("bld.modeResponseHint") : t("bld.modePaymentHint")}
-          </p>
-        </div>
-
-        {/* Issue #177: everything else about the form (status, display,
-            restrictions, notifications, CHIP feed, sales) lives in the
-            dedicated Form Settings view — the builder is fields-only. A
-            TEMPLATE has no such view: its whole definition is this canvas, and
-            Form Settings edits a `forms` row by id (not owner-scoped for
-            templates), so the link is hidden in template mode. */}
-        {controls.formSettings && currentId && (
-          <div className="mt-8 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-            <p className="text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
-              {t("fs.title")}
-            </p>
-            <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">
-              {t("fs.subtitle")}
-            </p>
-            <a
-              href={`/form-settings?form=${currentId}`}
-              className="mt-2 block w-full rounded-md bg-[var(--jf-primary)] py-1.5 text-center text-xs font-medium text-white"
-            >
-              {t("fs.title")} →
-            </a>
-          </div>
-        )}
         </aside>
       </div>
       </main>

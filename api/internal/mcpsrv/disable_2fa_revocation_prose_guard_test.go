@@ -48,9 +48,6 @@ package mcpsrv
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -71,41 +68,16 @@ const disable2faRevocationClause = "revokes EVERY trusted device on the account"
 const disable2faRevocationPointer = "list_trusted_devices"
 
 // disable2faRevocationDocsRow returns the one docs entry for disable_2fa, and
-// refuses to guess when the page does not have exactly one.
-func disable2faRevocationDocsRow(t *testing.T) (string, string) {
+// refuses to guess when the surface does not have exactly one.
+//
+// The entry is located on the whole /docs/mcp surface (docs_surface_test.go):
+// the split card t_0356ed4c moved the tool rows off the hub page into the module
+// the pages render, so a single hard-coded page path judged nothing (card
+// t_ee4114af). A missing surface file or a missing/duplicated row is a FAILURE,
+// never a skip — the row is the surface a reader meets.
+func disable2faRevocationDocsRow(t *testing.T) docsToolRow {
 	t.Helper()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed — cannot locate the docs page")
-	}
-	// api/internal/mcpsrv → ../../../web/src/app/docs/mcp/page.tsx
-	path := filepath.Clean(filepath.Join(filepath.Dir(file),
-		"..", "..", "..", "web", "src", "app", "docs", "mcp", "page.tsx"))
-
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-
-	var rows []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if strings.Contains(l, `name: "disable_2fa"`) {
-			rows = append(rows, l)
-		}
-	}
-	switch len(rows) {
-	case 0:
-		t.Fatalf("no docs entry for disable_2fa on %s — DOCUMENTATION PARITY requires one, "+
-			"and without it the revocation disclosure is documented nowhere a user reads",
-			path)
-	case 1:
-	default:
-		t.Fatalf("found %d docs entries for disable_2fa on %s — the guard cannot tell which "+
-			"one a reader sees, so a duplicate row could carry the disclosure while the rendered "+
-			"one does not", len(rows), path)
-	}
-	return rows[0], path
+	return docsToolRowFor(t, "disable_2fa")
 }
 
 // disable2faToolDescription returns the Description as an MCP client actually
@@ -164,17 +136,17 @@ func disable2faToolDescription(t *testing.T) string {
 // TestDisable2FAToolAndDocsRowDiscloseTrustedDeviceRevocation pins the #713
 // revocation disclosure on both surfaces that document the tool.
 func TestDisable2FAToolAndDocsRowDiscloseTrustedDeviceRevocation(t *testing.T) {
-	row, path := disable2faRevocationDocsRow(t)
+	entry := disable2faRevocationDocsRow(t)
 	desc := disable2faToolDescription(t)
 
 	// Each surface must carry BOTH halves, and the failure names which half is
 	// missing — a re-cut that takes the other side of the union drops exactly one.
 	for _, want := range []string{disable2faRevocationClause, disable2faRevocationPointer} {
-		if !strings.Contains(row, want) {
+		if !strings.Contains(entry.text, want) {
 			t.Errorf("the disable_2fa row on %s does not state %q, but disabling 2FA DOES revoke "+
 				"every trusted device of the account. An agent reading the docs would not know to "+
 				"warn the user, and a device it already trusted would silently start asking for a "+
-				"code again.\nrow: %s", path, want, strings.TrimSpace(row))
+				"code again.\nrow: %s", entry, want, strings.TrimSpace(entry.text))
 		}
 		if !strings.Contains(desc, want) {
 			t.Errorf("the disable_2fa Description does not state %q, but the revocation happens "+

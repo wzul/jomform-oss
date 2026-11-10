@@ -44,19 +44,27 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 
 const BUILDER = read("../app/builder/page.tsx");
 const EMAIL_DOCS = read("../app/docs/email/page.tsx");
+// Card t_6dbc1e16 moved the mode control out of the builder page's aside and
+// into `components/FormModeControl.tsx` (the header's status button plus the
+// dialog it opens). The control's own source is what owns the doc link now, so
+// this guard reads THAT file — and pins that the builder actually renders it,
+// otherwise the link would be documented in a component nothing mounts.
+const MODE_CONTROL = read("../components/FormModeControl.tsx");
 
-// The Form-mode block, bounded at its closing comment so an `href` elsewhere on
-// the page cannot satisfy the assertions below (the builder is a large file with
-// several doc links of its own).
+// The Form-mode control's source. It is one file now, so there is no slice to
+// bound: every docs link in it belongs to the mode control.
 function modeBlockSource(): string {
-  const start = BUILDER.indexOf("{/* ── Form mode (issue #171) ── */}");
-  assert.ok(start > 0, 'app/builder/page.tsx no longer marks the Form-mode block (`{/* ── Form mode (issue #171) ── */}`)');
-  const next = BUILDER.indexOf("{/* Issue #177: everything else about the form", start);
-  assert.ok(
-    next > start,
-    "the Form-mode block has no following marker to bound it — the slice would run past the control it documents",
+  assert.match(
+    BUILDER,
+    /<FormModeControl\b/,
+    "app/builder/page.tsx no longer renders <FormModeControl/>, so the mode control (and its doc link) " +
+      "is declared in a component the builder never mounts",
   );
-  return BUILDER.slice(start, next);
+  assert.ok(
+    MODE_CONTROL.includes("/docs/email#notifications"),
+    "components/FormModeControl.tsx lost its docs link to /docs/email#notifications",
+  );
+  return MODE_CONTROL;
 }
 
 test('the builder\'s form-mode control carries an inline "?" doc link to the guide that explains the mode change', () => {

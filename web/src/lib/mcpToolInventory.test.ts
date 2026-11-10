@@ -71,7 +71,15 @@ import { fileURLToPath } from "node:url";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
-const PAGE = read("../app/docs/mcp/page.tsx");
+// Card t_0356ed4c: the tool ROWS live in src/lib/mcpToolGroups.ts now, and the
+// render sites this guard checks (the derived counts, the metadata description)
+// live on the /docs/mcp hub and the tool list page. Reading the union keeps every
+// assertion below pointed at the same release content it was written against.
+const PAGE = [
+  read("../lib/mcpToolGroups.ts"),
+  read("../app/docs/mcp/page.tsx"),
+  read("../app/docs/mcp/tools/page.tsx"),
+].join("\n");
 
 // The registry is the mcpsrv PACKAGE, not one file. It was tools.go for years,
 // so reading tools.go alone looked right — until a refactor moved a tool literal

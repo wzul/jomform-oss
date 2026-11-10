@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageLoading } from "../../components/PageLoading";
 import { Shell } from "../../components/Shell";
+import { MobileRecord, MobileRecordList } from "../../components/MobileRecord";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
@@ -1212,8 +1213,99 @@ export default function Products() {
           <span className="ml-auto whitespace-nowrap text-xs text-[var(--jf-muted)]">{countLabel}</span>
         </div>
 
-        {/* Table */}
-        <div className="jf-card mt-4 overflow-x-auto">
+        {/* PHONE LAYOUT (card t_c83ecf3e): the table below switches OFF its
+            select, Type, Stock and Date columns below `sm`, so a phone showed a
+            product's name and price with no type, no stock and no date. Below
+            `sm` each row is a card — the bulk-select box and the status chip stay
+            on the card (the bulk bar above must keep working), and the three
+            hidden columns sit one disclosure away. The table above `sm` is
+            unchanged. */}
+        <div className="jf-card mt-4 overflow-hidden sm:hidden">
+          {pageRows.length > 0 && (
+            <MobileRecordList>
+              {pageRows.map((p) => (
+                <MobileRecord
+                  key={p.id}
+                  leading={
+                    canWrite ? (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.name}`}
+                        checked={selected.has(p.id)}
+                        onChange={() => toggle(p.id)}
+                        className="h-4 w-4 accent-[var(--jf-primary)]"
+                      />
+                    ) : null
+                  }
+                  title={p.name}
+                  meta={money(p.price_sen)}
+                  badges={
+                    canWrite ? (
+                      <button
+                        onClick={() => toggleStatus(p)}
+                        className={[
+                          "rounded-full px-2.5 py-0.5 text-jf-2xs font-medium",
+                          p.active
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border border-slate-200 bg-slate-50 text-slate-500",
+                        ].join(" ")}
+                        title={t("prod.toggleStatusTitle")}
+                      >
+                        {statusLabel(p)}
+                      </button>
+                    ) : (
+                      <span
+                        className={[
+                          "inline-block rounded-full px-2.5 py-0.5 text-jf-2xs font-medium",
+                          p.active
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border border-slate-200 bg-slate-50 text-slate-500",
+                        ].join(" ")}
+                      >
+                        {statusLabel(p)}
+                      </span>
+                    )
+                  }
+                  fields={[
+                    { key: "type", label: t("prod.type"), value: typeLabel(p) },
+                    { key: "stock", label: t("prod.stockShort"), value: stockLabel(p) },
+                    {
+                      key: "date",
+                      label: t("prod.date"),
+                      value: p.created_at ? formatDate(p.created_at, user?.timezone) : "—",
+                    },
+                  ]}
+                  detailsLabel={t("common.details")}
+                  actions={
+                    canWrite ? (
+                      <>
+                        <button onClick={() => setEditing(p)} className="jf-btn-ghost">
+                          {t("forms.edit")}
+                        </button>
+                        <Link href={`/products/${p.id}/edit`} className="jf-btn-ghost">
+                          {t("prod.openEditor")}
+                        </Link>
+                        <button
+                          onClick={() => archiveOne(p)}
+                          className="jf-btn-ghost text-rose-700"
+                          title={t("prod.archiveOneTitle")}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : null
+                  }
+                />
+              ))}
+            </MobileRecordList>
+          )}
+          {pageRows.length === 0 && (
+            <p className="px-4 py-8 text-center text-sm text-[var(--jf-muted)]">{t("prod.empty")}</p>
+          )}
+        </div>
+
+        {/* Table (sm and up — the phone arm above owns everything below that) */}
+        <div className="jf-card mt-4 hidden overflow-x-auto sm:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left">

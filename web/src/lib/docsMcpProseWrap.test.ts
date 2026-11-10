@@ -67,8 +67,26 @@ import { fileURLToPath } from "node:url";
 import { pageProse } from "./docsProseReader.ts";
 import { parseInline } from "../app/docs/docsProseText.ts";
 
-const PAGE = "../app/docs/mcp/page.tsx";
-const page = readFileSync(fileURLToPath(new URL(PAGE, import.meta.url)), "utf8");
+// Card t_0356ed4c: /docs/mcp is a hub plus four task pages. The prose tokens this
+// guard counts (the 43 inline chips, including the overflowing MCP URL) are spread
+// across all five; the tool ROWS it scans live on the tool list page. So the prose
+// is read from the set and the data elements from the page that renders them.
+const PAGES = [
+  "../app/docs/mcp/page.tsx",
+  "../app/docs/mcp/connect/page.tsx",
+  "../app/docs/mcp/tools/page.tsx",
+  "../app/docs/mcp/oauth/page.tsx",
+  "../app/docs/mcp/troubleshooting/page.tsx",
+];
+const PAGE = PAGES[0];
+const ROWS_PAGE = "../app/docs/mcp/tools/page.tsx";
+const page = PAGES.map((rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8")).join("\n");
+const rowsPage = readFileSync(fileURLToPath(new URL(ROWS_PAGE, import.meta.url)), "utf8");
+// Card t_0356ed4c: the TOOL_GROUPS rows (and their `desc`/`note` strings) moved out
+// of the page into src/lib/mcpToolGroups.ts, which the hub and the tool list both
+// read. The "does the data still need this guard" arm below follows the data.
+const DATA_MODULE = "../lib/mcpToolGroups.ts";
+const dataSrc = readFileSync(fileURLToPath(new URL(DATA_MODULE, import.meta.url)), "utf8");
 
 /**
  * The prose half of the page, read through the renderer's own reader: a converted
@@ -76,7 +94,9 @@ const page = readFileSync(fileURLToPath(new URL(PAGE, import.meta.url)), "utf8")
  * Inline emits the chip. Before the conversion the tokens were literal <code>
  * markup in this page; the tokens are the same, the surface is not.
  */
-const PROSE = pageProse(page, PAGE);
+const PROSE = PAGES.map(
+  (rel) => pageProse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"), rel),
+).join("\n\n");
 const CHIPS = [...PROSE.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
 
 /** The renderer, and the Inline function that turns a marker into a chip. */
@@ -89,10 +109,10 @@ const INLINE = INLINE_AT === -1 || INLINE_END === -1 ? "" : rendererSrc.slice(IN
 /** A class name that permits a break inside an unbreakable run. */
 const BREAK_GUARD = /\[overflow-wrap:(?:anywhere|break-word)\]|\bbreak-words\b|\bbreak-all\b/;
 
-/** Every `<p>` or `<code>` that renders a field of a TOOL_GROUPS row or group. */
+/** Every `<p>`, `<code>`, `<td>` or `<th>` that renders a field of a TOOL_GROUPS row or group. */
 function dataElements(src: string) {
   const out: { tag: string; body: string; attrs: string }[] = [];
-  for (const m of src.matchAll(/<(p|code)\b([^>]*)>([\s\S]*?)<\/\1>/g)) {
+  for (const m of src.matchAll(/<(p|code|td|th)\b([^>]*)>([\s\S]*?)<\/\1>/g)) {
     const body = m[3];
     if (/\{(?:t|g)\.[A-Za-z_]+\}/.test(body)) out.push({ tag: m[1], body, attrs: m[2] });
   }
@@ -114,7 +134,7 @@ function codeElements(src: string) {
   }));
 }
 
-const SITES = dataElements(page);
+const SITES = dataElements(rowsPage);
 const CODES = codeElements(page);
 
 /** The exact token that overflowed at root font-size 24px. */
@@ -238,10 +258,10 @@ test("the contract text still contains a run that needs the guard", () => {
   // carries a whitespace-free run wider than the mobile column (278px at 360px,
   // ~6.9px per character at text-sm). If the data changed so that no such run
   // remains, this fails on purpose — decide then whether to keep the guard.
-  const start = page.indexOf("const TOOL_GROUPS");
-  const end = page.indexOf("\n];", start);
-  assert.ok(start >= 0 && end > start, `could not find the TOOL_GROUPS array in ${PAGE}`);
-  const block = page.slice(start, end);
+  const start = dataSrc.indexOf("const TOOL_GROUPS");
+  const end = dataSrc.indexOf("\n];", start);
+  assert.ok(start >= 0 && end > start, `could not find the TOOL_GROUPS array in ${DATA_MODULE}`);
+  const block = dataSrc.slice(start, end);
 
   const strings = [...block.matchAll(/(?:desc|note):\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
   assert.ok(

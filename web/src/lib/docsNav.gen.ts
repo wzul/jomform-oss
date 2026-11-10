@@ -37,8 +37,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Start here",
     "order": 0,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "2327cf482d9932d8",
+    "updated": "2026-11-10",
+    "digest": "127e6552aa575c9f",
     "guides": []
   },
   {
@@ -49,7 +49,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 1,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "37d8af7f0dac2302",
+    "digest": "6b4bd528e5cd8754",
     "guides": [
       "/docs/guides/qr-table-ordering",
       "/docs/guides/tuition-class",
@@ -173,7 +173,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Workspaces",
     "order": 12,
     "kind": "product",
-    "updated": "2026-11-09",
+    "updated": "2026-11-10",
     "digest": "83cf7254c194a95c",
     "guides": []
   },
@@ -369,22 +369,110 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 28,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "418885b038b7dd20",
+    "digest": "4befcda5b0d24c14",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]
+  },
+  {
+    "path": "/docs/api/authentication",
+    "label": "API authentication & scopes",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 29,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "b288e90e79e9feef",
+    "guides": []
+  },
+  {
+    "path": "/docs/api/endpoints",
+    "label": "API endpoints by resource",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 30,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "7063aad11ea7fc56",
+    "guides": []
+  },
+  {
+    "path": "/docs/api/webhooks",
+    "label": "API webhooks",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 31,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "6092faded8cab2a3",
+    "guides": []
+  },
+  {
+    "path": "/docs/api/errors",
+    "label": "API errors & limits",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 32,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "e1a8ce411b1e5e39",
+    "guides": []
   },
   {
     "path": "/docs/mcp",
     "label": "MCP tool reference",
     "layer": "Reference",
     "section": "Reference",
-    "order": 29,
+    "order": 33,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "3e9e56bdf8af6221",
+    "updated": "2026-11-10",
+    "digest": "60b08d759d53e7b0",
     "guides": [
       "/docs/guides/design-with-mcp"
     ]
+  },
+  {
+    "path": "/docs/mcp/connect",
+    "label": "Connect an MCP client",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 34,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "9659eb47f6c835ea",
+    "guides": []
+  },
+  {
+    "path": "/docs/mcp/tools",
+    "label": "MCP tool list",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 35,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "44b49396b8009d22",
+    "guides": []
+  },
+  {
+    "path": "/docs/mcp/oauth",
+    "label": "MCP OAuth & tokens",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 36,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "ef07db2f11bfa02b",
+    "guides": []
+  },
+  {
+    "path": "/docs/mcp/troubleshooting",
+    "label": "MCP troubleshooting",
+    "layer": "Reference",
+    "section": "Reference",
+    "order": 37,
+    "kind": "product",
+    "updated": "2026-11-09",
+    "digest": "8a4466527459c245",
+    "guides": []
   }
 ];

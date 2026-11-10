@@ -626,7 +626,19 @@ test("the imported-prose check is reading the real rendered data (it cannot pass
   // Every field this file claims to cover must have a RENDER SITE in the page, or
   // the check is asserting a string nobody prints. Comments are stripped so a
   // field merely NAMED in a comment cannot satisfy this.
-  const apiPage = readFileSync(join(DOCS_DIR, "api", "page.tsx"), "utf8")
+  // Card t_0356ed4c: /docs/api is a hub plus four task pages, and the render sites
+  // for these fields moved with their sections (the tag headings and endpoint rows
+  // to /docs/api/endpoints, the throttled list to /docs/api/errors). The check reads
+  // the whole reference, so a field is "rendered" if ANY page of it prints the value.
+  const apiPage = [
+    "page.tsx",
+    "authentication/page.tsx",
+    "endpoints/page.tsx",
+    "webhooks/page.tsx",
+    "errors/page.tsx",
+  ]
+    .map((f) => readFileSync(join(DOCS_DIR, "api", f), "utf8"))
+    .join("\n")
     .split("\n")
     .filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"))
     .join("\n");

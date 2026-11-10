@@ -107,7 +107,10 @@ const dir = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const DOCS_DIR = dir("../app/docs");
 const MCP_DIR = dir("../../../api/internal/mcpsrv/");
 const PARITY_MD = "../../../MCP-PARITY.md";
-const TOOL_REFERENCE_PAGE = "../app/docs/mcp/page.tsx";
+// Card t_0356ed4c: the tool reference is a module now (the rows) plus two pages
+// under /docs/mcp. The claims this guard reads are in the rows' descriptions, so
+// it reads the module — the same array the pages render.
+const TOOL_REFERENCE_PAGE = "../lib/mcpToolGroups.ts";
 const CHAT_DOCS_PAGE = "../app/docs/chat/page.tsx";
 const ACTIVITY_DOCS_PAGE = "../app/docs/activity/page.tsx";
 

@@ -284,6 +284,16 @@ const LINKS = FILES.flatMap((f) =>
   })),
 );
 const rel = (f: string) => f.replace(DOCS_DIR, "src/app/docs");
+// Card t_0356ed4c: /docs/api was split into a hub plus four task pages, and the
+// contract link now lives on /docs/api/errors. So the guard finds the page that
+// CARRIES the link instead of naming a path that a docs edit may legitimately
+// move — "the page that links the contract" is the fact being pinned, not the
+// file name it happens to sit in.
+const CONTRACT_LINK_TOKEN = "${OPENAPI_PUBLIC_URL}";
+const contractPages = () =>
+  FILES.filter((f) =>
+    [...readFileSync(f, "utf8").matchAll(PROSE_LINK)].some((m) => m[2] === CONTRACT_LINK_TOKEN),
+  );
 const describe = (s: Site) =>
   `${rel(s.file)}:${s.line}  ${s.kind === "label" ? "link label " : ""}${JSON.stringify(s.text.slice(0, 80))}`;
 
@@ -294,8 +304,12 @@ test("the extractor reads the real docs tree and finds the URL anchor (it cannot
     FILES.length >= 15,
     `found only ${FILES.length} .tsx files under ${DOCS_DIR} — the guard is not looking at the docs tree`,
   );
-  const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"));
-  assert.ok(apiPage, "docs/api/page.tsx is not in the walked set — the page this card is about is not being read");
+  const apiPage = contractPages()[0];
+  assert.ok(
+    apiPage,
+    "no docs page renders a prose link to \\${OPENAPI_PUBLIC_URL} — the page this card is about " +
+      "is not being read, or the contract link moved and this guard did not follow it",
+  );
 
   // The site this card is about MOVED: the intro anchor that printed the raw URL
   // is gone (its line now prints the short label "openapi.json"), and the page
@@ -442,9 +456,9 @@ test("the contract URL is still the full URL that needed the guard (shortening i
   // constant, and that constant is the URL asserted above. (Before the prose
   // renderer this was an anchor printing the URL; the destination is the fact
   // that matters, and it is read from the link the page writes.)
-  const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"))!;
+  const apiPage = contractPages()[0]!;
   const apiSrc = readFileSync(apiPage, "utf8");
-  const toConstant = [...apiSrc.matchAll(PROSE_LINK)].filter((m) => m[2] === "${OPENAPI_PUBLIC_URL}");
+  const toConstant = [...apiSrc.matchAll(PROSE_LINK)].filter((m) => m[2] === CONTRACT_LINK_TOKEN);
   assert.ok(
     toConstant.length > 0,
     `no docs link targets \${OPENAPI_PUBLIC_URL} any more — re-measure before deleting this guard`,
@@ -466,7 +480,7 @@ test("the contract URL is still the full URL that needed the guard (shortening i
 });
 
 test("every contract link is short-labelled and points at the pinned constant (convention pin, so the label cannot swap back)", () => {
-  const apiPage = FILES.find((f) => f.endsWith("/docs/api/page.tsx"))!;
+  const apiPage = contractPages()[0]!;
   const src = readFileSync(apiPage, "utf8");
   // A link whose destination is the contract constant. Both the label and the
   // destination are read from the source, which is what docsApi.test.ts already

@@ -62,10 +62,20 @@ import { apiExamples, writeGatedReads } from "./openapi.ts";
 import { sectionsOf, usesDocsProse } from "./docsProseReader.ts";
 import { parseInline } from "../app/docs/docsProseText.ts";
 
-const PAGE = "../app/docs/api/page.tsx";
+// Card t_0356ed4c: /docs/api is a hub plus four task pages. The tokens and the
+// samples this guard measured are spread across them, so it reads the SET — a
+// token that moves to /docs/api/errors is still the same unbreakable run.
+const PAGES = [
+  "../app/docs/api/page.tsx",
+  "../app/docs/api/authentication/page.tsx",
+  "../app/docs/api/endpoints/page.tsx",
+  "../app/docs/api/webhooks/page.tsx",
+  "../app/docs/api/errors/page.tsx",
+];
+const PAGE = PAGES[0];
 const RENDERER = "../app/docs/docsProse.tsx";
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-const page = read(PAGE);
+const page = PAGES.map(read).join("\n");
 /** The one module that turns a prose token or a code block into markup. */
 const renderer = read(RENDERER);
 
@@ -106,7 +116,7 @@ const PROSE_CODES = codeElements(proseSource);
 const PAGE_CODE_SITES = [...page.matchAll(/\bcode:\s*[`'"]/g)].map((m) => m[0]);
 
 /** The inline `code` tokens the page's prose carries, as the reader sees them. */
-const PAGE_TOKENS = sectionsOf(page, PAGE)
+const PAGE_TOKENS = PAGES.flatMap((rel) => sectionsOf(read(rel), rel))
   .flatMap((s) => s.strings)
   .flatMap((s) => parseInline(s))
   .filter((t) => t.kind === "code");

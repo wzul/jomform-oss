@@ -368,9 +368,32 @@ const retiredMentionExemptPath = "api/internal/db/migrations/000029_space_legal_
 // here has to change when a literal moves.
 var userFacingModelSites = []string{
 	"api/internal/mcpsrv/tools.go",
-	"web/src/app/docs/mcp/page.tsx",
+	"web/src/lib/mcpToolGroups.ts",
 	"web/src/app/builder/page.tsx",
 }
+
+// docsMCPPageRelPaths is every page of /docs/mcp after the split (card
+// t_0356ed4c): the hub plus its four task pages. docsMCPToolGroupsRelPath is the
+// module those pages render the tool rows from.
+//
+// WHY THE DOCS ENTRY ABOVE IS THE MODULE, NOT THE HUB (card t_ee4114af). /docs/mcp
+// used to be ONE page, so the hub carried the tool rows AND the model mention and
+// naming it was correct. The split moved the rows into the module and left the hub
+// as a ~300-word index — no row, no model mention. This guard then failed on a tree
+// where every user-facing surface still named the model, because it was reading a
+// page that no longer holds the copy. The union below is what "the docs entry" means
+// now: any of the pages, or the module they render.
+var docsMCPPageRelPaths = []string{
+	"web/src/app/docs/mcp/page.tsx",
+	"web/src/app/docs/mcp/connect/page.tsx",
+	"web/src/app/docs/mcp/tools/page.tsx",
+	"web/src/app/docs/mcp/oauth/page.tsx",
+	"web/src/app/docs/mcp/troubleshooting/page.tsx",
+}
+
+// docsMCPToolGroupsRelPath is the module the /docs/mcp pages import for the tool
+// rows. A row's `desc` here is the sentence a reader sees on /docs/mcp/tools.
+const docsMCPToolGroupsRelPath = "web/src/lib/mcpToolGroups.ts"
 
 // mcpRegistryDir is the MCP tool registry, in the scope the rest of the repo
 // already agrees on: the PACKAGE, not one FILE.
@@ -558,27 +581,34 @@ func TestUserFacingStringsNameTheSameModelAsTheConstant(t *testing.T) {
 	// same sentence. Escapes differ (`\u2014` on the page, the character in Go),
 	// so the comparison normalises them first — otherwise the check would be
 	// satisfied by two identical strings and fail on two identical strings.
+	//
+	// The docs entry is looked up across the WHOLE /docs/mcp surface (card
+	// t_ee4114af): after the split the rows live in the module the pages render,
+	// so a failure must name the file the entry is actually in rather than a hub
+	// page that holds no rows.
 	toolsDesc := toolDescriptions(t, hits, root)
 	docsDesc := docsPageDescriptions(t, root)
 	for _, name := range []string{"generate_form", "generate_legal_page"} {
 		goDesc, okGo := toolsDesc[name]
-		pageDesc, okPage := docsDesc[name]
+		entry, okPage := docsDesc[name]
 		if !okGo {
 			t.Fatalf("%s holds no %q tool description — the docs-parity half cannot be checked and "+
-				"would pass vacuously. If the tool was renamed, rename it on web/src/app/docs/mcp/page.tsx "+
-				"and in this guard together; if the literal moved, this reader already follows it across "+
-				"the package, so the name is gone from the registry rather than from one file.",
-				mcpRegistryDir, name)
+				"would pass vacuously. If the tool was renamed, rename it on the /docs/mcp surface "+
+				"(looked in: %s) and in this guard together; if the literal moved, this reader "+
+				"already follows it across the package, so the name is gone from the registry "+
+				"rather than from one file.",
+				mcpRegistryDir, name, strings.Join(docsSurfaceFiles(), ", "))
 		}
 		if !okPage {
-			t.Fatalf("web/src/app/docs/mcp/page.tsx has no %q entry — the MCP tool description and its docs "+
-				"entry must move together (AGENTS.md docs-parity)", name)
+			t.Fatalf("no /docs/mcp surface file has a %q entry — looked in: %s. The MCP tool "+
+				"description and its docs entry must move together (AGENTS.md docs-parity).",
+				name, strings.Join(docsSurfaceFiles(), ", "))
 		}
-		if goDesc != pageDesc {
-			t.Fatalf("the %q description differs between the registry (%s) and the docs page "+
-				"(web/src/app/docs/mcp/page.tsx):\n  %s: %q\n  page.tsx: %q\n"+
+		if goDesc != entry.desc {
+			t.Fatalf("the %q description differs between the registry (%s) and the docs entry "+
+				"(%s):\n  %s: %q\n  %s: %q\n"+
 				"They are the same sentence on two surfaces and must move together.",
-				name, mcpRegistryDir, mcpRegistryDir, goDesc, pageDesc)
+				name, mcpRegistryDir, entry.file, mcpRegistryDir, goDesc, entry.file, entry.desc)
 		}
 	}
 }
@@ -1279,24 +1309,59 @@ func mcpToolFiles(t *testing.T, hits map[string]map[string]string) []string {
 	return files
 }
 
-func docsPageDescriptions(t *testing.T, root string) map[string]string {
-	t.Helper()
-	const rel = "web/src/app/docs/mcp/page.tsx"
-	return readDescriptions(t, filepath.Join(root, rel), pageDescriptionPattern, rel)
+// docsToolDesc is one docs entry plus the file it was read from, so a failure
+// names the file the sentence actually lives in.
+type docsToolDesc struct {
+	desc string
+	file string // repo-relative
 }
 
-// readDescriptions is the single-file reader: it parses one file and fails when
-// the pattern matches nothing, because for those callers an empty result is a
-// vacuous check.
-func readDescriptions(t *testing.T, path string, re *regexp.Regexp, rel string) map[string]string {
+// docsSurfaceFiles is every repo-relative file that can carry a docs tool entry:
+// the five /docs/mcp pages plus the module they render the rows from.
+func docsSurfaceFiles() []string {
+	out := make([]string, 0, len(docsMCPPageRelPaths)+1)
+	out = append(out, docsMCPPageRelPaths...)
+	return append(out, docsMCPToolGroupsRelPath)
+}
+
+// docsPageDescriptions reads the tool `{ name, desc }` entries from the WHOLE
+// /docs/mcp surface and returns them keyed by tool name.
+//
+// WHY THE SET, NOT ONE PAGE (card t_ee4114af). This reader used to name
+// web/src/app/docs/mcp/page.tsx, which was right while /docs/mcp was one page.
+// Card t_0356ed4c split it into a hub plus four task pages and moved the rows into
+// the module those pages import; the hub now holds neither a row nor the model
+// mention, so a single-file reader went red on a tree where every user-facing
+// surface still named the model. Reading the union fixes that without weakening
+// the rule: the entry still has to exist, and it still has to match the registry.
+//
+// A file with NO entries is not a failure here — four of the six files legitimately
+// hold prose only. A NAME HELD IN TWO FILES IS a failure (the same rule the
+// single-file reader enforced inside one file): the reader keys by name, so it
+// cannot say which of two rendered entries the registry was compared against.
+func docsPageDescriptions(t *testing.T, root string) map[string]docsToolDesc {
 	t.Helper()
-	out, err := parseDescriptions(path, re)
-	if err != nil {
-		t.Fatalf("read %s: %v — the docs-parity half of this guard cannot run without it", rel, err)
+
+	out := map[string]docsToolDesc{}
+	for _, rel := range docsSurfaceFiles() {
+		pairs, err := parseDescriptions(filepath.Join(root, rel), pageDescriptionPattern)
+		if err != nil {
+			t.Fatalf("read %s: %v — the docs-parity half of this guard cannot run without the "+
+				"whole /docs/mcp surface", rel, err)
+		}
+		for name, desc := range pairs {
+			if prev, dup := out[name]; dup {
+				t.Fatalf("the %q tool description appears on TWO files of the /docs/mcp surface "+
+					"(%s and %s) — this reader keys by name, so the comparison below would judge one "+
+					"of two user-visible entries. Remove one row", name, prev.file, rel)
+			}
+			out[name] = docsToolDesc{desc: desc, file: rel}
+		}
 	}
 	if len(out) == 0 {
-		t.Fatalf("no tool name/description pairs parsed from %s — the pattern matched nothing, so the "+
-			"docs-parity assertion would pass vacuously", rel)
+		t.Fatalf("no tool name/description pair parsed from any file of the /docs/mcp surface "+
+			"(looked in: %s) — the pattern matched nothing, so the docs-parity assertion would "+
+			"pass vacuously", strings.Join(docsSurfaceFiles(), ", "))
 	}
 	return out
 }

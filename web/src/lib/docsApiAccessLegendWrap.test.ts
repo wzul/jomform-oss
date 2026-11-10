@@ -56,7 +56,9 @@ import { fileURLToPath } from "node:url";
 import { accessLevels, scopeOnlyWriteRoutes } from "./openapi.ts";
 import { pageProse, sectionsOf, usesDocsProse } from "./docsProseReader.ts";
 
-const PAGE = "../app/docs/api/page.tsx";
+// Card t_0356ed4c: the Access-level legend moved to /docs/api/endpoints when
+// /docs/api was split by task; this guard reads the page that RENDERS the legend.
+const PAGE = "../app/docs/api/endpoints/page.tsx";
 const RENDERER = "../app/docs/docsProse.tsx";
 const page = readFileSync(fileURLToPath(new URL(PAGE, import.meta.url)), "utf8");
 const renderer = readFileSync(fileURLToPath(new URL(RENDERER, import.meta.url)), "utf8");

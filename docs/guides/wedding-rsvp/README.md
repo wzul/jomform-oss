@@ -26,11 +26,14 @@ full field palette.
 
 ## 3. Set Form mode to Response form
 
-![Builder with the Response form option under Form mode boxed](03-response-mode.png)
+![Builder with the Form mode dialog open and the Response form option boxed](03-response-mode.png)
 
-In the builder, the right-hand panel has **FORM MODE** at the bottom. Pick **Response form**: it
-collects responses only, with no products and no payment. Leave it on *Payment form* and the form
-will expect a product to sell, while an RSVP has nothing to sell.
+In the builder, the mode sits in the **top bar next to the slug**: the button reads *Payment form*,
+the default. Press it and pick **Response form**. You do not need to select a block or open the
+settings panel to reach it. The change asks you to confirm first, and says what it is about to do.
+
+Response form collects responses only, with no products and no payment. Leave it on *Payment form*
+and the form will expect a product to sell, while an RSVP has nothing to sell.
 
 ## 4. Add the questions and mark the required ones
 

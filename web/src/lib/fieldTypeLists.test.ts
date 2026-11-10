@@ -41,7 +41,9 @@ const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
 const BUILDER_PAGE = "web/src/app/builder/page.tsx";
 const FORMFIELDS_GO = "api/internal/formfields/formfields.go";
 const DOCS_CUSTOMIZE = "web/src/app/docs/customize/page.tsx";
-const DOCS_MCP = "web/src/app/docs/mcp/page.tsx";
+// Card t_0356ed4c: the MCP tool rows moved out of the page into this module when
+// /docs/mcp was split by task; the module is the surface that carries the rows.
+const DOCS_MCP = "web/src/lib/mcpToolGroups.ts";
 const TOOLS_GO = "api/internal/mcpsrv/tools.go";
 
 /** The types of a `string[]` literal, from `const name... = [ ... ];`. */

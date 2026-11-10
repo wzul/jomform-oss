@@ -76,11 +76,22 @@ const PAGES = [
   { name: "docs-activity", path: "/docs/activity" },
   { name: "docs-placeholders", path: "/docs/placeholders" },
   { name: "docs-mcp", path: "/docs/mcp" },
+  // Card t_0356ed4c: /docs/mcp is a hub; its four task pages are separately
+  // reachable routes and each one is scanned, not assumed covered by the hub.
+  { name: "docs-mcp-connect", path: "/docs/mcp/connect" },
+  { name: "docs-mcp-tools", path: "/docs/mcp/tools" },
+  { name: "docs-mcp-oauth", path: "/docs/mcp/oauth" },
+  { name: "docs-mcp-troubleshooting", path: "/docs/mcp/troubleshooting" },
   // t_bac29e18: the REST API reference is a public, sitemapped, footer-linked
   // page — exactly the shape this scan exists for. Its endpoint tables are the
   // largest block of dense small text on the docs site, so leaving it unscanned
   // would repeat the gap t_d768342e closed.
   { name: "docs-api", path: "/docs/api" },
+  // Card t_0356ed4c: /docs/api is a hub; its four task pages are scanned too.
+  { name: "docs-api-authentication", path: "/docs/api/authentication" },
+  { name: "docs-api-endpoints", path: "/docs/api/endpoints" },
+  { name: "docs-api-webhooks", path: "/docs/api/webhooks" },
+  { name: "docs-api-errors", path: "/docs/api/errors" },
   { name: "docs-chat", path: "/docs/chat" },
   { name: "docs-feedback", path: "/docs/feedback" },
   // Issue #255's custom HTML forms guide. docsA11y.test.ts walks the pages on

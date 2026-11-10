@@ -255,22 +255,97 @@ export function Prose({ blocks }: { blocks: Block[] }) {
   );
 }
 
-/** A docs page header: short lead, section chips, then the sections. */
+// The on-page "jump to" strip (card t_0356ed4c).
+//
+// WHY IT EXISTS. The layout already renders an "On this page" ToC, but on a phone
+// it is a collapsed <details> at the very top and the page under it can be tens of
+// thousands of pixels tall — /docs/mcp measured 35,608px and /docs/api 27,442px at
+// 390px. A reader who knows which section they want should not have to scroll to
+// find the nav that would take them there, so the strip sits in the body, above
+// the first section, as a row of chips. It is plain anchors: no JS, no state.
+//
+// It is rendered only when it earns its space — a page with six or more sections,
+// or a page that opts in because its content is one long table (`jumpTo`).
+//
+// THE CAP IS MEASURED, NOT GUESSED. /docs/customize has 31 sections, and a strip of
+// 31 pills measured 800-850px tall at 390px — more than half a phone screen, i.e.
+// the strip had become the wall it was added to break. So the first JUMP_CAP chips
+// render, and the rest sit behind a disclosure that is one tap away. The disclosure
+// is a native <details>, focused and opened by the browser, so it costs no JS and
+// keeps the anchors reachable by keyboard.
+const JUMP_CAP = 12;
+
+function JumpChip({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      className="rounded-full border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-1 text-xs font-medium text-[var(--jf-text-secondary)] underline underline-offset-2 hover:text-[var(--jf-text)]"
+    >
+      {label}
+    </a>
+  );
+}
+
+export function DocsJumpTo({ links }: { links: { href: string; label: string }[] }) {
+  if (links.length === 0) return null;
+  const shown = links.slice(0, JUMP_CAP);
+  const rest = links.slice(JUMP_CAP);
+  return (
+    <nav aria-label="Jump to sections" className="mt-5 [overflow-wrap:anywhere]">
+      <div className="flex flex-wrap gap-2">
+        {shown.map((l) => (
+          <JumpChip key={l.href} href={l.href} label={l.label} />
+        ))}
+      </div>
+      {rest.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium text-[var(--jf-text-secondary)] underline underline-offset-2 hover:text-[var(--jf-text)]">
+            More sections ({rest.length})
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {rest.map((l) => (
+              <JumpChip key={l.href} href={l.href} label={l.label} />
+            ))}
+          </div>
+        </details>
+      )}
+    </nav>
+  );
+}
+
+/** A docs page header: short lead, a jump-to strip, section chips, then the sections. */
 export function DocsPage({
   title,
   lead,
   summary,
   sections,
+  jumpTo,
+  extraJumps,
 }: {
   title: string;
   lead: string;
   summary?: string[];
   sections: Section[];
+  /** Force the jump-to strip on a page whose height is one long table, not sections. */
+  jumpTo?: boolean;
+  /** Anchors outside SECTIONS (a hand-rendered table block) to put in the strip. */
+  extraJumps?: { href: string; label: string }[];
 }) {
+  const jumps = [
+    ...sections.map((s) => ({ href: `#${s.id}`, label: s.title })),
+    ...(extraJumps ?? []),
+  ];
+  // Four chips on a 900-word page is decoration; the strip earns its space on a page
+  // long enough that the reader cannot see what is below the fold. Six sections is
+  // where this tree's pages start reaching several screens; the two hand-rendered
+  // reference walls (/docs/mcp/tools, /docs/api/endpoints) and the two hubs opt in.
+  const showJumps = jumpTo || sections.length >= 6;
   return (
     <div className="max-w-[36rem]">
       <h1 className="text-3xl font-bold tracking-tight text-[var(--jf-text)] [overflow-wrap:anywhere]">{title}</h1>
       <p className="mt-2 text-base leading-7 text-[var(--jf-text-secondary)] [overflow-wrap:anywhere]">{lead}</p>
+
+      {showJumps ? <DocsJumpTo links={jumps} /> : null}
 
       {summary && summary.length > 0 && (
         <ul className="mt-4 flex flex-wrap gap-2 [overflow-wrap:anywhere]">

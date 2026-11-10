@@ -10,6 +10,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { MobileRecord, MobileRecordList } from "../../components/MobileRecord";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
@@ -223,7 +224,103 @@ function SpamPageInner() {
           </p>
         )}
 
-        <div className="jf-card mt-4 overflow-x-auto">
+        {/* PHONE LAYOUT (card t_c83ecf3e): both tabs' tables hide their Date
+            column below `sm`, and the sales tab hides the Reason too — so a
+            phone showed a flagged row with no date to judge it by and no reason
+            it was flagged. Below `sm` each row is a card; the hidden columns sit
+            one disclosure away. The tables above `sm` are unchanged. */}
+        <div className="jf-card mt-4 overflow-hidden sm:hidden">
+          {tab === "submissions" ? (
+            <>
+              {subs.length > 0 && (
+                <MobileRecordList>
+                  {subs.map((s) => (
+                    <MobileRecord
+                      key={s.id}
+                      title={s.id.slice(0, 8)}
+                      titleMono
+                      subtitle={reason(s.spam_reason)}
+                      fields={[
+                        {
+                          key: "date",
+                          label: t("prod.date"),
+                          value: formatDate(s.created_at, user?.timezone),
+                        },
+                      ]}
+                      detailsLabel={t("common.details")}
+                      actions={
+                        canWrite ? (
+                          <button
+                            onClick={() => unspamSubmission(s.id)}
+                            disabled={busy !== null}
+                            className="jf-btn-ghost"
+                          >
+                            {busy === s.id ? "…" : t("spam.unspam")}
+                          </button>
+                        ) : null
+                      }
+                    />
+                  ))}
+                </MobileRecordList>
+              )}
+              {!checking && subs.length === 0 && (
+                <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("spam.empty")}</p>
+              )}
+            </>
+          ) : (
+            <>
+              {sales.length > 0 && (
+                <MobileRecordList>
+                  {sales.map((s) => (
+                    <MobileRecord
+                      key={s.ref_code}
+                      title={s.ref_code}
+                      titleMono
+                      subtitle={
+                        <>
+                          {s.buyer || "—"}
+                          {s.buyer_email && (
+                            <span className="block break-words">{s.buyer_email}</span>
+                          )}
+                        </>
+                      }
+                      meta={formatMoney(s.total_sen, s.currency)}
+                      badges={<span className="text-jf-2xs">{s.status}</span>}
+                      fields={[
+                        { key: "reason", label: t("spam.reason"), value: reason(s.spam_reason) },
+                        {
+                          key: "date",
+                          label: t("prod.date"),
+                          value: formatDate(s.created_at, user?.timezone),
+                        },
+                      ]}
+                      detailsLabel={t("common.details")}
+                      actions={
+                        canWrite ? (
+                          <button
+                            onClick={() => unspamSale(s.ref_code)}
+                            disabled={busy !== null}
+                            className="jf-btn-ghost"
+                          >
+                            {busy === s.ref_code ? "…" : t("spam.unspam")}
+                          </button>
+                        ) : null
+                      }
+                    />
+                  ))}
+                </MobileRecordList>
+              )}
+              {!checking && sales.length === 0 && (
+                <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("spam.empty")}</p>
+              )}
+            </>
+          )}
+          {checking && (
+            <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("spam.loading")}</p>
+          )}
+        </div>
+
+        <div className="jf-card mt-4 hidden overflow-x-auto sm:block">
           {tab === "submissions" ? (
             <table className="w-full text-sm">
               <thead>

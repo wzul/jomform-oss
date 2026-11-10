@@ -366,6 +366,19 @@ const GROUPS: Group[] = [
         body: "Drive JomForm from your own server: create forms, read sales and responses, manage products, subscriptions and webhooks.",
       },
     ],
+    // Card t_0356ed4c: both reference pages were split by task, and the sidebar
+    // now carries the task pages. This row is how the index reaches them —
+    // docsIndex.test.ts requires every sidebar route to be linked from the index.
+    more: [
+      { href: "/docs/mcp/connect", label: "Connect an MCP client" },
+      { href: "/docs/mcp/tools", label: "MCP tool list" },
+      { href: "/docs/mcp/oauth", label: "MCP OAuth & tokens" },
+      { href: "/docs/mcp/troubleshooting", label: "MCP troubleshooting" },
+      { href: "/docs/api/authentication", label: "API authentication & scopes" },
+      { href: "/docs/api/endpoints", label: "API endpoints by resource" },
+      { href: "/docs/api/webhooks", label: "API webhooks" },
+      { href: "/docs/api/errors", label: "API errors & limits" },
+    ],
   },
 ];
 

@@ -122,7 +122,18 @@ const NAV_GROUPS: Group[] = [
     label: "Reference",
     sections: [
       { href: "/docs/api", label: "REST API reference", guides: ["/docs/guides/design-with-mcp"] },
+      // Card t_0356ed4c: the reference pages were split by TASK (one 5,658-word
+      // page became a hub plus four), and the sidebar lists each task page so a
+      // reader can jump straight to it instead of scrolling the hub.
+      { href: "/docs/api/authentication", label: "API authentication & scopes" },
+      { href: "/docs/api/endpoints", label: "API endpoints by resource" },
+      { href: "/docs/api/webhooks", label: "API webhooks" },
+      { href: "/docs/api/errors", label: "API errors & limits" },
       { href: "/docs/mcp", label: "MCP tool reference", guides: ["/docs/guides/design-with-mcp"] },
+      { href: "/docs/mcp/connect", label: "Connect an MCP client" },
+      { href: "/docs/mcp/tools", label: "MCP tool list" },
+      { href: "/docs/mcp/oauth", label: "MCP OAuth & tokens" },
+      { href: "/docs/mcp/troubleshooting", label: "MCP troubleshooting" },
     ],
   },
 ];

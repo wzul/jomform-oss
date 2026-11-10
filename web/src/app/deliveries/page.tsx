@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "../../components/Shell";
+import { MobileRecord, MobileRecordList } from "../../components/MobileRecord";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { workspaceQuery } from "../../lib/workspace";
@@ -230,8 +231,80 @@ export default function DeliveriesPage() {
           </select>
         </div>
 
-        {/* Table */}
-        <div className="jf-card mt-4 overflow-x-auto">
+        {/* PHONE LAYOUT (card t_c83ecf3e). The table below hides its Event,
+            Form and Time columns below `sm`, and Event — `delivered` /
+            `bounce` / `complaint` / `open` / `click` — is what this page is
+            FOR: its title, its subtitle and its Status filter all promise it,
+            and on a 390px screen it was simply not rendered. So below `sm`
+            each row is a card: the event is a BADGE in the collapsed card (read
+            without opening anything), and every column the table hides lives
+            one disclosure away. The table above `sm` is unchanged. */}
+        <div className="jf-card mt-4 overflow-hidden sm:hidden">
+          {rows.length > 0 && (
+            <MobileRecordList>
+              {rows.map((d) => (
+                <MobileRecord
+                  key={d.id}
+                  title={d.email}
+                  subtitle={<span className="font-mono">{d.sale_ref || "—"}</span>}
+                  badges={
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${eventBadge(d.event_type)}`}
+                    >
+                      {d.event_type}
+                    </span>
+                  }
+                  fields={[
+                    {
+                      key: "form",
+                      label: t("del.colForm"),
+                      value: d.form_id ? formName.get(d.form_id) || "—" : "—",
+                    },
+                    { key: "time", label: t("del.colTime"), value: fmtDateTime(d.created_at) },
+                  ]}
+                  detailsLabel={t("common.details")}
+                  actions={
+                    d.sale_ref ? (
+                      <button
+                        onClick={() => {
+                          setDetail(d);
+                          void openTimeline(d.sale_ref!);
+                        }}
+                        className="jf-btn-ghost"
+                      >
+                        {t("del.timeline")}
+                      </button>
+                    ) : (
+                      <span className="text-jf-3xs text-[var(--jf-muted)]">—</span>
+                    )
+                  }
+                />
+              ))}
+            </MobileRecordList>
+          )}
+          {!checking && rows.length === 0 && (
+            <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">
+              {err || t("del.empty")}
+              {err && (
+                <span className="mt-2 block">
+                  <button
+                    type="button"
+                    onClick={() => void load()}
+                    className="text-xs text-[var(--jf-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--jf-primary)]"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </span>
+              )}
+            </p>
+          )}
+          {checking && (
+            <p className="px-4 py-10 text-center text-sm text-[var(--jf-muted)]">{t("del.loading")}</p>
+          )}
+        </div>
+
+        {/* Table (sm and up — the phone arm above owns everything below that) */}
+        <div className="jf-card mt-4 hidden overflow-x-auto sm:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">

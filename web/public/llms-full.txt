@@ -95,11 +95,19 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - [Embed on your site](https://jomform.com/docs/embed) — an iframe embed with auto-height via
   postMessage, the merchant listener snippet, and the 640px fallback.
 - [MCP tool reference](https://jomform.com/docs/mcp) — every MCP tool with its inputs and outputs.
+  Start at the hub, or go straight to [connecting a client](https://jomform.com/docs/mcp/connect),
+  [the tool list](https://jomform.com/docs/mcp/tools),
+  [OAuth and scopes](https://jomform.com/docs/mcp/oauth) and
+  [troubleshooting](https://jomform.com/docs/mcp/troubleshooting).
 - [Placeholders reference](https://jomform.com/docs/placeholders) — every dynamic placeholder.
 - [REST API reference](https://jomform.com/docs/api) — the /v1/rest contract: authenticate with an
   API key, create and publish forms, read sales and responses, manage products, subscriptions,
   webhooks and domains. Every operation is listed; a machine-readable OpenAPI 3.1 document is
-  published at https://jomform.com/openapi.json.
+  published at https://jomform.com/openapi.json. Task pages:
+  [authentication and scopes](https://jomform.com/docs/api/authentication),
+  [endpoints by resource](https://jomform.com/docs/api/endpoints),
+  [webhooks](https://jomform.com/docs/api/webhooks) and
+  [errors and limits](https://jomform.com/docs/api/errors).
 - [The form builder](https://jomform.com/docs/builder) — the field palette, the canvas, the three areas, and editing a block's settings on desktop and on a phone.
 - [In-app assistant](https://jomform.com/docs/chat) — what the built-in chat assistant can and cannot do: it answers questions about your own forms, sales and products, files feedback, and can prepare a small reversible change for you to confirm — it can never apply one by itself.
 - [In-app feedback](https://jomform.com/docs/feedback) — filing a bug or feature request from the dashboard, following the reply thread, what the statuses mean, and the email that tells you a reply arrived.

@@ -43,7 +43,7 @@ const mediaPicker = readFileSync(
   "utf8",
 );
 const docsMCP = readFileSync(
-  fileURLToPath(new URL("../app/docs/mcp/page.tsx", import.meta.url)),
+  fileURLToPath(new URL("../lib/mcpToolGroups.ts", import.meta.url)),
   "utf8",
 );
 

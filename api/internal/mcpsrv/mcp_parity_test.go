@@ -460,6 +460,15 @@ func docsDirPaths(t *testing.T) string {
 // the merchant-facing copy lives verbatim in the page source (either as JSX
 // text or inside the string literals the page maps over) — a plain text scan
 // is therefore the honest, build-free way to assert coverage from Go.
+//
+// IT ALSO READS THE TOOL-LIST MODULE (card t_ee4114af). The /docs/mcp pages do
+// not spell out the tool names: they render them from web/src/lib/mcpToolGroups.ts
+// (the split card t_0356ed4c moved the rows there). A corpus that stopped at this
+// directory therefore stopped seeing the tool list itself, and the coverage check
+// below read 76 registered tools as "documented on NO docs page" while every one
+// of them was on the page a reader opens. The module is part of the docs surface:
+// add it, keyed by its repo-relative path so a failure can be opened directly.
+// A module that cannot be read is a FAILURE — never a slightly smaller corpus.
 func readDocsCorpus(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
@@ -490,6 +499,16 @@ func readDocsCorpus(t *testing.T, dir string) map[string]string {
 	if len(corpus) == 0 {
 		t.Fatalf("no docs page source files found under %s — the docs-coverage guard cannot run", dir)
 	}
+
+	toolGroupsPath := filepath.Join(docsRepoRoot(t), docsMCPToolGroupsRelPath)
+	b, rerr := os.ReadFile(toolGroupsPath)
+	if rerr != nil {
+		t.Fatalf("read %s: %v — the /docs/mcp pages render their tool list from this module, so "+
+			"without it this coverage check would read every tool as undocumented",
+			docsMCPToolGroupsRelPath, rerr)
+	}
+	corpus[docsMCPToolGroupsRelPath] = string(b)
+
 	return corpus
 }
 
@@ -511,6 +530,12 @@ func docsMentioning(corpus map[string]string, tool string) []string {
 // #513). Every AGENTS.md parity-checklist tool that is REGISTERED must be named
 // on at least one docs page under web/src/app/docs — a feature cannot reach the
 // MCP checklist and ship with zero documentation.
+//
+// "Documented on the docs surface" includes the module the /docs/mcp pages
+// render their tool list from (web/src/lib/mcpToolGroups.ts, card t_ee4114af):
+// after the /docs/mcp split the pages carry no tool names themselves, so reading
+// only the page directory reported 76 registered tools as undocumented while
+// every one of them was on the page a reader opens.
 //
 // It deliberately covers the checklist intersection only (see the file header
 // for the full statement of what this does and does not check), and skips the

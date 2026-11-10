@@ -102,7 +102,12 @@ export function readPageProse(path: string): string {
 
 /** Does this page render through the shared prose renderer? */
 export function usesDocsProse(source: string): boolean {
-  return /from "\.\.\/docsProse"/.test(source) || /from "\.\/docsProse"/.test(source);
+  // Any relative depth: /docs/<page> imports "../docsProse", a nested task page
+  // such as /docs/mcp/tools imports "../../docsProse". Card t_0356ed4c split two
+  // reference pages into nested routes, and the old two-shape test reported every
+  // one of them as "not renderer-backed" — which would have exempted them from
+  // the prose-convention exemption and RED the build on their allowed markers.
+  return /from "(?:\.\.\/)+docsProse"/.test(source) || /from "\.\/docsProse"/.test(source);
 }
 
 /** One `{ table: … }` block of a converted page, as the page writes it. */

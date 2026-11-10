@@ -34,11 +34,8 @@ package mcpsrv
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -166,35 +163,16 @@ func registeredToolDescription(t *testing.T, name string) string {
 }
 
 // docsMcpRowFor returns the one /docs/mcp source line that carries the tool's
-// row, with the page's `\u2014` escapes resolved so the text reads as it renders.
+// row, with the `\u2014` escapes resolved so the text reads as it renders.
 //
-// The page is located relative to this file (api/internal/mcpsrv →
-// ../../../web/src/app/docs/mcp/page.tsx). A missing page or a missing/duplicated
-// row is a FAILURE, not a skip: the row is the rendered surface this guard
-// exists for, and a guard that skips when its subject disappears is the silent
-// hole it is meant to close.
+// The row is located on the whole /docs/mcp surface (docs_surface_test.go): the
+// split card t_0356ed4c moved the tool rows off the hub page into the module the
+// pages render, and this reader's hard-coded page path then found zero rows on a
+// tree where the row was present (card t_ee4114af). A missing surface file or a
+// missing/duplicated row is a FAILURE, not a skip: the row is the rendered
+// surface this guard exists for, and a guard that skips when its subject
+// disappears is the silent hole it is meant to close.
 func docsMcpRowFor(t *testing.T, tool string) string {
 	t.Helper()
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed — cannot locate the /docs/mcp page")
-	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "web", "src", "app", "docs", "mcp", "page.tsx"))
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v — /docs/mcp is a surface this guard checks, so a missing page is a failure", path, err)
-	}
-
-	needle := `{ name: "` + tool + `"`
-	var rows []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.Contains(line, needle) {
-			rows = append(rows, strings.ReplaceAll(line, `\u2014`, "—"))
-		}
-	}
-	if len(rows) != 1 {
-		t.Fatalf("found %d rows for %q in %s — want exactly one", len(rows), tool, path)
-	}
-	return rows[0]
+	return strings.ReplaceAll(docsToolRowFor(t, tool).text, `\u2014`, "—")
 }

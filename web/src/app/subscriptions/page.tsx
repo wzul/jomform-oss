@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageLoading } from "../../components/PageLoading";
 import { Shell } from "../../components/Shell";
+import { MobileRecord, MobileRecordList } from "../../components/MobileRecord";
 import { useI18n } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate } from "../../lib/formatDate";
@@ -238,8 +239,92 @@ export default function Subscriptions() {
           </p>
         )}
 
-        {/* Table */}
-        <div className="jf-card mt-4 overflow-x-auto">
+        {/* PHONE LAYOUT (card t_c83ecf3e): the table below switches OFF its
+            Product, Next charge and Retry columns below `sm`, so a phone showed
+            a customer's plan with no plan, no next charge and no retry count.
+            Below `sm` each row is a card — customer, amount·period and status
+            stay visible, the three hidden columns sit one disclosure away. The
+            table above `sm` is unchanged. */}
+        <div className="jf-card mt-4 overflow-hidden sm:hidden">
+          {rows.length > 0 && (
+            <MobileRecordList>
+              {rows.map((sub) => (
+                <MobileRecord
+                  key={sub.id}
+                  title={sub.customer}
+                  meta={
+                    <>
+                      {money(sub.amount_sen)}{" "}
+                      <span className="font-normal text-[var(--jf-muted)]">
+                        ·{" "}
+                        {sub.period === "year" ? t("sub.year") : t("sub.month")}
+                      </span>
+                    </>
+                  }
+                  badges={
+                    <>
+                      <span
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-jf-2xs font-medium ${statusBadge(sub.status)}`}
+                      >
+                        {statusLabel(sub.status)}
+                      </span>
+                      {sub.card_update_pending && (
+                        <span
+                          className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-jf-2xs font-medium text-rose-700"
+                          title={t("sub.cardUpdatePaused")}
+                        >
+                          {t("sub.cardNeedsUpdate")}
+                        </span>
+                      )}
+                    </>
+                  }
+                  fields={[
+                    { key: "product", label: t("sub.product"), value: sub.product_name || "—" },
+                    {
+                      key: "nextCharge",
+                      label: t("sub.nextCharge"),
+                      value: sub.next_charge_at ? formatDate(sub.next_charge_at, user?.timezone) : "—",
+                    },
+                    {
+                      key: "retryAttempts",
+                      label: t("sub.retryAttempts"),
+                      value: sub.retry_attempts > 0 ? sub.retry_attempts : "—",
+                    },
+                  ]}
+                  detailsLabel={t("common.details")}
+                  actions={
+                    canWrite && sub.status !== "cancelled" ? (
+                      <>
+                        <button
+                          onClick={() => updateCardOne(sub)}
+                          disabled={busyId === sub.id}
+                          title={t("sub.updateCard")}
+                          className="jf-btn-ghost text-sky-700"
+                        >
+                          {busyId === sub.id ? "…" : t("sub.updateCard")}
+                        </button>
+                        <button
+                          onClick={() => cancelOne(sub)}
+                          disabled={busyId === sub.id}
+                          title={t("sub.tokenRetained")}
+                          className="jf-btn-ghost text-rose-700"
+                        >
+                          {busyId === sub.id ? "…" : t("sub.cancel")}
+                        </button>
+                      </>
+                    ) : null
+                  }
+                />
+              ))}
+            </MobileRecordList>
+          )}
+          {rows.length === 0 && (
+            <p className="px-4 py-8 text-center text-sm text-[var(--jf-muted)]">{t("sub.empty")}</p>
+          )}
+        </div>
+
+        {/* Table (sm and up — the phone arm above owns everything below that) */}
+        <div className="jf-card mt-4 hidden overflow-x-auto sm:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--jf-border)] text-left">
