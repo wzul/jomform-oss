@@ -21,7 +21,9 @@
     "guides:check": "node scripts/guides.mjs --check",
     "css:scan-scope": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/cssScanScope.mjs",
     "a11y": "playwright test --project=a11y",
-    "e2e": "playwright test --project=feature-e2e",
+    "e2e": "playwright test --project=feature-builder --project=feature-core",
+    "e2e:builder": "playwright test --project=feature-builder",
+    "e2e:core": "playwright test --project=feature-core",
     "audit:gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/npm-audit-gate.mjs",
     "a11y:install": "playwright install chromium"
   },

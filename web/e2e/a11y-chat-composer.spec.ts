@@ -49,7 +49,7 @@
 //   npx playwright test e2e/a11y-chat-composer.spec.ts --project=a11y
 //
 // The `a11y` project selects every `a11y-*.spec.ts` by FILENAME PREFIX, so this
-// file is in that gate by its name alone (and the `feature-e2e` project, which
+// file is in that gate by its name alone (and the `feature-core` project, which
 // excludes that prefix, never runs it).
 import { test, expect, type Page } from "@playwright/test";
 

@@ -59,6 +59,21 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "choosing-the-method",
+    title: "Choosing the method (CHIP does not ask again)",
+    icon: "🧭",
+    body: [
+      "The buyer picks FPX, DuitNow QR, card or e-wallet **on your JomForm page**, above the Pay button. The Pay button then names the choice: “Pay RM186.00 / via FPX”.",
+      "That choice is carried to CHIP. The purchase is created with **only that method enabled**, and the buyer lands on CHIP's page with it pre-selected.",
+      "CHIP therefore does not show its own method screen. One question, asked once.",
+      "**Only the methods you enabled appear.** The rows come from Settings → CHIP → payment methods, not from a fixed list, so a workspace without e-wallets never offers one.",
+      "A method you did not enable is refused with a message. JomForm never falls back to another method on the buyer's behalf, because that would charge the wrong way.",
+      "The picker appears on both buyer surfaces: the **menu checkout sheet** and a **payment form's** last block.",
+      "A workspace with no method JomForm can label shows no picker, and CHIP's page asks.",
+      "The lock line under the rows is literal: the card number is typed on CHIP's page, never on yours, and JomForm stores no card data.",
+    ],
+  },
+  {
     id: "what-lands-on-the-sale",
     title: "What lands on the sale",
     icon: "🧾",

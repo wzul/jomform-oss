@@ -821,7 +821,7 @@ slate-50 and 7.903:1 on white, so it is safe on every light surface here.
 `web/e2e/form-settings-tabstrip-contrast.spec.ts` holds `/form-settings` in
 place. It is a **browser** guard, not a source grep, and it runs in the `e2e`
 gate: its name does not start with `a11y`, so `playwright.config.ts` selects it
-for the `feature-e2e` project rather than the `a11y` one — both are gates in
+for the `feature-core` project rather than the `a11y` one — both are gates in
 `scripts/preflight.sh` — with the API stubbed at the browser level, so it needs
 no Go server, session or database:
 
@@ -860,7 +860,7 @@ guard report a `<code>` 180 lines away as the ancestor of unrelated spans.
 >
 > **The panel's form-control NAMES are now in the gate (the `e2e` one).** Two e2e
 > guards read the name sources off the ACTUAL rendered controls (both
-> `feature-e2e`, part of `scripts/preflight.sh`):
+> `feature-core`, part of `scripts/preflight.sh`):
 > `web/e2e/builder-panel-select-names.spec.ts` for every `<select>`, and
 > `web/e2e/builder-panel-choice-names.spec.ts` (card `t_c4abb920`)
 > for EVERY visible `input`/`textarea`/`select` — the latter refuses a control

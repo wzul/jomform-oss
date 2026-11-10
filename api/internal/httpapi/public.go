@@ -412,7 +412,22 @@ type submitInput struct {
 	// the per-method processing fee is priced from, and it is NOT trusted — the
 	// server re-resolves the rate for this method and refuses a method that is
 	// not active (400), rather than silently correcting it.
+	//
+	// Card t_453489b9: the page's ONE picker now sends PayMethod instead, which
+	// carries the same group keys and additionally drives the CHIP redirect.
+	// FeeMethod stays accepted for an older cached page; when both arrive
+	// PayMethod wins, because it is the choice the page actually showed.
 	FeeMethod string `json:"fee_method,omitempty"`
+	// PayMethod is the CHIP payment-method GROUP the buyer picked on the
+	// JomForm page ('fpx', 'duitnow_qr', 'card', 'ewallet') — the answer CHIP
+	// must not ask for a second time.
+	//
+	// Why not "payment_method": that field is the GATEWAY selector on this same
+	// body ('chip' | 'bank_direct'), and reusing the name would turn a method
+	// pick into a gateway switch — a money bug, not a rename. Empty means the
+	// page did not ask (an older page or an embed) and the order behaves exactly
+	// as it did before this feature.
+	PayMethod string `json:"pay_method,omitempty"`
 	// ExpectedTotalSen is the total the page DISPLAYED to the buyer, echoed
 	// back so the server can refuse a checkout whose price moved underneath
 	// them (a product edited, a rate changed) instead of charging a different

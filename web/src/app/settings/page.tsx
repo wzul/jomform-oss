@@ -137,6 +137,18 @@ const METHODS = [
   { id: "crypto_coin", label: "Crypto Coin" },
 ];
 
+/**
+ * The payment-method whitelist as ONE comparable string (card t_f11d676f).
+ *
+ * The sticky Save bar has to know whether the picked methods differ from the
+ * SAVED ones, and two arrays answer that badly: order is irrelevant to the
+ * server and `["card","fpx"]` is not `["fpx","card"]`. Sorting and joining
+ * makes "the merchant ticked nothing new" a string comparison.
+ */
+function methodSetKey(ids: readonly string[]): string {
+  return [...ids].sort().join(",");
+}
+
 // Issue #185: supported settlement currencies (default MYR). Mirrors the
 // backend CHECK constraint in migration 000029_space_currency.
 const CURRENCIES = [
@@ -181,6 +193,50 @@ const WEBHOOK_EVENTS = ["sale.paid", "sale.failed", "subscription.charged"] as c
 const DEFAULT_LP_PRIMARY = "#7c3aed"; // design-tokens-exempt: a persisted colour-field default, not a style
 const DEFAULT_LP_BACKGROUND = "#ffffff"; // design-tokens-exempt: a persisted colour-field default, not a style
 
+// One edge arrow of a horizontally scrolling tab strip (card t_f11d676f).
+//
+// Module scope, not inside `Settings`: a component declared in the render body
+// is a NEW type on every render, and React answers a new type by unmounting and
+// remounting the subtree (the `react-hooks/static-components` rule that the
+// `Shell` nav components were moved out for). It renders the same chevron
+// mirrored for the two ends, named for the direction it scrolls, so the pair is
+// not two identically-named buttons to a screen reader. RTL mirrors the glyph
+// in `globals.css` (`html[dir="rtl"] .jf-tabstrip-arrow svg`), because the
+// button itself sits at the INLINE start/end.
+function StripEdgeArrow({
+  side,
+  label,
+  testId,
+  onClick,
+}: {
+  side: "start" | "end";
+  label: string;
+  testId: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      data-testid={testId}
+      className={`jf-tabstrip-arrow absolute inset-y-0 z-10 flex w-7 items-center justify-center border-b border-slate-200 bg-white text-[var(--jf-muted)] hover:text-slate-900 ${
+        side === "start" ? "start-0" : "end-0"
+      }`}
+    >
+      <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden="true">
+        <path
+          d={side === "start" ? "M12 5l-5 5 5 5" : "M8 5l5 5-5 5"}
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 export default function Settings() {
   const { t } = useI18n();
   // Card t_48a93084: the custom-domain target and the workspace address the
@@ -207,6 +263,18 @@ export default function Settings() {
   const chipModeTouched = useRef(false);
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
+  // Card t_f11d676f: the CHIP card's SAVED values, so a control can say whether
+  // there is anything to save. It is written from the payload the page APPLIED
+  // (never from what is on screen): the sticky bar's Save is disabled while the
+  // form holds exactly this, and re-enabled the moment a field or a tick moves.
+  // The secret key is deliberately NOT here — it is write-only and its field is
+  // empty whenever the stored key is in force, so any typing is a new key.
+  const [chipSaved, setChipSaved] = useState<{ brand: string; email: string; methods: string; mode: ChipMode }>({
+    brand: "",
+    email: "",
+    methods: "",
+    mode: "test",
+  });
   // The page's two message states. `msg` holds the banner/toast text and `msgOk`
   // its TONE: several of the writers below are a FAILED save, not a
   // confirmation (the tracking and e-Invoice PUTs, the CHIP unverified save), and
@@ -463,9 +531,27 @@ export default function Settings() {
       if (ei) { setTin(ei.tin || ""); setMsic(ei.msic || ""); }
       if (s) {
         setStatus(s);
-        if (s.brand_id) setBrandId(s.brand_id);
-        if (s.email_fallback) setEmailFallback(s.email_fallback);
-        if (Array.isArray(s.whitelist) && s.whitelist.length) setWhitelist(s.whitelist);
+        // Card t_f11d676f: the fields are assigned from the payload
+        // UNCONDITIONALLY, and the saved baseline with them.
+        //   * `&& s.whitelist.length` used to keep the previous ticks when the
+        //     server held an EMPTY whitelist — i.e. after a merchant unticked
+        //     everything and saved, the pills came back ticked from the stale
+        //     state while the server had none. The baseline cannot be honest
+        //     while a field and its saved value disagree, and the sticky Save
+        //     bar is driven by that comparison.
+        //   * an absent field is the empty string, which is what the input
+        //     shows, so a workspace switch cannot leave the previous
+        //     workspace's Brand ID in the box with a baseline that says
+        //     otherwise.
+        setBrandId(s.brand_id || "");
+        setEmailFallback(s.email_fallback || "");
+        setWhitelist(Array.isArray(s.whitelist) ? s.whitelist : []);
+        setChipSaved({
+          brand: s.brand_id || "",
+          email: s.email_fallback || "",
+          methods: methodSetKey(Array.isArray(s.whitelist) ? s.whitelist : []),
+          mode: chipModeFromStored(s.mode),
+        });
         // Issue #327: the full secret is never returned — only a masked tail.
         // Never populate the editable field with a real secret; the merchant
         // can only enter a NEW key to replace the stored one (blank keeps it).
@@ -1519,6 +1605,98 @@ export default function Settings() {
     revealTab(tabStripRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? null);
   }, [revealTab, activeTab, visibleTabs.length]);
 
+  // WHICH EDGE OF THE STRIP STILL HIDES A TAB (card t_f11d676f).
+  //
+  // The strip is one scrolling row, and a row whose ninth tab is clipped at the
+  // right edge with no fade, arrow or scrollbar reads as a COMPLETE row: the
+  // merchant has no reason to swipe. Measured on the built page at 390px: 11
+  // tabs in a 342px box, `scrollWidth` 1,013 — two thirds of the tab set was off
+  // screen behind an edge that looked like the end.
+  //
+  // So the strip reports where its content is hidden (`data-edge`, consumed by
+  // `.jf-tabstrip` in globals.css: a fade over that edge) and the fade follows
+  // the thumb instead of sitting there permanently: at the start edge only the
+  // END fades, at the end edge only the START does. A strip that does not
+  // overflow reports `none` and carries no mask at all.
+  //
+  // `Math.abs(scrollLeft)` is what makes this RTL-correct without asking the
+  // direction: the strip starts at scrollLeft 0 in LTR and at 0 in RTL too
+  // (scrollLeft goes NEGATIVE from there in Chromium/Firefox), so distance from
+  // the start edge is the absolute value in both writing modes.
+  const [stripEdge, setStripEdge] = useState<"none" | "start" | "end" | "both">("none");
+  const syncStripEdge = useCallback(() => {
+    const el = tabStripRef.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) {
+      setStripEdge("none");
+      return;
+    }
+    const fromStart = Math.abs(el.scrollLeft);
+    const atStart = fromStart <= 1;
+    const atEnd = fromStart >= max - 1;
+    setStripEdge(atStart && atEnd ? "none" : atStart ? "end" : atEnd ? "start" : "both");
+  }, []);
+
+  // The edge arrows move the strip one "page" toward that end. Direction is
+  // resolved through the element's OWN `direction` (RTL scrolls negative), and
+  // the step is most of the visible width so a tab never lands half under the
+  // arrow. No `behavior: "smooth"`: the repo's motion layer honours
+  // `prefers-reduced-motion` for CSS, and a JS smooth scroll would ignore it.
+  const scrollStrip = useCallback(
+    (dir: 1 | -1) => {
+      const el = tabStripRef.current;
+      if (!el) return;
+      const step = Math.max(120, Math.round(el.clientWidth * 0.8));
+      const rtl = getComputedStyle(el).direction === "rtl";
+      el.scrollLeft += (rtl ? -1 : 1) * dir * step;
+      syncStripEdge();
+    },
+    [syncStripEdge],
+  );
+
+  // Re-read on: a scroll (the cue has to move with the thumb), a resize of the
+  // strip (a wider phone shows more tabs and can stop overflowing), and a change
+  // of the tab set (the admin-only tabs arrive with the session, which is what
+  // turns a non-overflowing strip into an overflowing one — the first paint
+  // measured 9 tabs and the settled strip 13).
+  useEffect(() => {
+    const el = tabStripRef.current;
+    if (!el) return;
+    syncStripEdge();
+    el.addEventListener("scroll", syncStripEdge, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(syncStripEdge);
+    ro?.observe(el);
+    window.addEventListener("resize", syncStripEdge, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", syncStripEdge);
+      ro?.disconnect();
+      window.removeEventListener("resize", syncStripEdge);
+    };
+  }, [syncStripEdge, activeTab, visibleTabs.length]);
+
+  // ── the CHIP card's "is there anything to save?" (card t_f11d676f) ──
+  //
+  // The sticky bar is the only Save a merchant sees in the first viewport on a
+  // phone, so it must not be a control that does nothing: disabled until the
+  // form differs from what the server holds, enabled the moment it does. The
+  // secret is the one field with no server-side counterpart to compare (it is
+  // write-only and never returned), so any non-empty value counts as unsaved.
+  const chipDirty =
+    brandId !== chipSaved.brand ||
+    emailFallback !== chipSaved.email ||
+    chipMode !== chipSaved.mode ||
+    secretKey.trim() !== "" ||
+    methodSetKey(whitelist) !== chipSaved.methods;
+  const allMethodsSelected = METHODS.length > 0 && METHODS.every((m) => whitelist.includes(m.id));
+  // The connection state the bar carries beside the button, in the same words
+  // the card's own badge uses.
+  const chipStateLabel = status
+    ? status.configured
+      ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() })
+      : t("set.notSet")
+    : "";
+
   // Stable identity: the toast's dismiss timer is keyed on this callback, and a
   // new function on every render would restart (or drop) the timer. It must live
   // in the component body — a hook inside the JSX below renders conditionally and
@@ -1571,33 +1749,59 @@ export default function Settings() {
             `-mb-px` stays on the tabs: it merges the active tab's 2px underline
             with the strip's 1px border, which is the intended tab-bar look. */}
         {visibleTabs.length > 0 && (
-        <div
-          ref={tabStripRef}
-          role="tablist"
-          className="jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200"
-          onKeyDown={tablistKeyDown}
-        >
-          {visibleTabs.map((id) => (
-            <button
-              key={id}
-              id={tabDomId("set", id)}
-              aria-controls={panelDomId("set", id)}
-              tabIndex={tabStop(id, activeTab)}
-              onClick={() => setTab(id)}
-              onFocus={(e) => revealTab(e.currentTarget)}
-              aria-selected={activeTab === id}
-              role="tab"
-              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
-                activeTab === id
-                  ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
-              }`}
+          /* The wrapper exists for the EDGE ARROWS (card t_f11d676f): they are
+             absolute overlays on the strip's two ends, so they must live
+             OUTSIDE the `role="tablist"` box (a button inside a tablist is a
+             stray child of a widget whose children are tabs) while still being
+             positioned against it. It adds no width, so the strip's own
+             geometry — and the `e2e/settings-tabs.spec.ts` measurements of it —
+             are unchanged. */
+          <div className="relative mt-4">
+            {(stripEdge === "start" || stripEdge === "both") && (
+              <StripEdgeArrow
+                side="start"
+                label={t("set.tabsScrollBack")}
+                testId="tabstrip-back"
+                onClick={() => scrollStrip(-1)}
+              />
+            )}
+            <div
+              ref={tabStripRef}
+              role="tablist"
+              data-edge={stripEdge}
+              className="jf-tabstrip flex gap-1 overflow-x-auto border-b border-slate-200"
+              onKeyDown={tablistKeyDown}
             >
-              <span className="sm:hidden">{t(`set.tab.${id}` as const)}</span>
-              <span className="hidden sm:inline">{t(`set.tab.${id}` as const)}</span>
-            </button>
-          ))}
-        </div>
+              {visibleTabs.map((id) => (
+                <button
+                  key={id}
+                  id={tabDomId("set", id)}
+                  aria-controls={panelDomId("set", id)}
+                  tabIndex={tabStop(id, activeTab)}
+                  onClick={() => setTab(id)}
+                  onFocus={(e) => revealTab(e.currentTarget)}
+                  aria-selected={activeTab === id}
+                  role="tab"
+                  className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
+                    activeTab === id
+                      ? "border-slate-900 text-slate-900"
+                      : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
+                  }`}
+                >
+                  <span className="sm:hidden">{t(`set.tab.${id}` as const)}</span>
+                  <span className="hidden sm:inline">{t(`set.tab.${id}` as const)}</span>
+                </button>
+              ))}
+            </div>
+            {(stripEdge === "end" || stripEdge === "both") && (
+              <StripEdgeArrow
+                side="end"
+                label={t("set.tabsScrollForward")}
+                testId="tabstrip-forward"
+                onClick={() => scrollStrip(1)}
+              />
+            )}
+          </div>
         )}
 
         {/* Issue #68: transient Cloudflare OAuth callback banner + shared
@@ -1664,7 +1868,10 @@ export default function Settings() {
               </a>
               . {t("set.keysEncrypted")}
             </p>
-            <form onSubmit={save} className="mt-4 space-y-3">
+            {/* `id` so the sticky Save bar at the bottom of the view can submit
+                this form from outside it (`form="chip-creds-form"`) without a
+                second copy of the write path (card t_f11d676f). */}
+            <form id="chip-creds-form" onSubmit={save} className="mt-4 space-y-3">
               <div>
                 <label className="flex items-center gap-2 text-xs text-slate-500">
                   Brand ID
@@ -1743,25 +1950,97 @@ export default function Settings() {
                 />
               </div>
 
+              {/* Payment methods — CHECKBOXES, not filter pills (card
+                  t_f11d676f).
+                  The twelve rounded pills this used to render were the same
+                  shape, colour and font as the filter chips on /sales and
+                  /deliveries, and a pill with no tick, no box and no
+                  selected-state mark cannot answer "is this one chosen?" — a
+                  merchant read the row as a set of filters and could not tell
+                  what had been picked. Each method is now a labelled native
+                  checkbox: the box IS the control, the tick is the state (and
+                  the accessible `checked` state a screen reader reads), and the
+                  label's tint follows it.
+                  "Select all" is here because twelve boxes is a long tap
+                  sequence on a phone; it names the OPPOSITE of the current state
+                  so it is always one action away from what the merchant wants.
+                  The hint "(blank = all available)" stays: it is the server's
+                  rule, and unticking everything is not the same as ticking
+                  everything (one is "let CHIP decide", the other is the list). */}
               <div>
-                <label className="text-xs text-slate-500">
-                  {t("set.paymentMethods")} <span className="text-[var(--jf-muted)]">{t("set.allMethods")}</span>
-                </label>
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {METHODS.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => toggleMethod(m.id)}
-                      className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                        whitelist.includes(m.id)
-                          ? "border-[var(--jf-primary)] bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                      }`}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <span id="chip-pm-label" className="text-xs text-slate-500">
+                    {t("set.paymentMethods")} <span className="text-[var(--jf-muted)]">{t("set.allMethods")}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setWhitelist(allMethodsSelected ? [] : METHODS.map((m) => m.id))}
+                    data-testid="chip-pm-toggle-all"
+                    className="min-h-8 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-[var(--jf-primary)] hover:border-slate-300"
+                  >
+                    {allMethodsSelected ? t("set.pmClearAll") : t("set.pmSelectAll")}
+                  </button>
+                </div>
+                <div
+                  role="group"
+                  aria-labelledby="chip-pm-label"
+                  className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2"
+                >
+                  {METHODS.map((m) => {
+                    const checked = whitelist.includes(m.id);
+                    return (
+                      <label
+                        key={m.id}
+                        data-testid={`chip-pm-row-${m.id}`}
+                        data-checked={checked ? "true" : "false"}
+                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs ${
+                          checked
+                            ? "border-[var(--jf-primary)] bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                        }`}
+                      >
+                        {/* A native checkbox, visually replaced by the box below
+                            so the tick is a real glyph at every zoom level and
+                            in every browser. It stays in the DOM (sr-only) so
+                            the row is one keyboard stop with its label, and the
+                            focus ring is drawn on the visible box. */}
+                        <input
+                          type="checkbox"
+                          className="peer sr-only"
+                          checked={checked}
+                          onChange={() => toggleMethod(m.id)}
+                          data-testid={`chip-pm-${m.id}`}
+                        />
+                        {/* The box and the tick are two elements on purpose: a
+                            white glyph must not be declared on the same element
+                            as a white fill, which is the pairing the CTA
+                            contrast sweep (`src/lib/ctaContrast.test.ts`)
+                            refuses wherever it finds it. The fill is on the box,
+                            the glyph is on the child.
+
+                            The glyph exists ONLY while the row is checked. It
+                            used to be rendered unconditionally, and an unticked
+                            box is `bg-white`: a white ✓ on a white fill is a
+                            measured 1:1, which `e2e/a11y-singlechar-text.spec.ts`
+                            reds (12 rows, card t_5dc6bb86). `aria-hidden` does
+                            not help — that scan measures PAINT, not the AX tree
+                            — and neither does the box/glyph split above, because
+                            the glyph's resolved surface IS the box's own white
+                            fill. An unticked box therefore carries no text node
+                            at all, and the ticked one paints white on
+                            `--jf-primary` (4.70:1). */}
+                        <span
+                          aria-hidden="true"
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-slate-300 bg-white peer-checked:border-[var(--jf-primary)] peer-checked:bg-[var(--jf-primary)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--jf-primary)]"
+                        >
+                          {checked && (
+                            <span className="text-jf-4xs font-bold leading-none text-white">✓</span>
+                          )}
+                        </span>
+                        <span>{m.label}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -3301,6 +3580,52 @@ export default function Settings() {
             </div>
           </section>
         )}
+        {/* ── THE STICKY SAVE BAR (card t_f11d676f) ──────────────────────────
+            Measured on the 390px screenshot of this tab: the first viewport
+            ended inside the CHIP Collect card — Brand ID, Secret Key, Mode and
+            the payment-method row all on screen, and NO Save/Connect control
+            anywhere in it. The action existed, several screens down, so a
+            merchant who had just pasted a key and looked for the next step saw
+            nothing to press.
+
+            So on a phone the CHIP panel now carries its Save at the bottom edge
+            of the view, always: `sticky bottom-0` (its natural position is the
+            end of the panel, so it is in the flow at the end of the page and
+            pinned to the viewport while the card is taller than the screen —
+            no content is covered because a sticky box keeps its space).
+
+            It submits the SAME form (`form="chip-creds-form"`, HTML's own
+            association) rather than owning a second write path, and it is
+            DISABLED until the form differs from what the server holds
+            (`chipDirty`): the one Save a merchant can see must not be a control
+            that provably does nothing.
+
+            `sm:hidden` because the desktop layout shows the card whole; the
+            in-flow Save inside the form stays for desktop and for anyone who
+            scrolled to the bottom of the card. */}
+        {activeTab === "chip" && (
+          <div
+            data-testid="chip-sticky-save"
+            className="sticky bottom-0 z-20 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-6 py-3 sm:hidden"
+          >
+            <span
+              data-testid="chip-sticky-state"
+              className="min-w-0 truncate text-xs text-[var(--jf-muted)]"
+            >
+              {chipStateLabel}
+            </span>
+            <button
+              type="submit"
+              form="chip-creds-form"
+              disabled={!chipDirty}
+              data-testid="chip-save-sticky"
+              className="jf-btn-primary shrink-0"
+            >
+              {t("set.save")}
+            </button>
+          </div>
+        )}
+
         {/* The save-confirmation toast, bound to the SAME `msg` state that paints
             the banner above: whatever sets the message shows the toast, so this
             is not a second success path. Dismissing clears `msg`, so the inline
@@ -3316,6 +3641,7 @@ export default function Settings() {
           ok={msgOk}
           onDismiss={dismissMsg}
           closeTitle={t("set.tlsCertClose")}
+          raised={activeTab === "chip"}
         />
       </div>
     </Shell>

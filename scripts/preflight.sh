@@ -53,30 +53,45 @@
 #                         image, so a full preflight does not leave a ~216 MB
 #                         jomform-web tag behind on every card.
 #              a11y       cd web && npm run a11y    (axe-core family only)
-#              e2e        cd web && npm run e2e     (the feature specs under web/e2e)
+#              e2e-builder  cd web && npm run e2e:builder
+#                         (the `builder-*.spec.ts` half of the feature family —
+#                         the 17 builder specs are ~half of that family's CPU and
+#                         used to serialise the other 59 behind them).
+#              e2e-core   cd web && npm run e2e:core
+#                         (the rest of the feature specs under web/e2e).
+#                         BOTH e2e gates run CONCURRENTLY with each other and with
+#                         `a11y` (one reserved port and one `next start` each), and
+#                         under `--for-diff <ref>` they NARROW to the specs that
+#                         diff can reach via `web/e2e/areas.tsv` — see the split
+#                         block below the runners and gate-inventory/e2e-core.md.
+#                         `PREFLIGHT_E2E=full` forces every spec on any run.
 #              menufixture bash scripts/menu-fixture-e2e.sh
 #                         (the LAYOUT half of the menu checkout's option groups:
 #                         the fixture serves the real public handler from a
 #                         scratch schema of the test database, and Chromium
 #                         measures each option control at 1200px and 375px. It
-#                         runs AFTER `e2e` on purpose — it reuses the browser
-#                         cache that gate just warmed — and it is deliberately
-#                         NOT a second copy of the Go half: the `test` gate
-#                         already proves the page carries both groups and that
-#                         the order route stores an answer, which is a fact no
-#                         layout engine is needed for. Card t_664549fc is why
-#                         this gate exists: `.sheetfoot input {width:100%;
+#                         runs AFTER the e2e pair on purpose — it reuses the
+#                         browser cache those gates just warmed — and it is
+#                         deliberately NOT a second copy of the Go half: the
+#                         `test` gate already proves the page carries both groups
+#                         and that the order route stores an answer, which is a
+#                         fact no layout engine is needed for. Card t_664549fc is
+#                         why this gate exists: `.sheetfoot input {width:100%;
 #                         height:44px}` also matched each option's radio, so a
 #                         buyer saw a 399x44 control with the merchant's label
 #                         pushed off a 375px screen, and every guard above was
-#                         green. The spec SKIPS inside `e2e` (no MENU_FIXTURE_URL
-#                         there), so without THIS gate the only guard that can
-#                         see that class never runs. ~18s with the Go build warm)
-#              speccounts scripts/spec-counts.sh   (RE-READS the two spec counts the
-#                         `a11y`/`e2e` gates' detail files (gate-inventory/<gate>.md)
-#                         quote: it runs each project's `--list` on THIS tree and reds
-#                         when a detail file's current figure is not what the tree
-#                         runs — ~5s, no build. It exists because those figures
+#                         green. The spec SKIPS inside the e2e gates (no
+#                         MENU_FIXTURE_URL there), so without THIS gate the only
+#                         guard that can see that class never runs. ~18s with the
+#                         Go build warm)
+#              speccounts scripts/spec-counts.sh   (RE-READS the spec counts the
+#                         `a11y`/`e2e-builder`/`e2e-core` gates' detail files
+#                         (gate-inventory/<gate>.md) quote: it runs each project's
+#                         `--list` on THIS tree and reds when a detail file's
+#                         current figure is not what the tree runs — ~5s, no
+#                         build. It also asserts that `web/e2e/areas.tsv` maps
+#                         every feature spec, so the narrowed run cannot rot into
+#                         an unmapped one. It exists because those figures
 #                         carried bare typed numbers that rotted repeatedly while
 #                         every gate passed; see the gate's own header)
 #              npmaudit   cd web && npm audit --audit-level=high
@@ -88,7 +103,8 @@
 #                         makes this a gate rather than a report. ~46s on this
 #                         host. Before it existed nothing checked the web tree
 #                         for anything but types and the unit tests.)
-#   secrets    gitleaks   full-history secret scan (not just the tip)
+#   secrets    gitleaks   secret scan over the whole git history (incremental
+#                         since a watermark, full sweep weekly)
 #   monitor    watchdog   deploy/monitoring/jomform-watch_test.sh — proves the
 #                         uptime watchdog ALERTS on a failure and stays quiet on
 #                         a success (offline: stub server + fake notifier)
@@ -287,7 +303,8 @@
 # RUNTIME — LAST MEASURED 2026-10-03 on the agent host, one full 16-gate run on a
 #   clean tree at 6 CPUs with no peer gate running, `16 passed, 0 failed,
 #   0 skipped in 753s`: build 7s, vet 1s, test 279s, govuln 6s, web 45s,
-#   webimage 73s, a11y 29s, e2e 123s, npmaudit 1s, gitleaks 9s, monitor 8s,
+#   webimage 73s, a11y 29s, e2e 123s (STALE — the SAME family re-measured 570s on
+#   2026-11-10 at host load 23-25 / CPUQuota 300%; see the note below), npmaudit 1s, gitleaks 9s, monitor 8s,
 #   tmpkey 3s, backup 30s, prunewt 16s, refguard 4s, selftest 111s.
 #   (That sample predates several gates — it is the per-gate SHAPE of a full run,
 #   not the current total; `--list` is the current set.)
@@ -312,9 +329,17 @@
 #       the gate that reds on a loaded host, not a slow one;
 #     * `a11y` used to be quoted at 15s when it took 4m08s, because the gate ran the
 #       WHOLE `web/e2e/` directory while its row described axe. It is now 29s
-#       because the feature specs have their own gate (`e2e`, 123s) — so this
-#       breakdown changed shape on 2026-10-03, and any figure copied from before
-#       that date is wrong.
+#       because the feature specs have their own gates (`e2e-builder` +
+#       `e2e-core`) — so this breakdown changed shape on 2026-10-03, and any
+#       figure copied from before that date is wrong. AND THE `e2e 123s` ABOVE IS
+#       WRONG AGAINST ITS OWN GATE: the same family measured 348 tests in 570s on
+#       2026-11-10 in a clean worktree on this host (load average 23-25, CPUQuota
+#       300%), i.e. 21% of a ~2,700s release run, while those bytes were green.
+#       That stale figure is why card t_ec2aac42 split the family in two
+#       (`e2e-builder` 56 tests / `e2e-core` 309 tests, each on its own server,
+#       run concurrently) and scoped the release run to the diff via
+#       `web/e2e/areas.tsv` — and why the duration of a browser gate is NOT a
+#       figure this file should ever state as current.
 #
 #   If you change the gate set or a gate's scope, the numbers here are stale: fix
 #   them in the same commit, or delete them. Nothing checks them, deliberately —
@@ -372,7 +397,14 @@ cd "$REPO_ROOT" || exit 1
 # `--list`, the runnable set from the `run <name>` call sites) and FAILS if they
 # disagree, so a gate named here but never run — the silent-coverage-loss shape —
 # is caught by `--only selftest`. No edit to the self-test is needed for gate #N.
-GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e menufixture npmaudit gitleaks monitor tmpkey mediaprobe backup host selfhost prunewt prunesync prunehost refguard selftest)
+GATE_NAMES=(build vet gofmt test govuln web lint design webimage speccounts a11y e2e-builder e2e-core menufixture npmaudit gitleaks monitor tmpkey mediaprobe backup host selfhost prunewt prunesync prunehost refguard selftest)
+
+# The gates `run_browser_group` dispatches CONCURRENTLY (see the group near the
+# bottom). Declared here, next to GATE_NAMES, because the selftest's inventory
+# reader takes the union of `run <gate>` call sites and THIS array: `run` is
+# synchronous and cannot fork, so these three have no `run` line of their own, and
+# without the declaration a working gate would read as "listed but never run".
+BROWSER_GATES=(a11y e2e-builder e2e-core)
 
 ONLY=""
 SKIP=""
@@ -675,7 +707,7 @@ pw_pathspec_v() {
 pw_declared() {
   case "$1" in
     build|vet|test|govuln) printf '%s\n' 'api/*' ;;
-    web|a11y|e2e|lint)    printf '%s\n' 'web/*' ;;
+    web|a11y|e2e-builder|e2e-core|lint)    printf '%s\n' 'web/*' ;;
     # `menufixture` is the layout half of the menu checkout, so BOTH halves of the
     # stack are its area: the page it measures is served by api/internal/httpapi
     # (the `.sheetfoot` stylesheet) through the fixture, and the measurement is a
@@ -721,7 +753,11 @@ pw_sources() {
     web)                   printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
     lint)                  printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
-    e2e)                   printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    # The two e2e gates read the SAME playwright config and the SAME area map, but
+    # different spec halves; `web/e2e/areas.tsv` is an input of both because it is
+    # what narrows them, and `web/scripts/e2e-scope.mjs` is the matcher that reads it.
+    e2e-builder)           printf '%s\n' 'web/e2e/builder-*.spec.ts' 'web/e2e/areas.tsv' 'web/scripts/e2e-scope.mjs' 'web/playwright.config.ts' ;;
+    e2e-core)              printf '%s\n' 'web/e2e/*.spec.ts' 'web/e2e/areas.tsv' 'web/scripts/e2e-scope.mjs' 'web/playwright.config.ts' ;;
     menufixture)           printf '%s\n' 'scripts/menu-fixture-e2e.sh' 'api/cmd/menu-fixture/*' 'api/internal/menufixture/*' 'web/e2e/menu-checkout-option-group.spec.ts' 'web/playwright.menufixture.config.ts' ;;
     speccounts)            printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit)              printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
@@ -737,7 +773,7 @@ pw_sources() {
     refguard)              printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selfhost)              printf '%s\n' 'deploy/selfhost/*' 'deploy/docker-compose.yml' 'deploy/.env.example' 'docs/SELF-HOST.md' 'README.md' ;;
     selftest)              printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
-    gitleaks)              printf '%s\n' '.gitleaks.toml' ;;
+    gitleaks)              printf '%s\n' '.gitleaks.toml' 'scripts/gitleaks_scan.sh' ;;
   esac
 }
 
@@ -2595,6 +2631,77 @@ hcached() {   # hcached <gate> <glob>... -- <cmd...>
   return "$rc"
 }
 
+# Record a PASS for <gate>, given its start and end seconds. SHARED by the
+# sequential runner and the concurrent browser group, so the two cannot drift in
+# what a pass writes into the per-tree record — the record is what a later lane
+# reads to decide whether it may skip a gate.
+gate_record_pass() {  # $1 = gate, $2 = t0, $3 = t1
+  local gate="$1" t0="$2" t1="$3" _hitf _hitts=""
+  PASSED+=("$gate")
+  # Observation for the per-tree record. Deliberately AFTER the gate, and the
+  # `pass` is recorded with the seconds it took, because that per-gate number
+  # is what a later lane's saving is measured from.
+  if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
+    GR_STATUS["$gate"]="pass"; GR_SECONDS["$gate"]="$((t1-t0))"
+    # A harness-cache hit was OBSERVED earlier, so the entry must carry that
+    # observation's time rather than this run's. `reused` is NOT set: in this format
+    # it means "carried over between flushes", and this run did invoke the gate and
+    # read a pass from it. The cache hit is visible as `seconds: 0` plus the HIT line
+    # naming the harness record that stands behind it. The marker is a file because
+    # the gate ran in a subshell (`| tee`, or the group's own fork).
+    _hitf="${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/harness/.hit.$gate.$$"
+    if [ -r "$_hitf" ]; then _hitts=$(cat "$_hitf" 2>/dev/null); fi
+    if [ -n "$_hitts" ]; then
+      rm -f "$_hitf"
+      GR_AT["$gate"]="$_hitts"
+    else
+      GR_AT["$gate"]="$(gr_now)"
+    fi
+    GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
+    gr_record_now
+  fi
+  info "gate [$gate]: PASS ($((t1-t0))s)"
+}
+
+# Record a FAIL for <gate> and END the run. Also shared: the same classification
+# (timeout vs crash vs failure) has to be printed whichever runner saw the red,
+# or a concurrent gate's failure would lose the "this is a TIMEOUT, not a failed
+# assertion" distinction that stops a loaded host being read as a broken tree.
+gate_record_fail_exit() {  # $1 = gate, $2 = label, $3 = t0, $4 = t1, $5 = rc, $6 = log
+  local gate="$1" label="$2" t0="$3" t1="$4" rc="$5" log="$6"
+  FAILED+=("$gate")
+  if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
+    GR_STATUS["$gate"]="fail"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
+    GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
+    gr_record_now
+  fi
+  local _secs=$((t1 - t0)) _kind="failure" _budget=0
+  _budget="$(_budget_secs "${API_TEST_TIMEOUT:-}")"
+  _kind="$(gate_failure_kind "$log" "$_secs" "$_budget")"
+  rm -f "$log"
+  # This run ENDED — red — so its record is a finished observation of these bytes
+  # under this key and may be finalised (see gr_record_final).
+  gr_record_final
+  case "$_kind" in
+    timeout)
+      echo "PREFLIGHT FAIL: gate '$gate' ($label) ran out of its TIME BUDGET after ${_secs}s" >&2
+      echo "  This is a TIMEOUT, not a failed assertion: the gate was killed, so its output above is the" >&2
+      echo "  tail of an unfinished run and NO test verdict can be read from it. Raise the budget (for the" >&2
+      echo "  api test gate: API_TEST_TIMEOUT, e.g. API_TEST_TIMEOUT=45m ./scripts/preflight.sh) or re-run on" >&2
+      echo "  a quieter host. Do NOT read this as the package being broken." >&2
+      ;;
+    crash)
+      echo "PREFLIGHT FAIL: gate '$gate' ($label) CRASHED after ${_secs}s (panic / fatal error / signal)" >&2
+      echo "  No assertion decided this; the process died. Read the panic above, not the test names." >&2
+      ;;
+    *)
+      echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after ${_secs}s" >&2
+      ;;
+  esac
+  summary
+  exit 1
+}
+
 run() {
   local gate="$1" label="$2"; shift 2
   if ! selected "$gate"; then return 0; fi
@@ -2614,64 +2721,11 @@ run() {
   if "$@" 2>&1 | tee "$log"; then
     rm -f "$log"
     t1=$(date +%s)
-    PASSED+=("$gate")
-    # Observation for the per-tree record. Deliberately AFTER the gate, and the
-    # `pass` is recorded with the seconds it took, because that per-gate number
-    # is what a later lane's saving is measured from.
-    if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
-      GR_STATUS["$gate"]="pass"; GR_SECONDS["$gate"]="$((t1-t0))"
-      # A harness-cache hit was OBSERVED earlier, so the entry must carry that
-      # observation's time rather than this run's. `reused` is NOT set: in this format
-      # it means "carried over between flushes", and this run did invoke the gate and
-      # read a pass from it. The cache hit is visible as `seconds: 0` plus the HIT line
-      # naming the harness record that stands behind it. The marker is a file because
-      # the gate ran in the `tee` subshell (see above).
-      local _hitts=""
-      if [ -r "$_hitf" ]; then _hitts=$(cat "$_hitf" 2>/dev/null); fi
-      if [ -n "$_hitts" ]; then
-        rm -f "$_hitf"
-        GR_AT["$gate"]="$_hitts"
-      else
-        GR_AT["$gate"]="$(gr_now)"
-      fi
-      GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
-      gr_record_now
-    fi
-    info "gate [$gate]: PASS ($((t1-t0))s)"
+    gate_record_pass "$gate" "$t0" "$t1"
   else
     rc=$?
     t1=$(date +%s)
-    FAILED+=("$gate")
-    if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
-      GR_STATUS["$gate"]="fail"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
-      GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
-      gr_record_now
-    fi
-    local _secs=$((t1 - t0)) _kind="failure" _budget=0
-    _budget="$(_budget_secs "${API_TEST_TIMEOUT:-}")"
-    _kind="$(gate_failure_kind "$log" "$_secs" "$_budget")"
-    rm -f "$log"
-    # This run ENDED — red — so its record is a finished observation of these bytes
-    # under this key and may be finalised (see gr_record_final).
-    gr_record_final
-    case "$_kind" in
-      timeout)
-        echo "PREFLIGHT FAIL: gate '$gate' ($label) ran out of its TIME BUDGET after ${_secs}s" >&2
-        echo "  This is a TIMEOUT, not a failed assertion: the gate was killed, so its output above is the" >&2
-        echo "  tail of an unfinished run and NO test verdict can be read from it. Raise the budget (for the" >&2
-        echo "  api test gate: API_TEST_TIMEOUT, e.g. API_TEST_TIMEOUT=45m ./scripts/preflight.sh) or re-run on" >&2
-        echo "  a quieter host. Do NOT read this as the package being broken." >&2
-        ;;
-      crash)
-        echo "PREFLIGHT FAIL: gate '$gate' ($label) CRASHED after ${_secs}s (panic / fatal error / signal)" >&2
-        echo "  No assertion decided this; the process died. Read the panic above, not the test names." >&2
-        ;;
-      *)
-        echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after ${_secs}s" >&2
-        ;;
-    esac
-    summary
-    exit 1
+    gate_record_fail_exit "$gate" "$label" "$t0" "$t1" "$rc" "$log"
   fi
 }
 
@@ -3262,7 +3316,7 @@ webserver_lock_release() {
   fi
   PREFLIGHT_WEBSERVER_LOCK_FD=""
 }
-# ---- web/speccounts: the a11y/e2e spec counts a gate's DETAIL FILE quotes -----
+# ---- web/speccounts: the a11y/e2e-builder/e2e-core spec counts a gate's DETAIL FILE quotes -----
 #
 # WHERE THE FIGURE LIVES (card t_d6ce3d60): `gate-inventory/<gate>.md`, the gate's own
 # detail file — not the table row. The rows are one physical line each and the
@@ -3293,12 +3347,17 @@ webserver_lock_release() {
 # (`bash scripts/spec-counts.sh`) and so this runner's derivation reads ONE small
 # source for it rather than the whole 3k-line runner.
 #
-# IT RUNS BEFORE the two suites, deliberately: a stale figure is cheap to find
-# and expensive to discover after 13 minutes of `a11y` + `e2e`.
+# IT RUNS BEFORE the browser gates, deliberately: a stale figure is cheap to find
+# and expensive to discover after 13 minutes of `a11y` + the two e2e halves.
 speccounts_run() {
-  bash "$REPO_ROOT/scripts/spec-counts.sh" "$REPO_ROOT"
+  bash "$REPO_ROOT/scripts/spec-counts.sh" "$REPO_ROOT" || return 1
+  # The area map is the other half of what this gate keeps honest: the feature gates
+  # NARROW by it on a `--for-diff` run, so a spec with no row (or a row whose glob
+  # matches nothing in this tree) would either drop coverage or widen every run
+  # forever with nobody able to see why. `--check-map` asserts both against the tree.
+  node "$REPO_ROOT/web/scripts/e2e-scope.mjs" --check-map --root "$REPO_ROOT"
 }
-run speccounts "cd web && playwright test --project={a11y,feature-e2e} --list vs the counts GATE-INVENTORY.md quotes" speccounts_run
+run speccounts "cd web && playwright test --project={a11y,feature-builder,feature-core} --list vs the counts GATE-INVENTORY.md quotes" speccounts_run
 
 # ---- web/a11y: the axe family only -----------------------------------------
 #
@@ -3309,12 +3368,13 @@ run speccounts "cd web && playwright test --project={a11y,feature-e2e} --list vs
 # base 24fcd2e5 — 170 of the e2e run passes and 2 self-skip; re-measure when either
 # family grows, because a typed number is what rots) — a gate whose name
 # said accessibility and whose body was mostly not. The feature specs were not
-# lost by the split; they are owned by the `e2e` gate below, and the selftest
-# asserts every spec belongs to exactly one family so a new spec cannot fall
-# between the two.
+# lost by the split; they are owned by the `e2e-builder` / `e2e-core` gates below,
+# and the selftest asserts every spec belongs to exactly one family so a new spec
+# cannot fall between the three.
 #
-# ---- the runner both web-server gates share --------------------------------
-# $1 = the name it prints, $2 = the npm script.
+# ---- the runner the three web-server gates share ---------------------------
+# $1 = the name it prints, $2 = the npm script, rest = spec paths (empty = the
+# whole project). Callers: `a11y_run` and the two e2e halves.
 #
 # THE CLAIM IS HELD FOR THE WHOLE GATE, not just until npm starts (see the claim block
 # above for why reserve->release->bind lost a 12-minute run): `npm run …` is a
@@ -3322,12 +3382,16 @@ run speccounts "cd web && playwright test --project={a11y,feature-e2e} --list vs
 # the gate's server has exited. `A11Y_PORT` is the claimed port, so playwright starts
 # the app's OWN server there and never reuses anything.
 #
-# THE HOST-WIDE SUITE LOCK IS TAKEN FIRST, AND HELD FOR THE WHOLE GATE TOO (card
-# t_d0c0981d). Two concurrent runs picked different ports and both proceeded, so two
-# playwright suites ran at once on this host and both came back RED on unrelated specs
-# (see the block above). Waiting for the peer is the correct answer: the gate runs its
-# own suite on its own port, alone, and only the CPU was ever the shared resource. The
-# port claim still comes after it, so a waiter inherits a free port rather than a peer's.
+# THE HOST-WIDE SUITE LOCK IS TAKEN ONCE FOR THE WHOLE BROWSER GROUP (card
+# t_ec2aac42), by `run_browser_group`, and held until the slowest of the three suites
+# exits — NOT per gate. That is what lets `a11y` and the two e2e halves overlap (they
+# share no resource but the CPU, which the lock is for at LANE granularity), while two
+# lane runs still serialise exactly as card t_d0c0981d requires: two concurrent runs
+# picked different ports and both proceeded, so two playwright suites ran at once on
+# this host and both came back RED on unrelated specs (see the block above). Waiting
+# for the peer run is the correct answer; overlapping the SIBLING gates of one run is
+# not the same event. The port claim still comes per gate, so each of the three gets
+# its own port and no waiter inherits a peer's.
 #
 # THE RETRY IS LABELLED AND BOUNDED: it fires at most once, only when the first attempt
 # failed AND its output names EADDRINUSE, and it prints the port it abandoned and the
@@ -3345,22 +3409,26 @@ run speccounts "cd web && playwright test --project={a11y,feature-e2e} --list vs
 # `tee` is closed too, or it keeps a copy for as long as any writer holds the pipe. The
 # guard is not decoration: `{VAR}>&-` with an empty VAR is a shell error, so a caller that
 # has no suite lock (the self-test's sabotage leg removes the take) still runs the suite.
-a11y_suite_once() {  # $1 = npm script, $2 = log file, $3 = port -> npm's exit status
-  local script="$1" log="$2" port="$3" rc
+a11y_suite_once() {  # $1 = npm script, $2 = log file, $3 = port, rest = spec paths -> npm's exit status
+  local script="$1" log="$2" port="$3"; shift 3
   if [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ]; then
-    A11Y_PORT="$port" npm run "$script" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_WEBSERVER_LOCK_FD}>&-
+    A11Y_PORT="$port" npm run "$script" -- "$@" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_WEBSERVER_LOCK_FD}>&-
   else
-    A11Y_PORT="$port" npm run "$script" 2>&1 | tee "$log"
+    A11Y_PORT="$port" npm run "$script" -- "$@" 2>&1 | tee "$log"
   fi
   rc=${PIPESTATUS[0]}
   return "$rc"
 }
 
+# One web-server gate: claim a port, run the suite on it, retry ONCE on
+# EADDRINUSE. The HOST-WIDE SUITE LOCK IS NOT TAKEN HERE any more (card
+# t_ec2aac42): it is taken ONCE for the whole group by run_browser_group, so the
+# three browser gates of one run can overlap while two RUNS still serialise.
 a11y_gate_run() {
-  local name="$1" script="$2" attempt=0 port last="" log rc
-  webserver_lock_take "$name" || return 1
+  local name="$1" script="$2"; shift 2
+  local attempt=0 port last="" log rc
   while :; do
-    a11y_port_claim || { webserver_lock_release; return 1; }
+    a11y_port_claim || return 1
     port="$A11Y_RESERVED_PORT"
     if [ "$attempt" -eq 0 ]; then
       echo "$name: starting the app's own server on port $port (exclusive claim $A11Y_PORT_CLAIM_FILE, held until this gate's server exits; never reusing a leftover)"
@@ -3368,14 +3436,11 @@ a11y_gate_run() {
       echo "$name: RETRY $attempt/1 on a freshly claimed port $port — port $last was taken between the claim and the bind (EADDRINUSE). This is a HOST RACE, labelled and not hidden: the first attempt's output is above, and a genuine failure fails again on the fresh port."
     fi
     log="$(mktemp "${TMPDIR:-/tmp}/preflight-$name-claim.XXXXXX")"
-    if a11y_suite_once "$script" "$log" "$port"; then rc=0; else rc=$?; fi
-    # PORT FIRST, THEN THE SUITE LOCK: a waiter released from the lock must find the
-    # port already free, or it would skip to the next candidate for no reason.
+    if a11y_suite_once "$script" "$log" "$port" "$@"; then rc=0; else rc=$?; fi
     a11y_port_release
-    if [ "$rc" -eq 0 ]; then rm -f "$log"; webserver_lock_release; return 0; fi
+    if [ "$rc" -eq 0 ]; then rm -f "$log"; return 0; fi
     if [ "$attempt" -ge 1 ] || ! grep -q EADDRINUSE "$log"; then
       rm -f "$log"
-      webserver_lock_release
       return "$rc"
     fi
     rm -f "$log"
@@ -3384,12 +3449,146 @@ a11y_gate_run() {
   done
 }
 
-a11y_run() {
-  cd "$REPO_ROOT/web" || return 1
-  a11y_gate_run a11y a11y
+# ---------------------------------------------------------------------------
+# ---- the E2E SCOPE: which specs this run owes ------------------------------
+#
+# The feature family is the most expensive thing in the run, so a `--for-diff`
+# run narrows it to the specs the diff can reach (card t_ec2aac42). The data is
+# `web/e2e/areas.tsv`; the matcher is `web/scripts/e2e-scope.mjs`; this block only
+# decides WHETHER to narrow and prints the decision, so a narrowed run can never
+# be read as a full one.
+#
+# THE THREE STATES, all printed:
+#   full    — the whole family. A default run (no --for-diff base) is ALWAYS this,
+#             and `PREFLIGHT_E2E=full` forces it on any run.
+#   subset  — n/total specs, with the area that matched. Only ever produced from
+#             a positively attributed diff.
+#   failed  — anything the matcher cannot read (non-zero exit) WIDENS the run to
+#             full and says so; a guess is not a scope.
+#
+# PREFLIGHT_E2E is validated rather than sniffed: a typo must not silently mean
+# "scoped", because the difference between the two is the whole coverage story.
+E2E_SCOPE_MODE="full"
+E2E_SCOPE_SPECS=()
+E2E_SCOPE_TOTAL=0
+E2E_SCOPE_WHY=""
+
+e2e_scope_decide() {  # $1 = builder|core ; sets the four E2E_SCOPE_* variables
+  local gate="$1" out rc first mode n total why
+  E2E_SCOPE_MODE="full"; E2E_SCOPE_SPECS=(); E2E_SCOPE_TOTAL=0; E2E_SCOPE_WHY=""
+  case "${PREFLIGHT_E2E:-}" in
+    "") ;;
+    full)
+      E2E_SCOPE_WHY="PREFLIGHT_E2E=full: every feature spec was requested"
+      return 0 ;;
+    scoped) ;;
+    *)
+      echo "PREFLIGHT_E2E=[${PREFLIGHT_E2E}] is not a value this gate understands (only 'full', or unset). Unset it to let the diff decide, or set 'full' to run every spec — refusing to guess which of the two you meant." >&2
+      return 1 ;;
+  esac
+  if [ -z "${SEL_BASE:-}" ]; then
+    E2E_SCOPE_WHY="whole family: this run carries no --for-diff base to narrow by"
+    return 0
+  fi
+  out="$(node "$REPO_ROOT/web/scripts/e2e-scope.mjs" --gate "$gate" --base "$SEL_BASE" --root "$REPO_ROOT" 2>&1)"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "$gate: the area map could not decide (exit $rc) — running the WHOLE family rather than a guess:" >&2
+    printf '%s\n' "$out" | sed 's/^/  | /' >&2
+    E2E_SCOPE_WHY="whole family: the scope decision failed (exit $rc)"
+    return 0
+  fi
+  first="$(printf '%s\n' "$out" | sed -n '1p')"
+  case "$first" in
+    "DECISION full "*|"DECISION subset "*) ;;
+    *)
+      echo "$gate: the area map printed no readable decision — running the WHOLE family:" >&2
+      printf '%s\n' "$out" | sed 's/^/  | /' >&2
+      E2E_SCOPE_WHY="whole family: unreadable scope decision"
+      return 0 ;;
+  esac
+  mode="$(printf '%s' "$first" | awk '{print $2}')"
+  n="$(printf '%s' "$first" | awk '{print $3}' | cut -d/ -f1)"
+  total="$(printf '%s' "$first" | awk '{print $3}' | cut -d/ -f2)"
+  why="$(printf '%s' "$first" | sed 's/^DECISION [^ ]* [^ ]* //')"
+  E2E_SCOPE_TOTAL="$total"
+  E2E_SCOPE_WHY="$why"
+  if [ "$mode" != "subset" ]; then return 0; fi
+  E2E_SCOPE_MODE="subset"
+  mapfile -t E2E_SCOPE_SPECS < <(printf '%s\n' "$out" | sed -n '2,$p' | sed '/^$/d')
+  return 0
 }
 
-# ---- web/e2e: the feature end-to-end specs ---------------------------------
+# The two e2e gates. $1 = gate name, $2 = npm script, $3 = which half,
+# $4 = playwright worker cap (see BROWSER_GATE_WORKERS below).
+e2e_gate_run() {
+  local name="$1" script="$2" part="$3" workers="${4:-2}"
+  e2e_scope_decide "$part" || return 1
+  if [ "$E2E_SCOPE_MODE" = "subset" ] && [ "${#E2E_SCOPE_SPECS[@]}" -eq 0 ]; then
+    # A narrowed run that owes NOTHING must not invoke playwright: `npm run e2e:core`
+    # with no arguments runs the WHOLE project, which is the opposite of the
+    # decision. So this returns 0 having run no spec, and says exactly that —
+    # it is a verdict about the DIFF, never a pass of the suite.
+    echo "$name: NOT RUN — 0/${E2E_SCOPE_TOTAL} specs; nothing in $SEL_BASE reaches this half ($E2E_SCOPE_WHY)."
+    echo "$name: this is a NARROWED run's verdict, not a pass of the suite; PREFLIGHT_E2E=full re-runs every spec."
+    return 0
+  fi
+  if [ "$E2E_SCOPE_MODE" = "subset" ]; then
+    echo "$name: subset — ${#E2E_SCOPE_SPECS[@]}/${E2E_SCOPE_TOTAL} feature specs ($E2E_SCOPE_WHY), --workers=$workers"
+  else
+    echo "$name: full — every spec in this half ($E2E_SCOPE_WHY), --workers=$workers"
+  fi
+  if [ "$E2E_SCOPE_MODE" = "subset" ]; then
+    printf '  %s\n' "${E2E_SCOPE_SPECS[@]}"
+    # The decision names specs repo-relative (`web/e2e/x.spec.ts`) because that is
+    # how a reader and `web/e2e/areas.tsv` name them; playwright is invoked from
+    # `web/`, so the `web/` prefix is stripped here. Passing the repo-relative
+    # string unchanged would filter for a path that does not exist from that cwd
+    # and run NOTHING while reporting a pass — the exact shape this scope must
+    # never produce.
+    local -a pw_specs=()
+    local s
+    for s in "${E2E_SCOPE_SPECS[@]}"; do pw_specs+=("${s#web/}"); done
+    a11y_gate_run "$name" "$script" "--workers=$workers" "${pw_specs[@]}"
+    return $?
+  fi
+  a11y_gate_run "$name" "$script" "--workers=$workers"
+}
+
+# ---- the worker budget of the CONCURRENT group (card t_ec2aac42) -----------
+#
+# Playwright's default is cpus/2 = 3 workers PER PROCESS, which was right when one
+# suite ran at a time. Three concurrent suites at that default start nine browsers
+# plus three `next start` servers on this six-core host, and the split is where the
+# CPU goes: the core half is 309 of the 365 feature tests, so it is the LONG POLE
+# and the other two should not take a third of the machine each.
+#
+# MEASURED 2026-11-10 on this host, three gates in one group, same tree:
+#   * 3/3/3 workers (nine) -> a11y 8.7m, e2e-builder 2.3m, e2e-core 12.2m and ONE
+#     FLAKE (`chat-stream.spec.ts`, "the answer grows at least three times while it
+#     is being written" — a starved page, not a broken assertion);
+#   * 1/2/3 workers (six)  -> a11y 13.9m (209 tests on ONE worker is the mistake
+#     that run made), e2e-core still ~14m, all three green.
+# So `a11y` must keep ~3 workers (its tests are cheap — 209 of them run in 29s
+# alone), and the core half is given the one extra worker that its size justifies.
+# The wall clock is bounded by the MACHINE, not by the worker count: 365 feature
+# tests cost ~730-990s on this host whatever the split, which is why the release
+# run is SCOPED to the diff (`web/e2e/areas.tsv`) instead of paying for all of it.
+#
+# DO NOT raise these to chase wall time. The builder half measured 1.86x going
+# from one worker to three (565s -> 303s) on this six-core host with a 300% quota:
+# the machine, not the worker count, is the ceiling. The knobs exist so a quieter
+# or larger host can be measured, not so a loaded one can be shouted at.
+BROWSER_GATE_WORKERS_A11Y="${BROWSER_GATE_WORKERS_A11Y:-3}"
+BROWSER_GATE_WORKERS_BUILDER="${BROWSER_GATE_WORKERS_BUILDER:-2}"
+BROWSER_GATE_WORKERS_CORE="${BROWSER_GATE_WORKERS_CORE:-4}"
+
+a11y_run() {
+  cd "$REPO_ROOT/web" || return 1
+  a11y_gate_run a11y a11y "--workers=$BROWSER_GATE_WORKERS_A11Y"
+}
+
+# ---- web/e2e-builder + web/e2e-core: the feature end-to-end specs -----------
 #
 # These are real regressions (a binned workspace restores, a refused bulk publish
 # keeps its sentence, a stale workspace slug does not bounce the dashboard) and
@@ -3397,16 +3596,135 @@ a11y_run() {
 # accessibility checks. A split that left them in NO gate would be a silent
 # coverage loss — which is why this gate exists.
 #
+# SPLIT IN TWO BY FILENAME PREFIX (card t_ec2aac42): `builder-*.spec.ts` is the
+# builder half (17 files) and everything else in the feature family is the core
+# half (59). The reason is measured, not aesthetic: the whole family took 570s on
+# this host and the 17 builder specs alone took 303s of it at three workers —
+# 1.86x the one-worker time, because ONE `next start` served all three workers.
+# Two servers on two reserved ports, run CONCURRENTLY, remove that ceiling.
+#
 # SERVER ISOLATION IS THE SAME, DELIBERATELY: `reuseExistingServer` stays false,
 # because a leftover `next-server` would serve a build this tree never produced
-# and the specs would then pass against the wrong code.
-e2e_run() {
+# and the specs would then pass against the wrong code. Each half claims its OWN
+# port from the same claim table (`a11y_port_claim`), so the halves cannot
+# collide with each other or with `a11y`, and the EADDRINUSE retry still fires.
+e2e_builder_run() {
   cd "$REPO_ROOT/web" || return 1
-  a11y_gate_run e2e e2e
+  e2e_gate_run e2e-builder e2e:builder builder "$BROWSER_GATE_WORKERS_BUILDER"
 }
 
-run a11y "cd web && npm run a11y (axe-core family; the feature specs are gate \`e2e\`)" a11y_run
-run e2e "cd web && npm run e2e (the feature specs under web/e2e)" e2e_run
+e2e_core_run() {
+  cd "$REPO_ROOT/web" || return 1
+  e2e_gate_run e2e-core e2e:core core "$BROWSER_GATE_WORKERS_CORE"
+}
+
+# ---------------------------------------------------------------------------
+# ---- the browser gates run CONCURRENTLY ------------------------------------
+#
+# WHY (card t_ec2aac42). `a11y` took 29s, `e2e` 570s and the two are independent
+# — different ports, different servers, different specs — yet they ran strictly
+# one after another because `a11y_gate_run` took the HOST-WIDE suite lock itself.
+# On a ~2,700s release run that serialisation cost minutes for no resource: the
+# per-port claim already makes two servers on two ports safe.
+#
+# WHAT THE LOCK IS NOW. The group takes it ONCE, for the whole concurrent group,
+# and holds it until the slowest suite exits. So:
+#   * within one run the three gates overlap (that is the point), and
+#   * across two LANES they still serialise, which is what the lock was FOR —
+#     card t_d0c0981d's false reds came from two suites on one host, and that
+#     property is preserved rather than weakened.
+# The alternative the card floated ("hold the lock per port") would let two lanes
+# run six suites at once on the same cores, which is the starvation class the
+# lock exists to prevent. One group at a time is the smallest change that buys
+# the overlap without inventing that new risk, and it is why webimage (a docker
+# build that never took this lock) stays where it is instead of joining: a
+# BuildKit build on the same cores as two browser suites is exactly the
+# contention that reds an unrelated spec.
+#
+# THE FAN-OUT IS BOUNDED BY THE GATE SET, NOT BY A NEW KNOB: at most three suites
+# (a11y + the two e2e halves), each with playwright's own worker count. Nothing
+# here starts a suite the selection did not ask for, and `--only <one of them>`
+# runs a group of one.
+browser_gate_label() {
+  case "$1" in
+    a11y)        printf '%s' "cd web && npm run a11y (axe-core family; the feature specs are the e2e gates)" ;;
+    e2e-builder) printf '%s' "cd web && npm run e2e:builder (the builder-*.spec.ts half of the feature family)" ;;
+    e2e-core)    printf '%s' "cd web && npm run e2e:core (the rest of the feature specs under web/e2e)" ;;
+  esac
+}
+browser_gate_body() {
+  case "$1" in
+    a11y)        a11y_run ;;
+    e2e-builder) e2e_builder_run ;;
+    e2e-core)    e2e_core_run ;;
+    *) echo "browser_gate_body: unknown gate '$1'" >&2; return 9 ;;
+  esac
+}
+
+# Take the host-wide suite lock for the group. ONE line, matched EXACTLY by the
+# `selftest` gate's sabotage leg (it replaces it with `:` to prove the leg bites),
+# so do not reformat it.
+browser_group_lock() {
+  local group_name="the browser gates"
+  webserver_lock_take "$group_name" || return 1
+}
+
+run_browser_group() {
+  local -a todo=() pids=() starts=()
+  local gate i tmp rc failed_gate="" failed_rc="" failed_log="" failed_start=""
+  for gate in "${BROWSER_GATES[@]}"; do
+    selected "$gate" && todo+=("$gate")
+  done
+  [ "${#todo[@]}" -gt 0 ] || return 0
+
+  if ! browser_group_lock; then
+    echo "PREFLIGHT FAIL: the browser gates could not take the host-wide suite lock (see above). Two suites at once on this host is the contention that reds an unrelated spec (card t_d0c0981d), so this is a refusal, not a degradation." >&2
+    summary; exit 1
+  fi
+
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/preflight-browser.XXXXXX")"
+  for gate in "${todo[@]}"; do
+    info "gate [$gate]: $(browser_gate_label "$gate")"
+    starts+=("$(date +%s)")
+    # Each gate body runs in its OWN subshell, so the port claim, the server and
+    # the retry are per gate. Its output is prefixed with the gate name and
+    # streamed, so three interleaved streams stay attributable, and kept in a
+    # per-gate log so a red can still be CLASSIFIED (timeout / crash / failure).
+    (
+      set -o pipefail
+      browser_gate_body "$gate" 2>&1 | sed -u "s/^/[$gate] /" | tee "$tmp/$gate.log"
+      echo "${PIPESTATUS[0]}" > "$tmp/$gate.rc"
+    ) &
+    pids+=("$!")
+  done
+  for i in "${!todo[@]}"; do
+    gate="${todo[$i]}"
+    wait "${pids[$i]}"
+    rc="$(cat "$tmp/$gate.rc" 2>/dev/null || echo 1)"
+    if [ "$rc" = "0" ]; then
+      gate_record_pass "$gate" "${starts[$i]}" "$(date +%s)"
+    else
+      # Keep the FIRST red and let the rest finish first: a run that stops
+      # recording at the first failure would leave the other suites' verdicts
+      # unread, and "it went red somewhere" is worth less than "which of the
+      # three went red". `gate_record_fail_exit` below adds the gate to FAILED
+      # exactly once — this loop must not, or the summary counts it twice.
+      if [ -z "$failed_gate" ]; then
+        failed_gate="$gate"; failed_rc="$rc"; failed_log="$tmp/$gate.log"; failed_start="${starts[$i]}"
+      fi
+      echo "gate [$gate]: FAIL ($(( $(date +%s) - starts[i] ))s)" >&2
+    fi
+  done
+  webserver_lock_release
+  if [ -n "$failed_gate" ]; then
+    gate_record_fail_exit "$failed_gate" "$(browser_gate_label "$failed_gate")" "$failed_start" "$(date +%s)" "$failed_rc" "$failed_log"
+  fi
+  rm -rf "$tmp" 2>/dev/null || :
+  return 0
+}
+
+run_browser_group
+
 
 # ---- menufixture: the menu checkout's option-group LAYOUT (card t_ef32ea3b) ---
 #
@@ -3426,7 +3744,7 @@ run e2e "cd web && npm run e2e (the feature specs under web/e2e)" e2e_run
 # leaves no schema, listener or process behind. So the only guard that can see this
 # class now runs on every release instead of when a lane remembers.
 #
-# ORDER MATTERS: it runs immediately AFTER `e2e`, which has just warmed the browser
+# ORDER MATTERS: it runs immediately AFTER the e2e gates, which have just warmed the browser
 # cache. It binds an EPHEMERAL loopback port (:0) and its own `test_menufixture_fx_p<pid>`
 # schema, so it collides with neither the a11y/e2e server port claim nor the `test`
 # gate's `test_<pkg>_p<pid>` schemas, and two lanes may run it at once.
@@ -3466,39 +3784,36 @@ run npmaudit "cd web && npm run audit:gate (npm audit --audit-level=high + time-
   bash -c "cd '$REPO_ROOT/web' && npm run audit:gate"
 
 # ---------------------------------------------------------------------------
-# secrets/gitleaks — FULL history, not just the tip. In CI that was
+# secrets/gitleaks — the whole git HISTORY, not just the tip. In CI that was
 # `fetch-depth: 0`; locally the equivalent is that the clone is not shallow and
-# the scan really walks every commit. A shallow checkout silently scans almost
-# nothing, so refuse to run there instead of reporting "no leaks found".
-#   gitleaks runs via `go run` (what CI did) so there is no new binary
-#   dependency to install on the host.
+# the scan really walks commits. A shallow checkout silently scans almost
+# nothing, so the driver refuses to run there instead of reporting "no leaks
+# found".
+#
+# THE SCAN IS INCREMENTAL (scripts/gitleaks_scan.sh, card t_cf0f6063):
+# `detect --source .` walks EVERY REF — measured 4,091 commits / 101.16 MB /
+# 115.7s cold (50.2s with the module cache warm) on every run, and it grows with
+# history forever. Capping it at the last N commits was rejected: a secret
+# committed long ago and deleted later is still in the packfile, so a fixed
+# window stops covering exactly the commits this gate exists for. Instead the
+# driver keeps a WATERMARK of the newest scanned commit next to the gate results
+# and scans `<watermark>..HEAD` (measured 1-2s), advancing the watermark on
+# success ONLY — so a red run keeps rescanning the same range. A FULL sweep (the
+# only shape that also covers non-HEAD refs) runs weekly and whenever the
+# watermark cannot be trusted: absent, written by another checkout, missing from
+# this clone (fresh/partial clone), not an ancestor of HEAD (force-push/rebase),
+# or older than the cadence. WHICH MODE RAN IS PRINTED — the same discipline as
+# this runner's full/scoped/reused labels, because an incremental pass must never
+# be readable as a full scan.
+#
+# gitleaks runs via `go run` (what CI did) so there is no new binary dependency
+# to install on the host; the driver resolves the toolchain from api/.
 # ---------------------------------------------------------------------------
 gitleaks_run() {
-  if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-    echo "this is a SHALLOW clone — the full-history secret scan is impossible; it would scan a handful of commits and report 'no leaks found'. In CI this was fetch-depth: 0. Unshallow first:" >&2
-    echo "  git fetch --unshallow" >&2
-    return 1
-  fi
-  local commits
-  commits=$(git rev-list --count HEAD)
-  echo "scanning $commits commits (full history)"
-  cd "$REPO_ROOT" || return 1
-  # TOOLCHAIN: `go env GOVERSION` at the REPO ROOT reports the DEFAULT toolchain
-  # (go1.22.2 on the agent host) because the root has no go.mod — the repo's
-  # 1.27.0 declaration lives in api/go.mod. gitleaks v8 requires go >= 1.24.11,
-  # so resolving the toolchain from the root makes the `go run` below fail to
-  # BUILD the scanner, and the gate then fails for a reason that has nothing to
-  # do with secrets. Resolve it from api/, where the module's go directive is.
-  # If the scanner fails to build we still exit non-zero (the `go run` status
-  # propagates through `run`), so this can never fail open — but a gate that
-  # fails for the wrong reason trains people to ignore it.
-  local toolchain
-  toolchain="$(cd "$REPO_ROOT/api" && go env GOVERSION)"
-  GOTOOLCHAIN="$toolchain" go run github.com/zricethezav/gitleaks/v8@latest \
-    detect --source . --no-banner --redact --config .gitleaks.toml
+  bash "$REPO_ROOT/scripts/gitleaks_scan.sh" "$REPO_ROOT"
 }
 
-run gitleaks "gitleaks detect (full git history, no leaks)" gitleaks_run
+run gitleaks "gitleaks detect (incremental since the watermark, full sweep weekly; shallow clone refused)" gitleaks_run
 
 # monitor — the uptime watchdog's self-test. This gate is unusual: the watchdog
 # is production-only (it runs on the prod host, not in the repo), so the only

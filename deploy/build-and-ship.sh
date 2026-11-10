@@ -568,6 +568,21 @@ else
   # ONE ARRAY FOR THE ARGV, so the label, the executed command and the closing
   # message cannot disagree about what was run.
   GATE_ARGV=(./scripts/preflight.sh)
+  # ---- SCOPE THE RELEASE GATE TO THE DIFF (card t_ec2aac42) ------------------
+  # A release re-runs the whole preflight on the shipping tree, and the feature
+  # e2e family is ~570s of it. The AREAS a release touched are covered
+  # automatically: the two e2e gates narrow themselves through
+  # `web/e2e/areas.tsv` when they are given a base ref, print the decision they
+  # made (`e2e-core: subset — 4/76 feature specs (matched web/src/app/sales/**)`),
+  # and run the WHOLE family for anything the map cannot attribute. The base is
+  # the previous release tag, so the diff is exactly "what this release carries".
+  # `PREFLIGHT_E2E=full` still forces every spec, and that is the only run whose
+  # result may be quoted as the whole suite.
+  #
+  # It is added ONLY to the no-record argv: `--for-diff` cannot be combined with
+  # `--only`/`--skip` (the diff decides the set), so the `partial` reuse branch
+  # below gates without it rather than silently dropping one of the two.
+  PREV_RELEASE_TAG="$(git describe --tags --abbrev=0 'HEAD^' 2>/dev/null || true)"
   REUSE_LINE=""
   if [ -r "$REPO_ROOT/scripts/preflight_reuse.sh" ] && [ -r "$REPO_ROOT/scripts/gate_result.sh" ]; then
     PREFLIGHT_REUSE_REPO="$REPO_ROOT"
@@ -601,6 +616,13 @@ else
     echo "    — GATING IN FULL (a deploy must not skip a gate it cannot look up)." >&2
   fi
   [ -z "$REUSE_LINE" ] || info "reuse: $REUSE_LINE"
+  # The scoped release run: only when the record vouched for nothing (a reuse
+  # branch built its own argv above, and `--for-diff` cannot be combined with
+  # `--only`). No previous tag means no narrowing — the whole family runs.
+  if [ "${#GATE_ARGV[@]}" -eq 1 ] && [ -n "$PREV_RELEASE_TAG" ]; then
+    GATE_ARGV+=(--for-diff "$PREV_RELEASE_TAG")
+    info "scoped release gate: --for-diff $PREV_RELEASE_TAG (the e2e gates narrow to the areas this release touched and PRINT the decision; PREFLIGHT_E2E=full forces every spec)"
+  fi
   # CPU-QUOTA THE GATE. The gate is the CPU-hungry half of a release (`go test
   # -race ./...`, `next build`, the shell suites) and on a host that also runs
   # lanes and other people's containers it takes whatever it can find. Bound it in

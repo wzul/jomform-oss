@@ -23,6 +23,11 @@
 //   4. The dialog really states the consequences: the pricing-block warning and
 //      the notification re-point note exist and are rendered only for a change.
 //   5. Both new keys exist in all five locales.
+//   6. The settings panel is found by IDENTITY — its own `data-jf-aside` marker,
+//      or the border-l column before the page carried markers — so the order of
+//      attributes on that tag is not something this guard can fail on, and a
+//      failure names the page state that was found rather than a slice anchor
+//      (t_85ed0e60: an attribute written before `className` failed all 9 tests).
 //
 // WHAT IT DOES NOT COVER (stated honestly)
 //   * This repo has no JSX/DOM test runner (`npm run test:unit` is `node --test`
@@ -54,10 +59,128 @@ function region(src: string, start: string, end: string): string {
 }
 
 const HEADER = region(BUILDER, "<header", "</header>");
-// The SETTINGS panel, not the palette: the left column is an <aside> too
-// ("Drag to add"), and a slice of the wrong one would make every assertion
-// below meaningless while still passing.
-const ASIDE = region(BUILDER, "<aside className={`border-l", "</aside>");
+
+// ── the settings aside, found by IDENTITY (t_85ed0e60) ───────────────────
+//
+// This used to read `region(BUILDER, "<aside className={`border-l", "</aside>")`
+// — a slice anchored on the literal PREFIX of the opening tag. Any attribute
+// written before `className` (`<aside data-jf-aside="settings" className={…}>`,
+// a page with identical behaviour) failed the whole file with
+//   anchor not found: <aside className={`border-l
+// which names the guard's own anchor and says nothing about the page. The panel
+// is a right-hand column with its own marker, so find it by that — attribute
+// order is not a fact about the page — and make every failure name the page
+// state that was found instead.
+
+const PAGE = "web/src/app/builder/page.tsx";
+const SETTINGS_MARK = 'data-jf-aside="settings"';
+
+/** Index of the `>` closing the tag that opens at `at`, skipping a `>` inside a
+ *  quoted string, a template literal or a `{…}` expression. -1 if it never
+ *  closes. */
+function tagEnd(src: string, at: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = at; i < src.length; i++) {
+    const c = src[i];
+    if (quote !== null) {
+      if (c === "\\") i++; // an escaped character cannot end the string
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{") depth++;
+    else if (c === "}") depth = Math.max(0, depth - 1);
+    else if (c === ">" && depth === 0) return i;
+  }
+  return -1;
+}
+
+type Element = { openTag: string; source: string; closed: boolean };
+
+/** Every `<tag …>…</tag>` in `src`: its opening tag and the whole element. */
+function elements(src: string, tag: string): Element[] {
+  const out: Element[] = [];
+  for (const m of src.matchAll(new RegExp(`<${tag}(?=[\\s/>])`, "g"))) {
+    const at = m.index ?? -1;
+    if (at < 0) continue;
+    const end = tagEnd(src, at);
+    if (end < 0) {
+      out.push({ openTag: src.slice(at, at + 60), source: src.slice(at), closed: false });
+      continue;
+    }
+    const openTag = src.slice(at, end + 1);
+    const close = new RegExp(`</${tag}\\s*>`).exec(src.slice(end + 1));
+    if (!close) {
+      out.push({ openTag, source: openTag, closed: false });
+      continue;
+    }
+    out.push({ openTag, source: src.slice(at, end + 1 + close.index + close[0].length), closed: true });
+  }
+  return out;
+}
+
+/** A className token, as its own class — `border-l`, but not `border-l-4`. */
+const hasClass = (openTag: string, cls: string) => new RegExp(`(?<![\\w-])${cls}(?![\\w-])`).test(openTag);
+
+/** What the page actually has, for a failure message that names the page and
+ *  not an anchor in this file. */
+const asideState = (asides: Element[]) =>
+  asides.length
+    ? `${asides.length} <aside> opening tag(s) present:\n` +
+      asides.map((a, i) => `    [${i}] ${a.openTag.replace(/\s+/g, " ").slice(0, 140)}`).join("\n")
+    : `${PAGE} renders no <aside> at all`;
+
+/**
+ * The field-settings panel — the aside this guard judges — by identity:
+ *
+ *   1. the aside whose opening tag carries `data-jf-aside="settings"`, where the
+ *      page marks its columns; attribute order does not matter;
+ *   2. otherwise the right-hand column: `border-l` and not `border-r` (the
+ *      palette column is the `border-r` one). This is the pre-marker fallback.
+ *
+ * Throws a message naming the page state — never an anchor literal.
+ */
+function settingsAside(src: string): Element {
+  const asides = elements(src, "aside");
+  const marked = asides.filter((a) => a.openTag.includes(SETTINGS_MARK));
+
+  if (marked.length > 1) {
+    throw new Error(
+      `${PAGE} marks ${marked.length} asides with ${SETTINGS_MARK}; this guard judges the ONE field-settings ` +
+        `panel and cannot tell them apart. ${asideState(marked)}`,
+    );
+  }
+
+  const matches = marked.length
+    ? marked
+    : asides.filter((a) => hasClass(a.openTag, "border-l") && !hasClass(a.openTag, "border-r"));
+
+  if (matches.length !== 1) {
+    const why = marked.length
+      ? `the aside marked ${SETTINGS_MARK} also has to be a single element`
+      : `no aside carries ${SETTINGS_MARK}, and ${matches.length} aside(s) match the border-l right column`;
+    throw new Error(
+      `the builder's field-settings panel cannot be located in ${PAGE} (${why}). This guard checks that the ` +
+        `panel which edits ONE selected block holds no form-level control (mode, notifications doc link, ` +
+        `"Form settings →"). ${asideState(asides)}`,
+    );
+  }
+
+  const [panel] = matches;
+  if (!panel.closed) {
+    throw new Error(
+      `the settings aside in ${PAGE} has no matching </aside>, so the panel cannot be delimited: ` +
+        panel.openTag.replace(/\s+/g, " ").slice(0, 140),
+    );
+  }
+  return panel;
+}
+
+/** Resolved per test, not at module load: a page that loses the panel should
+ *  fail the assertions that judge it, each naming the page state — not abort the
+ *  whole file as "the guard is broken". */
+const settingsPanel = () => settingsAside(BUILDER).source;
 
 // ── (1) the mode control is in the header ────────────────────────────────
 
@@ -91,7 +214,43 @@ test("the control reads the current mode and opens a dialog", () => {
 
 // ── (2) the aside is field settings only ─────────────────────────────────
 
+test("the settings panel is found by identity, not by attribute ORDER", () => {
+  // t_85ed0e60: the slice was anchored on the opening tag's literal prefix, so
+  // moving an attribute in front of `className` — a page with identical
+  // behaviour — failed the whole file with "anchor not found: <aside
+  // className={`border-l". These four are the same two columns written four
+  // ways; each must resolve to the settings panel and never to the palette.
+  const palette = '<aside className={`border-r p-4`}>Drag to add</aside>';
+  const writings = [
+    '<aside data-jf-aside="settings" className={`border-l p-4`}>Block settings</aside>',
+    '<aside className={`border-l p-4`} data-jf-aside="settings">Block settings</aside>',
+    '<aside className={`border-l p-4`}>Block settings</aside>', // the pre-marker tree
+  ];
+  for (const settings of writings) {
+    const panel = settingsAside(`<main>${palette}${settings}</main>`);
+    assert.equal(panel.source, settings, `the settings aside was not resolved in: ${settings}`);
+  }
+  // The palette column is never the panel: a page with only the palette has no
+  // settings aside, and that must be an error rather than a silent pass.
+  assert.throws(
+    () => settingsAside(`<main>${palette}</main>`),
+    (e: Error) => /field-settings panel cannot be located/.test(e.message) && /1 <aside> opening tag/.test(e.message),
+    "an unlocatable settings aside must say what the page rendered, not quote a slice anchor",
+  );
+  assert.throws(
+    () => settingsAside(`<main>${palette}<aside class="x"></aside></main>`),
+    /field-settings panel cannot be located[\s\S]*2 <aside> opening tag/,
+    "an unmarked, unstyled aside must not be silently accepted as the settings panel",
+  );
+  // Two markers is ambiguous — the guard must not judge one of two panels.
+  assert.throws(
+    () => settingsAside(`<main>${writings[0]}${writings[1]}</main>`),
+    /marks 2 asides with data-jf-aside="settings"/,
+  );
+});
+
 test("the settings panel renders no form-level control", () => {
+  const ASIDE = settingsPanel();
   // Every key and link the form-level surface owned, by name, so this fails for
   // the right reason and not because some unrelated text changed.
   for (const key of ["bld.mode", "bld.modePayment", "bld.modeResponse", "bld.modeDocs"]) {
@@ -114,6 +273,7 @@ test("the settings panel renders no form-level control", () => {
 });
 
 test("the form-level cards are gone from the aside but the block settings remain", () => {
+  const ASIDE = settingsPanel();
   // The removal must not have taken the block settings with it: the panel still
   // draws the selected block's fields and its own empty state.
   assert.match(ASIDE, /\{selectedBlock && renderFieldSettings\(selectedBlock\)\}/, "the aside no longer renders the selected block's settings");

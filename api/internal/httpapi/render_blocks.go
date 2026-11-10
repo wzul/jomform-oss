@@ -450,6 +450,10 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 		// Card t_135c3c72: the per-method fee chooser. Nil (no active method)
 		// renders no chooser and no fee row — the page stays exactly as it was.
 		"FeeOptions": feeOptions,
+		// Card t_453489b9: the buyer's payment-method picker. Empty (no group
+		// this product can label) renders no picker and the page posts no
+		// pay_method — the pre-feature behaviour.
+		"PayChoices": h.payMethodChoices(r.Context(), f.AccountID, f.ID, ls),
 	}
 	// Card t_a7bf0fb2: the theme keys live in ONE function both renderers call
 	// (see blockThemeView) — a copy in each renderer is how the custom-CSS
@@ -1312,6 +1316,43 @@ var blockTmpl = template.Must(template.New("blocks").
                flex-wrap:wrap; margin-top:6px; text-align:center; }
   .jf-flinks a { color:var(--jf-primary-text); text-decoration:none; }
   .jf-flinks a:hover { text-decoration:underline; }
+  /* Card t_453489b9: the buyer's payment-method picker above the submit button
+     (approved mockup). One bordered group of 44px rows; the whole row is a
+     <label> so a tap anywhere picks it; the selected row carries the filled
+     radio plus a left accent bar, drawn from its own control with :has() — never
+     from a class the script has to keep in sync.
+     The CTA's two lines ("Bayar RM X" / "melalui FPX") are BLOCK children of
+     the existing button rather than a flex button rule: the CTA contrast
+     guard judges every bare "button" rule for the brand token, and a
+     layout-only twin would read as a CTA painted without it. */
+  .paybtnl, .paybtns { display:block; }
+  .paybtns { font-size:12px; font-weight:500; opacity:.9; }
+  .paypick { margin:14px 0 0; border:1px solid #e6e8ec; border-radius:12px; overflow:hidden;
+             text-align:left; }
+  .paypickhead { display:flex; align-items:baseline; justify-content:space-between; gap:8px;
+                 padding:10px 12px 6px; }
+  .paypicktitle { font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+                  color:#6b7280; }
+  .paypickhint { font-size:12px; color:#9ca3af; }
+  .payrow { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 12px;
+            cursor:pointer; border-top:1px solid #f0f1f4; -webkit-tap-highlight-color:transparent;
+            margin:0; font-size:14px; }
+  .payrow .payrowlabel { display:block; font-size:15px; font-weight:600; line-height:1.25; color:#17181c; }
+  .payrow .payrowtext { display:block; flex:1 1 auto; min-width:0; }
+  .payrow .payrowdesc { display:block; font-size:12px; line-height:1.3; color:#6b7280; margin-top:1px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .payrow:hover { background:#fafafa; }
+  .payrow input[type=radio] { width:20px; height:20px; flex:0 0 20px; margin:0; padding:0;
+            accent-color:var(--jf-primary); }
+  .payrow:has(input:checked) { background:#f5f3ff; box-shadow:inset 3px 0 0 var(--jf-primary); }
+  .payrow:has(input:checked) .payrowlabel { color:var(--jf-primary-text); }
+  /* :focus, not :focus-visible: the served-sheet guards compile every selector
+     with cascadia, which knows :focus and rejects :focus-visible. The ring is
+     the same one; only a mouse pick also shows it, which is a fair trade for a
+     guard that keeps the sheet honest. */
+  .payrow:has(input:focus) { outline:2px solid var(--jf-primary); outline-offset:-2px; }
+  .paynote { margin:0; padding:8px 12px 10px; border-top:1px solid #f0f1f4;
+             font-size:11px; color:#9ca3af; }
 </style>
 {{if .ThemeSheet}}<style>
   /* Card t_5016ade2: the form's theme SETTINGS are served in THIS element,
@@ -1383,15 +1424,23 @@ var blockTmpl = template.Must(template.New("blocks").
 {{else if eq .Type "coupon"}}  <label class="lbl"{{styleAttr .Style}}>{{.Value}}</label><div class="desc">{{$.Ls.CouponUnsupported}}</div>
 {{end}}</span>{{if .Description}}<div class="desc">{{.Description}}</div>{{end}}{{if .CondJSON}}</div>{{end}}
 {{end}}
-  {{if .FeeOptions}}<div class="jf-fees">
+  {{if .PayChoices}}{{/* Card t_453489b9: the buyer picks HOW they pay, above
+  the submit button, so CHIP does not ask again. Rows come from the workspace's
+  own enabled methods (server-resolved), never a hardcoded list. */}}
+  <div class="paypick" role="radiogroup" aria-labelledby="payPickTitle">
+    <div class="paypickhead"><span class="paypicktitle" id="payPickTitle">{{.Ls.PayMethodTitle}}</span><span class="paypickhint">{{.Ls.PayPickOne}}</span></div>
+    {{range .PayChoices}}<label class="payrow"><input type="radio" name="pay_method" class="paym" value="{{.Key}}" data-name="{{.Label}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}><span class="payrowtext"><span class="payrowlabel">{{.Label}}</span>{{if .Desc}}<span class="payrowdesc">{{.Desc}}</span>{{end}}</span></label>{{end}}
+    <p class="paynote">{{.Ls.PayChipNote}}</p>
+  </div>
+  {{else}}{{if .FeeOptions}}<div class="jf-fees">
   {{if gt (len .FeeOptions) 1}}<div class="lbl">{{.Ls.FeeChoose}}</div>{{end}}
-  {{range .FeeOptions}}<label class="chk"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}> {{.RateLabel}}</label>{{end}}
-  </div>{{end}}
-  {{if .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
+  {{range .FeeOptions}}<label class="chk"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}" data-name="{{.RateLabel}}"{{if .Selected}} checked{{end}}> {{.RateLabel}}</label>{{end}}
+  </div>{{end}}{{end}}
+  {{if or .PayChoices .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
   <div class="total"><span>{{.Ls.FeeLine}} <small id="fee-rate"></small></span><span id="fee-amt">RM0.00</span></div>{{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   {{.AntiSpam}}
-  <button type="submit" form="of">{{$.Ls.Submit}}</button>
+  <button type="submit" form="of" id="ofSubmit"><span class="paybtnl" id="ofSubmitLabel">{{$.Ls.Submit}}</span><span class="paybtns" id="ofSubmitVia" hidden></span></button>
 </form>
 {{if .Footer.HasFooter}}<footer class="jf-footer">
   {{if .Footer.BusinessName}}<div class="jf-fbiz">{{.Footer.BusinessName}}{{if .Footer.CompanyReg}} · {{.Footer.CompanyReg}}{{end}}</div>{{else if .Footer.CompanyReg}}<div class="jf-frow">{{.Footer.CompanyReg}}</div>{{end}}
@@ -1506,7 +1555,7 @@ var blockTmpl = template.Must(template.New("blocks").
     //   fee(F) = fixed + floor((F*bp + 5000) / 10000)   [round half up]
     //   F = smallest integer with F - fee(F) >= base
     // The naive formula (base + base*rate) is 10 sen short on RM1,000 at 1%.
-    var fr=document.querySelector('input.feee:checked');
+    var fr=document.querySelector('input.paym:checked')||document.querySelector('input.feee:checked');
     var fx=fr?Number(fr.dataset.fixed||0):0;
     var bp=fr?Number(fr.dataset.bp||0):0;
     function feeOf(v){return fx+Math.floor((v*bp+5000)/10000);}
@@ -1527,8 +1576,29 @@ var blockTmpl = template.Must(template.New("blocks").
     if(fa){fa.textContent='RM'+((total-base)/100).toFixed(2);}
     var frl=document.getElementById('fee-rate');
     if(frl&&fr){
-      var lbl=fr.parentNode.textContent||'';
-      frl.textContent='— '+lbl.replace(/^\s+|\s+$/g,'');
+      // The pay picker's row carries its own name; the legacy fee radio has
+      // none, so its label is the rate text inside the row.
+      var lbl=fr.dataset.name||((fr.parentNode&&fr.parentNode.textContent)||'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');
+      frl.textContent='— '+lbl;
+    }
+    // Card t_453489b9: the Pay button says what it will charge and how — the
+    // approved mockup's "Bayar RM 186.00 / melalui FPX". With a picker present
+    // the amount replaces the generic submit label (the buyer sees the number
+    // before committing); without one the label is untouched, because that page
+    // never promised a method.
+    var lblEl=document.getElementById('ofSubmitLabel');
+    if(lblEl){
+      if(fr&&fr.classList.contains('paym')&&total>0){
+        lblEl.textContent='{{.Ls.PayAmount}}'.replace('{amount}',s);
+      }else{
+        lblEl.textContent='{{.Ls.Submit}}';
+      }
+    }
+    var sub=document.getElementById('ofSubmitVia');
+    if(sub){
+      if(fr&&fr.classList.contains('paym')&&fr.dataset.name){
+        sub.textContent='{{.Ls.PayVia}} '+fr.dataset.name; sub.hidden=false;
+      }else{sub.hidden=true;}
     }
     jfTotal=total;
   }
@@ -1545,6 +1615,8 @@ var blockTmpl = template.Must(template.New("blocks").
   // Card t_135c3c72: picking a different method re-prices the fee (each method
   // carries its own rate), so the total must be repainted on the spot.
   document.querySelectorAll('input.feee').forEach(function(el){el.addEventListener('change',upd)});
+  // Card t_453489b9: the same re-price when the buyer switches payment METHOD.
+  document.querySelectorAll('input.paym').forEach(function(el){el.addEventListener('change',upd)});
   // Paint the initial total/fee BEFORE the buyer touches anything: a form whose
   // items are already selected would otherwise show RM0.00 (and echo
   // expected_total_sen=0, disabling the server's mismatch check) until the
@@ -1621,7 +1693,13 @@ var blockTmpl = template.Must(template.New("blocks").
       // the total this page displayed. Both are CLAIMS the server re-checks: it
       // re-resolves the rate, recomputes the total, and refuses (400) rather
       // than silently charging a different amount.
+      //
+      // Card t_453489b9: with the unified picker the choice is pay_method —
+      // the method GROUP the buyer picked — and it drives the CHIP narrowing as
+      // well as the fee. The legacy fee_method is kept for a page without the
+      // picker (a workspace whose whitelist offers no group we can label).
       fee_method:(function(){var f=document.querySelector('input.feee:checked');return f?f.value:'';})(),
+      pay_method:(function(){var f=document.querySelector('input.paym:checked');return f?f.value:'';})(),
       expected_total_sen:jfTotal,
       // Issue #444: affiliate marketing — echo the ?aff=CODE the buyer landed
       // with so the sale is attributed to that affiliate.

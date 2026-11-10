@@ -55,8 +55,10 @@ PLAYWRIGHT="$REPO_ROOT/web/node_modules/.bin/playwright"
 
 # The families, as "<gate>:<playwright project>". Kept as a literal list here rather
 # than derived from the tree: a gate whose detail file VANISHES must be a failure,
-# and a list derived from the tree could not notice that.
-FAMILIES="a11y:a11y e2e:feature-e2e"
+# and a list derived from the tree could not notice that. The feature family is TWO
+# gates since card t_ec2aac42 (`feature-builder` = the `builder-*.spec.ts` half,
+# `feature-core` = the rest), so each half's count is re-read separately.
+FAMILIES="a11y:a11y e2e-builder:feature-builder e2e-core:feature-core"
 
 if [ ! -f "$INVENTORY" ]; then
   echo "SPEC COUNTS FAIL: GATE-INVENTORY.md not found at $INVENTORY — the document this gate re-reads is missing, so there is nothing to compare against" >&2

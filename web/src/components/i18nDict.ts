@@ -34,6 +34,29 @@ export type Lang = (typeof LANGS)[number];
  */
 export const LANDING_PAY_METHODS = ["FPX", "DuitNow QR", "VISA", "GrabPay", "Boost"] as const;
 
+/**
+ * The payment-method radio rows the demo's checkout shows ABOVE its Pay button
+ * (card t_453489b9, the approved mockup).
+ *
+ * The strip of chips that used to sit UNDER the button is gone: the mockup Wan
+ * approved asks the buyer how they want to pay before they press Pay, exactly
+ * like the real checkout does now, and the Pay button then says which method it
+ * will use ("Pay RM186.00 / via FPX"). Keeping both would be the same duplicate
+ * statement this list's predecessor was created to delete.
+ *
+ * The ORDER is the one the product's picker uses (payments.PayMethods in
+ * api/internal/payments/paymethod.go): FPX, DuitNow QR, card, e-wallet. Only the
+ * dictionary KEYS live here — a method name written in a component's own source
+ * is what src/lib/landingPayMethods.test.ts fails on, and a brand name is not
+ * translated while the row's description is.
+ */
+export const LANDING_PAY_OPTIONS = [
+  { id: "fpx", labelKey: "land.payfpx", descKey: "land.payfpxdesc" },
+  { id: "duitnow_qr", labelKey: "land.paydnqr", descKey: "land.paydnqrdesc" },
+  { id: "card", labelKey: "land.paycard", descKey: "land.paycarddesc" },
+  { id: "ewallet", labelKey: "land.paywallet", descKey: "land.paywalletdesc" },
+] as const;
+
 // The custom-domain CNAME target USED to be a constant here (issue #323). It is
 // a deployment fact now — `custom.jomform.com` is the hosted product's target,
 // and a self-hosted install points the domain at its own host (card
@@ -663,6 +686,19 @@ export const DICT = {
   "set.emailFallbackHint": { en: "(optional; used when buyer email is missing; one-time forms only)", ms: "(pilihan — digunakan bila emel pembeli tiada; borang one-time sahaja)", zh: "（可选 — 买家邮箱缺失时使用；仅一次性表单）", ta: "(விருப்பம் — வாங்குபவர் மின்னஞ்சல் இல்லாதபோது பயன்படும்; ஒரு முறை படிவங்களுக்கு மட்டும்)", ar: "(اختياري — يُستخدم عند غياب بريد المشتري؛ النماذج لمرة واحدة فقط)" },
   "set.paymentMethods": { en: "Payment methods", ms: "Kaedah bayaran", zh: "支付方式", ta: "பணம் செலுத்தும் முறைகள்", ar: "طرق الدفع" },
   "set.allMethods": { en: "(blank = all available)", ms: "(kosong = semua tersedia)", zh: "（留空 = 全部可用）", ta: "(காலியாக = அனைத்தும் கிடைக்கும்)", ar: "(فارغ = جميع الطرق متاحة)" },
+  // Card t_f11d676f: the payment-method control is a CHECKBOX GROUP now (it
+  // used to be twelve rounded pills with no tick, which read as the filter chips
+  // on /sales). Twelve checkboxes on a phone need a one-tap way through them, so
+  // the group carries one toggle that always names the opposite of the current
+  // state: "Select all" until every method is picked, then "Clear all".
+  "set.pmSelectAll": { en: "Select all", ms: "Pilih semua", zh: "全选", ta: "அனைத்தையும் தேர்ந்தெடு", ar: "تحديد الكل" },
+  "set.pmClearAll": { en: "Clear all", ms: "Kosongkan semua", zh: "清除全部", ta: "அனைத்தையும் அழி", ar: "مسح الكل" },
+  // Card t_f11d676f: the settings tab strip is one scrolling row on a phone, so
+  // it needs a control (not only a fade) that says "there are more tabs this
+  // way". Each arrow names the direction it moves, so the pair is not two
+  // identically-named buttons to a screen reader.
+  "set.tabsScrollBack": { en: "Scroll tabs back", ms: "Tatal tab ke belakang", zh: "向后滚动标签", ta: "தாவல்களை பின்னால் உருட்டு", ar: "تمرير التبويبات للخلف" },
+  "set.tabsScrollForward": { en: "Scroll tabs forward", ms: "Tatal tab ke hadapan", zh: "向前滚动标签", ta: "தாவல்களை முன்னால் உருட்டு", ar: "تمرير التبويبات للأمام" },
   "set.save": { en: "Save", ms: "Simpan", zh: "保存", ta: "சேமி", ar: "حفظ" },
   "set.clear": { en: "Clear", ms: "Kosongkan", zh: "清除", ta: "அழி", ar: "مسح" },
   "set.savedCreds": { en: "Saved. Credentials verified with CHIP ✓", ms: "Disimpan — kredensial disahkan dengan CHIP. ✓", zh: "已保存 — 凭证已通过 CHIP 验证 ✓", ta: "சேமிக்கப்பட்டது — CHIP உடன் சான்றுகள் சரிபார்க்கப்பட்டன ✓", ar: "تم الحفظ — تم التحقق من البيانات مع CHIP ✓" },
@@ -2008,6 +2044,23 @@ export const DICT = {
   "land.fmshipping": { en: "Shipping: J&T, Klang Valley", ms: "Penghantaran — J&T, Lembah Klang", zh: "运费 — J&T，巴生谷", ta: "கட்டணம் — J&T, கிள்ளான் பள்ளத்தாக்கு", ar: "الشحن — J&T، وادي كلانج" },
   "land.fmtotal": { en: "Total", ms: "Jumlah", zh: "合计", ta: "மொத்தம்", ar: "الإجمالي" },
   "land.fmpay": { en: "Pay {amount}", ms: "Bayar {amount}", zh: "支付 {amount}", ta: "{amount} செலுத்து", ar: "ادفع {amount}" },
+  /* card t_453489b9 — the demo's payment-method picker, mirroring the product's
+     own picker (api/internal/httpapi/paymethod.go renders the same rows). The
+     labels are the four GROUPS: FPX and DuitNow QR are scheme names and read the
+     same in every locale; card and e-wallet are ordinary nouns. `land.payvia` is
+     the Pay button's second line. */
+  "land.paytitle": { en: "Payment method", ms: "Kaedah bayaran", zh: "付款方式", ta: "கட்டண முறை", ar: "طريقة الدفع" },
+  "land.paypick": { en: "Choose one", ms: "Pilih satu", zh: "选择一项", ta: "ஒன்றைத் தேர்ந்தெடு", ar: "اختر واحدة" },
+  "land.payfpx": { en: "FPX", ms: "FPX", zh: "FPX", ta: "FPX", ar: "FPX" },
+  "land.payfpxdesc": { en: "Online banking: Maybank2u, CIMB Clicks, RHB Now", ms: "Perbankan online: Maybank2u, CIMB Clicks, RHB Now", zh: "网上银行：Maybank2u、CIMB Clicks、RHB Now", ta: "ஆன்லைன் வங்கி: Maybank2u, CIMB Clicks, RHB Now", ar: "الخدمات المصرفية عبر الإنترنت: Maybank2u وCIMB Clicks وRHB Now" },
+  "land.paydnqr": { en: "DuitNow QR", ms: "DuitNow QR", zh: "DuitNow QR", ta: "DuitNow QR", ar: "DuitNow QR" },
+  "land.paydnqrdesc": { en: "Scan with any bank app", ms: "Imbas dengan mana-mana aplikasi bank", zh: "用任何银行应用扫描", ta: "எந்த வங்கி செயலியிலும் ஸ்கேன் செய்யுங்கள்", ar: "امسح بأي تطبيق مصرفي" },
+  "land.paycard": { en: "Debit / credit card", ms: "Kad debit / kredit", zh: "借记卡 / 信用卡", ta: "பற்று / கடன் அட்டை", ar: "بطاقة خصم / ائتمان" },
+  "land.paycarddesc": { en: "Visa · Mastercard", ms: "Visa · Mastercard", zh: "Visa · Mastercard", ta: "Visa · Mastercard", ar: "Visa · Mastercard" },
+  "land.paywallet": { en: "e-Wallet", ms: "E-dompet", zh: "电子钱包", ta: "மின் பணப்பை", ar: "محفظة إلكترونية" },
+  "land.paywalletdesc": { en: "GrabPay · ShopeePay · Touch 'n Go", ms: "GrabPay · ShopeePay · Touch 'n Go", zh: "GrabPay · ShopeePay · Touch 'n Go", ta: "GrabPay · ShopeePay · Touch 'n Go", ar: "GrabPay · ShopeePay · Touch 'n Go" },
+  "land.payvia": { en: "via {method}", ms: "melalui {method}", zh: "通过 {method}", ta: "{method} வழியாக", ar: "عبر {method}" },
+  "land.paynote": { en: "Paid through CHIP. JomForm never stores card numbers", ms: "Dibayar melalui CHIP. JomForm tidak menyimpan nombor kad", zh: "通过 CHIP 付款。JomForm 不会保存卡号", ta: "CHIP மூலம் பணம். JomForm அட்டை எண்ணைச் சேமிக்காது", ar: "الدفع عبر CHIP. لا يحفظ JomForm أرقام البطاقات" },
   "land.path1t": { en: "Build the form", ms: "Bina borang", zh: "创建表单", ta: "படிவத்தை உருவாக்கு", ar: "أنشئ النموذج" },
   "land.path1b": { en: "Drag in products, add a name and WhatsApp field, publish with one click.", ms: "Tarik produk, tambah medan nama dan WhatsApp, terbitkan dengan satu klik.", zh: "拖入商品，加上姓名和 WhatsApp 字段，一键发布。", ta: "தயாரிப்புகளை இழுத்துச் சேர், பெயர் மற்றும் WhatsApp புலத்தைச் சேர், ஒரே கிளிக்கில் வெளியிடு.", ar: "أضف المنتجات وحقلي الاسم وواتساب، ثم انشر بنقرة واحدة." },
   "land.path2t": { en: "Buyer pays", ms: "Pembeli bayar", zh: "买家付款", ta: "வாங்குபவர் செலுத்துகிறார்", ar: "يدفع المشتري" },

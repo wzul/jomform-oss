@@ -53,7 +53,7 @@
 //     sentence.
 //   * It judges a COUNT in one region and nothing else (see scope above).
 //   * It does not check a prose CLAIM about which gate runs a spec (the `a11y`
-//     vs `feature-e2e` split by filename prefix at `web/playwright.config.ts`);
+//     vs `feature-core` split by filename prefix at `web/playwright.config.ts`);
 //     it checks that the spec a claim is about is a real file.
 //
 // Run with:

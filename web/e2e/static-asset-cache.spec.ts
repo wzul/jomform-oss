@@ -15,7 +15,7 @@ import { test, expect } from "@playwright/test";
 //
 // WHAT IT PINS, against the app this gate itself serves (`npm run start`, the
 // same production server web/playwright.config.ts starts for the a11y and
-// feature-e2e gates):
+// feature-core gates):
 //   1. An asset under `/_next/static/` that the served document really
 //      references answers 200 with `Cache-Control: public, max-age=31536000,
 //      immutable`.

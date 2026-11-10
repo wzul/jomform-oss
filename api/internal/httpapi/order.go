@@ -26,6 +26,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -226,6 +227,46 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	if method != "chip" && method != "bank_direct" {
 		buyerErr(w, lang, http.StatusBadRequest, errOrderPaymentMethodBad)
 		return
+	}
+
+	// Card t_453489b9: resolve the CHIP feed / per-form override HERE, before a
+	// sale exists. Two things need it at this point:
+	//
+	//   - the buyer's chosen payment METHOD must be validated against the same
+	//     whitelist the purchase will be created with. Validating after the
+	//     sale was recorded would turn an impossible choice into a stored
+	//     pending sale plus a 502;
+	//   - the picker's rows come from that whitelist (see the renderers).
+	//
+	// Issue #208: a form's chip_feeds are evaluated in order against the
+	// submitted field values; the first matching feed (default feed = no
+	// condition always matches) supplies the brand/secret. When no feed
+	// matches, the legacy single per-form override applies, then the account. A
+	// formless order has no form feeds — it uses the account default.
+	var ov *payments.ChipOverride
+	if method == "chip" && tgt.Form != nil && h.Forms != nil {
+		if feeds, ferr := h.Forms.ChipFeedsFor(r.Context(), tgt.AccountID, tgt.Form.ID); ferr == nil {
+			if feed := resolveChipFeed(feeds, in.Fields); feed != nil && feed.BrandID != "" && feed.SecretKeyEnc != "" {
+				ov = &payments.ChipOverride{
+					BrandID: feed.BrandID, SecretEnc: feed.SecretKeyEnc,
+					EmailFallback: feed.EmailFallback, MethodWhitelist: feed.MethodWhitelist,
+				}
+			}
+		}
+		if ov == nil {
+			if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), tgt.AccountID, tgt.Form.ID); oerr == nil && b != "" && s != "" {
+				ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
+			}
+		}
+	}
+	// A method the checkout cannot honour is REFUSED (400) rather than silently
+	// replaced by the merchant's whole whitelist: a fallback would let the buyer
+	// pay with a method they never chose.
+	if method == "chip" && strings.TrimSpace(in.PayMethod) != "" {
+		if verr := h.Pay.CheckBuyerPayMethod(r.Context(), tgt.AccountID, ov, in.PayMethod); verr != nil {
+			buyerErr(w, lang, http.StatusBadRequest, errPayMethodUnavailable)
+			return
+		}
 	}
 
 	// Shipping (managed rate sources). Two facts are read from the form's builder
@@ -558,10 +599,26 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 	// The fee applies to CHIP purchases only. A bank-direct order has no
 	// acquirer charge, so it keeps the plain total.
 	opts := h.feeOptions(r.Context(), tgt.AccountID, sale.FormID)
-	chosenFee, ferr := pickFeeOption(opts, in.FeeMethod)
-	if ferr != nil {
-		buyerErrOf(w, lang, http.StatusBadRequest, ferr)
-		return
+	var chosenFee feeOption
+	if strings.TrimSpace(in.PayMethod) != "" {
+		// Card t_453489b9: the page's ONE picker sends pay_method, so the fee
+		// follows the method the buyer actually picked. A method with no
+		// configured rate simply has no fee — unlike the legacy fee_method
+		// contract below, where naming a method that carries no rate means the
+		// page showed a fee that must not be applied (errFeeInactive).
+		for _, o := range opts {
+			if o.Method == strings.ToLower(strings.TrimSpace(in.PayMethod)) {
+				chosenFee = o
+				break
+			}
+		}
+	} else {
+		var ferr error
+		chosenFee, ferr = pickFeeOption(opts, in.FeeMethod)
+		if ferr != nil {
+			buyerErrOf(w, lang, http.StatusBadRequest, ferr)
+			return
+		}
 	}
 	if method == "chip" && chosenFee.Method != "" {
 		total, fee := payments.GrossUp(askTotal, chosenFee.FixedSen, chosenFee.PercentBP)
@@ -606,29 +663,16 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 
 	// CHIP flow: create purchase & return checkout URL.
 	if method == "chip" {
-		// Issue #208: resolve the CHIP feed for this submission. A form's
-		// chip_feeds are evaluated in order against the submitted field values;
-		// the first matching feed (default feed = no condition always matches)
-		// supplies the brand/secret. When no feed matches, fall back to the
-		// legacy single per-form override, then account. A formless order has no
-		// form feeds — it uses the account default.
-		var ov *payments.ChipOverride
-		if tgt.Form != nil && h.Forms != nil {
-			if feeds, ferr := h.Forms.ChipFeedsFor(r.Context(), tgt.AccountID, tgt.Form.ID); ferr == nil {
-				if feed := resolveChipFeed(feeds, in.Fields); feed != nil && feed.BrandID != "" && feed.SecretKeyEnc != "" {
-					ov = &payments.ChipOverride{
-						BrandID: feed.BrandID, SecretEnc: feed.SecretKeyEnc,
-						EmailFallback: feed.EmailFallback, MethodWhitelist: feed.MethodWhitelist,
-					}
-				}
+		// Card t_453489b9: the buyer's chosen method rides along, so the
+		// purchase is narrowed to that group and the checkout URL opens on it.
+		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov, in.PayMethod); err != nil {
+			if errors.Is(err, payments.ErrPayMethodUnavailable) {
+				// The choice was fine against the merchant's setting but the
+				// brand cannot take it right now (resolved/live whitelist).
+				// Refused, never silently swapped for another method.
+				buyerErr(w, lang, http.StatusBadRequest, errPayMethodUnavailable)
+				return
 			}
-			if ov == nil {
-				if b, s, ef, wl, oerr := h.Forms.ChipOverrideFor(r.Context(), tgt.AccountID, tgt.Form.ID); oerr == nil && b != "" && s != "" {
-					ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
-				}
-			}
-		}
-		if err := h.Pay.CreateChipPurchaseForSaleWithOverride(r.Context(), sale, ov); err != nil {
 			slog.Error("chip_create_for_sale", "err", fmt.Sprintf("%+v", err), "sale", sale.RefCode)
 			h.answerChipPurchaseFailed(w, r, sale)
 			return

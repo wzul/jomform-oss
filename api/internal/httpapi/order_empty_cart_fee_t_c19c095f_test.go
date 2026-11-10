@@ -33,6 +33,7 @@ import (
 	"testing"
 
 	"github.com/andybalholm/cascadia"
+	"golang.org/x/net/html"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/payments"
@@ -59,6 +60,36 @@ func tickProduct(t *testing.T, d *menuDOM) {
 	}
 	setMenuAttr(box, "checked", "")
 	d.dispatch("change", box)
+}
+
+// pickPayMethod selects the payment-METHOD row `value` the way a click does: a
+// radio group holds at most one checked control, so every other row's attribute
+// is cleared, the wanted row's is set, and the page's own change listener fires.
+//
+// Card t_453489b9 replaced the block layout's fee-only radio group with ONE
+// picker: the rows are the payment groups, and the processing fee follows the
+// chosen method (each row carries its own data-fixed/data-bp). A fee test whose
+// method is not the picker's first row must therefore CHOOSE it, exactly as the
+// buyer does — otherwise it measures the default row's rate and calls it a
+// regression.
+func pickPayMethod(t *testing.T, d *menuDOM, value string) {
+	t.Helper()
+	rows := cascadia.QueryAll(d.doc, cascadia.MustCompile("input.paym"))
+	if len(rows) == 0 {
+		t.Fatal("the served page carries no payment-method rows (input.paym)")
+	}
+	var want *html.Node
+	for _, n := range rows {
+		removeMenuAttr(n, "checked")
+		if menuAttr(n, "value") == value {
+			want = n
+		}
+	}
+	if want == nil {
+		t.Fatalf("the served picker has no row with value %q", value)
+	}
+	setMenuAttr(want, "checked", "")
+	d.dispatch("change", want)
 }
 
 // feeBlockForm publishes a payment form in fx's account whose blocks carry ONE
@@ -106,7 +137,12 @@ func TestEmptyCartPaintsNoFeeOrTotalOnBlockLayout(t *testing.T) {
 	page := feeFixedPage(t, fx, feeBlockForm(t, fx))
 
 	// The fee IS active on this page — otherwise the reading below proves nothing.
-	if !strings.Contains(page, `class="feee"`) {
+	// Card t_453489b9 ships ONE picker: a workspace that offers payment groups
+	// renders the pay_method rows (class="paym"), each carrying its own method's
+	// rate; the fee-only radios (class="feee") remain for a checkout whose
+	// whitelist offers no group this product can label. Either is the chooser
+	// this measurement is about.
+	if !strings.Contains(page, `class="paym"`) && !strings.Contains(page, `class="feee"`) {
 		t.Fatalf("the served page carries no fee chooser, so the empty-cart reading is vacuous:\n%.600s", page)
 	}
 	if !strings.Contains(page, `data-fixed="50"`) {
@@ -189,6 +225,12 @@ func TestEmptyCartPercentageOnlyAlreadyReadsZero(t *testing.T) {
 	}
 
 	tickProduct(t, d)
+	// Card t_453489b9: the picker defaults to the FIRST enabled group (FPX here),
+	// and this page has a rate for CARD only. The buyer who pays by card picks
+	// the card row, so the measurement does the same before reading the total —
+	// otherwise it would price the default row and call FPX's zero-fee a
+	// regression.
+	pickPayMethod(t, d, payments.FeeMethodCard)
 	// RM1,000.00 at 1% grosses up to RM1,010.10 (fee RM10.10), not RM1,010.00.
 	if got := feeRowText(t, d, "total"); got != "RM1010.10" {
 		t.Errorf("percentage-only page: after ticking the RM1,000 item, #total = %q, want RM1010.10", got)

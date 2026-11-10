@@ -25,8 +25,25 @@ geometry, not markup:
   `input` fails here too;
 - the pay button spans the row;
 - the document does not scroll sideways (`scrollWidth <= clientWidth + 1`);
+- the **payment-method picker** (card `t_453489b9`) on its own terms, because its
+  radio is a deliberately larger control (authored 20x20 in a 44px row): 12–24px,
+  each row the full width of its group (±3px) and at least 44px tall, and the label
+  beside the control in `.payrowtext` at the row's ~10px gap;
+- the two measured sets together account for **every** `.sheetfoot
+  input[type=radio]`, so a new kind of radio fails instead of going unmeasured;
 - and the two groups are separately named, so answering the second does not clear
   the first (`t_5d625806`).
+
+WHY THE PICKER IS NOT IN THE 12–16 BAND (card `t_484f19c9`). When the picker
+landed, this spec measured EVERY radio in the sheet foot against the 12–16 band
+that was written for option-group controls, so #1686 reded the `menufixture`
+gate on a control that was not defective — measured on the candidate tree,
+`pay_method` came back 20x20 while `sd1`/`ic1` were still the correct 13x13 with
+an 8px gap. Widening the band to 24 would have blunted the guard the gate
+exists for, and simply excluding `.paypick` would have left a radio nobody
+measures. The split above keeps the option-group band exactly as it was and
+gives the picker a real assertion of its own, tied together by the coverage
+count.
 
 ## Why it is a gate and not an on-demand script (card `t_ef32ea3b`)
 
@@ -103,8 +120,22 @@ delete the anti-defect reset rule in `api/internal/httpapi/menu.go`
 .sheetfoot .radios input[type=radio] { width:auto; height:auto; ... }
 ```
 
-so `.sheetfoot input { width:100%; height:44px }` wins again, and run
+So `.sheetfoot input { width:100%; height:44px }` wins again, and run
 `./scripts/preflight.sh --only menufixture`. Both widths fail with the control's
 measured size named in the assertion. Restore the rule and the gate is green
 again. Recorded for card `t_ef32ea3b` at **399x44 at 1200px / 294x44 at 375px**
 (the `t_664549fc` geometry).
+
+Re-measured 2026-11-10 while splitting the picker out (card `t_484f19c9`), by
+`bash scripts/menu-fixture-e2e.sh` on the branch tree, three readings:
+
+| mutation | reading |
+|---|---|
+| none (the shipping tree) | `3 passed (3.4s)` |
+| delete `.sheetfoot .radios input[type=radio] { … }` | **RED** both widths: `Expected: <= 16, Received: 399.4` (1200px) / `294.4` (375px) at the option-control width assertion |
+| delete `.sheetfoot .paypick .payrow input[type=radio] { … }` | **RED** both widths: `the picker's fpx control is 218.7px wide, want <= 24` (1200px) / `140.5` (375px) |
+
+The second mutation is the reason the picker has its own band rather than being
+excluded: without its reset rule the picker's radio takes the buyer-field rule
+too, and a spec that had merely dropped `.paypick` from the selector would have
+stayed green while the row's radio filled the row.

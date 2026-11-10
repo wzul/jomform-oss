@@ -254,6 +254,11 @@ type workspaceMenuData struct {
 	ExtraFormID string
 	// ExtraFormEdit is the builder URL for the attached form.
 	ExtraFormEdit string
+	// PayChoices is the buyer's payment-method picker (card t_453489b9): the
+	// workspace's enabled CHIP method groups, resolved server-side. Empty means
+	// this checkout offers no group JomForm can label, so no picker renders and
+	// the order posts no pay_method (CHIP's own page asks, as before).
+	PayChoices []payMethodChoiceView
 }
 
 // langStringsForCode returns the buyer-facing dictionary for a language code,
@@ -569,8 +574,45 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
                           color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
   .paybtn { width:100%; margin-top:14px; height:50px; border:0; border-radius:12px;
             font:inherit; font-size:16px; font-weight:700; color:#fff; cursor:pointer;
-            background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+            background:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:1px; line-height:1.15; }
   .paybtn:disabled { opacity:.6; cursor:default; }
+  /* Card t_453489b9: the Pay button's second line, "melalui FPX". It is
+     rendered as its own span (hidden until a method is known), not appended to
+     the label's text, so the button's accessible name stays one sentence. */
+  .paybtns { display:block; font-size:12px; font-weight:500; opacity:.9; }
+  /* Card t_453489b9: the buyer's payment-method picker, above the Pay button
+     (approved mockup). One bordered group, one 44px label per row, the whole
+     row clickable, and the selected row carrying a left accent bar + the filled
+     radio. Drawn with :has() so the ROW is styled from its own control — no
+     extra class for the script to keep in sync. */
+  .sheetfoot .paypick { margin-top:14px; border:1px solid #e6e8ec; border-radius:12px; overflow:hidden; }
+  .sheetfoot .paypickhead { display:flex; align-items:baseline; justify-content:space-between; gap:8px;
+                 padding:10px 12px 6px; }
+  .sheetfoot .paypicktitle { font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+                  color:#6b7280; }
+  .sheetfoot .paypickhint { font-size:12px; color:#9ca3af; }
+  .sheetfoot .payrow { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 12px;
+            margin:0; cursor:pointer; border-top:1px solid #f0f1f4;
+            -webkit-tap-highlight-color:transparent; }
+  .sheetfoot .payrow:first-of-type { border-top:1px solid #f0f1f4; }
+  .sheetfoot .payrow .payrowlabel { display:block; font-size:15px; font-weight:600; line-height:1.25; color:#17181c; }
+  .sheetfoot .payrow .payrowtext { display:block; flex:1 1 auto; min-width:0; }
+  .sheetfoot .payrow .payrowdesc { display:block; font-size:12px; line-height:1.3; color:#6b7280; margin-top:1px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sheetfoot .payrow:hover { background:#fafafa; }
+  /* The control is a real radio: the group is named for screen readers and
+     arrow keys move within it. Its size is reset (the sheet's buyer-field rule
+     makes every input 44px tall) so the row keeps the 44px target, not the dot. */
+  .sheetfoot .paypick .payrow input[type=radio] { width:20px; height:20px; flex:0 0 20px; margin:0;
+            padding:0; border:0; background:none; accent-color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  .sheetfoot .payrow:has(input:checked) { background:#f5f3ff; box-shadow:inset 3px 0 0 {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  .sheetfoot .payrow:has(input:checked) .payrowlabel { color:{{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}}; }
+  .sheetfoot .payrow:has(input:focus) { outline:2px solid {{if .Th.PrimaryColor}}{{.Th.PrimaryColor}}{{else}}#4f46e5{{end}};
+            outline-offset:-2px; }
+  .sheetfoot .paynote { margin:0; padding:8px 12px 10px; border-top:1px solid #f0f1f4;
+             font-size:11px; color:#9ca3af; }
   .err { margin:10px 0 0; color:#b91c1c; font-size:13px; line-height:1.45; }
 
   /* basket line item */
@@ -693,6 +735,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
        data-lbl-error="{{.Ls.MenuSubmitError}}"
        data-lbl-required="{{.Ls.MenuRequired}}"
        data-lbl-soldout="{{.Ls.MenuSoldOut}}"
+       data-lbl-payvia="{{.Ls.PayVia}}"
        data-lbl-stockchanged="{{.Ls.MenuStockChanged}}">
     <div class="sheetback" id="menuSheetBack"></div>
     <div class="sheetpanel" role="dialog" aria-modal="true" aria-label="{{.Ls.MenuBasket}}">
@@ -727,7 +770,27 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
           <div style="display:none" aria-hidden="true">
             <label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
           </div>
-          <button class="paybtn" type="submit" id="menuPay">{{.Ls.MenuCheckout}}</button>
+          {{if .PayChoices}}
+          {{/* Card t_453489b9: the buyer picks HOW they pay here, above the Pay
+               button, so CHIP does not ask the same question again. The rows are
+               the workspace's own enabled methods (server-resolved), never a
+               hardcoded list. */}}
+          <div class="paypick" role="radiogroup" aria-labelledby="menuPayPickTitle">
+            <div class="paypickhead">
+              <span class="paypicktitle" id="menuPayPickTitle">{{.Ls.PayMethodTitle}}</span>
+              <span class="paypickhint">{{.Ls.PayPickOne}}</span>
+            </div>
+            {{range .PayChoices}}<label class="payrow">
+              <input type="radio" name="pay_method" value="{{.Key}}" data-name="{{.Label}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}>
+              <span class="payrowtext"><span class="payrowlabel">{{.Label}}</span>{{if .Desc}}<span class="payrowdesc">{{.Desc}}</span>{{end}}</span>
+            </label>{{end}}
+            <p class="paynote">{{.Ls.PayChipNote}}</p>
+          </div>
+          {{end}}
+          <button class="paybtn" type="submit" id="menuPay">
+            <span class="paybtnl" id="menuPayLabel">{{.Ls.MenuCheckout}}</span>
+            <span class="paybtns" id="menuPayVia" hidden></span>
+          </button>
           <p class="err" id="menuErr" hidden></p>
         </form>
       </div>
@@ -804,6 +867,8 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   var payForm=document.getElementById('menuCheckout');
   var errEl=document.getElementById('menuErr');
   var payBtn=document.getElementById('menuPay');
+  var payLabel=document.getElementById('menuPayLabel');
+  var payVia=document.getElementById('menuPayVia');
   var sheetClose=document.getElementById('menuSheetClose');
   var sheetBack=document.getElementById('menuSheetBack');
 
@@ -946,7 +1011,31 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     bar.hidden=n===0;
     if(n===0) closeSheet();
     document.body.classList.toggle('has-cart',n>0);
+    paintPay();
   }
+  // Card t_453489b9: the Pay button says WHAT it will charge and HOW
+  // ("Bayar RM 186.00" / "melalui FPX"), so the buyer can see the pick took
+  // effect before they commit. It reads the picker's own checked control, never
+  // a second copy of the state.
+  function chosenPay(){
+    return payForm?payForm.querySelector('input[name=pay_method]:checked'):null;
+  }
+  function paintPay(){
+    if(!payLabel||!payVia) return;
+    var n=count();
+    payLabel.textContent=attr('data-lbl-checkout')+(n>0?' '+rm(totalSen()):'');
+    var pick=chosenPay();
+    if(pick){
+      payVia.textContent=attr('data-lbl-payvia')+' '+pick.getAttribute('data-name');
+      payVia.hidden=false;
+    }else{
+      payVia.hidden=true;
+    }
+  }
+  if(payForm) payForm.addEventListener('change',function(e){
+    var t=e.target;
+    if(t&&t.name==='pay_method') paintPay();
+  });
   function openSheet(){ sheet.hidden=false; errEl.hidden=true; sheetClose.focus(); }
   function closeSheet(){ sheet.hidden=true; }
   document.addEventListener('keydown',function(e){
@@ -1255,10 +1344,15 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       affiliate_code:aff||'',
       fields:fields
     };
-    payBtn.disabled=true; payBtn.textContent=attr('data-lbl-submitting');
+    // Card t_453489b9: the method the buyer picked in the picker above this
+    // button, so CHIP narrows the purchase to it and does not ask again. Omitted
+    // when the workspace offers no picker, which is the pre-feature request.
+    var pick=chosenPay();
+    if(pick) body.pay_method=pick.value;
+    payBtn.disabled=true; payLabel.textContent=attr('data-lbl-submitting'); payVia.hidden=true;
     function fail(msg){
       errEl.textContent=msg||attr('data-lbl-error'); errEl.hidden=false;
-      payBtn.disabled=false; payBtn.textContent=attr('data-lbl-checkout');
+      payBtn.disabled=false; paintPay();
     }
     // Anti-spam layer 3 rejects a submit arriving under 3s after the render
     // timestamp we send. Wait out the remainder here (measured on this clock,
@@ -1529,6 +1623,10 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 		HasItems:    len(best) > 0 || len(cats) > 0,
 		Query:       query,
 		Cat:         cat,
+		// Card t_453489b9: the checkout's method picker, resolved from THIS
+		// form's effective whitelist (its own CHIP override, else the
+		// account's), i.e. the same list the order route validates against.
+		PayChoices: h.payMethodChoices(r.Context(), f.AccountID, f.ID, ls),
 	}
 	if st != nil {
 		data.ContactAddress = st.ContactAddress

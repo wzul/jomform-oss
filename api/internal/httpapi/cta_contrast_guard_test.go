@@ -534,7 +534,7 @@ var merchantFormTemplates = []struct {
 	name, file, marker string
 }{
 	{"formTmpl (legacy product-checkbox layout)", "public.go", "{{.Ls.NameLabel}}"},
-	{"blockTmpl (block product form)", "render_blocks.go", `<button type="submit" form="of">`},
+	{"blockTmpl (block product form)", "render_blocks.go", `id="ofSubmit"`},
 	{"responseTmpl (response-only form)", "render_blocks.go", `type="submit">{{$.Ls.SubmitResponse}}`},
 	{"customFormTmpl (custom-HTML form)", "render_custom.go", `id="jf-submit"`},
 }

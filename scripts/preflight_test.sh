@@ -381,8 +381,16 @@ NGATES="$(grep -c '[^[:space:]]' <<<"$GATES")"
 # api/internal/biteharness/inventory_test.go, where the strip runs over BODY lines and
 # a harness behind `${X#y}` was genuinely invisible (card t_6b291041).
 runnable="$(sed -E 's/(^|[[:space:]])#.*$//' "$PREFLIGHT" \
-  | grep -oE '^[[:space:]]*run[[:space:]]+[A-Za-z0-9_]+' \
+  | grep -oE '^[[:space:]]*run[[:space:]]+[A-Za-z0-9_-]+' \
   | awk '{print $2}' | sort -u)"
+# The CONCURRENT group's gates have no `run` line: `run` is synchronous and the
+# group forks. They are declared in the runner as `BROWSER_GATES=(…)` and added
+# here, so "listed but never run" stays a real signal instead of flagging a gate
+# that the group dispatches (card t_ec2aac42).
+group_gates="$(sed -n 's/^BROWSER_GATES=(\(.*\))$/\1/p' "$PREFLIGHT" | tr ' ' '\n' | sed '/^$/d')"
+if [ -n "$group_gates" ]; then
+  runnable="$(printf '%s\n%s\n' "$runnable" "$group_gates" | sort -u)"
+fi
 
 echo "preflight self-test (sandbox $SB)"
 # shellcheck disable=SC2086  # deliberate word splitting: these are newline-separated gate lists
@@ -1094,7 +1102,7 @@ else
   # must ignore the prose above the table and the "See also" line below it, and
   # must NOT pick up backticked commands in the other columns.
   documented="$(grep -E '^\|' "$INV" | grep -vE '^\|[[:space:]]*-' \
-    | awk -F'|' '{print $2}' | grep -oE '`[A-Za-z0-9_]+`' | tr -d '`' | sort -u)"
+    | awk -F'|' '{print $2}' | grep -oE '`[A-Za-z0-9_-]+`' | tr -d '`' | sort -u)"
   if [ -z "$documented" ]; then
     bad "GATE-INVENTORY.md has a table but no gate names could be parsed from column 1 — a guard that reads nothing proves nothing"
   elif [ "$documented" = "$(printf '%s\n' $GATES | sort -u)" ]; then
@@ -1804,7 +1812,7 @@ sel_classify() { (cd "$LIVE_ROOT" && ./scripts/preflight.sh --classify="$1" 2>/d
 
 # 15a. The documented table must name every gate, in a form the machinery reads.
 deps="$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --gate-deps 2>/dev/null)"
-deps_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):.*/\1/p' | sort -u)"
+deps_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_-]*\):.*/\1/p' | sort -u)"
 if [ -z "$deps" ]; then
   bad "--gate-deps printed nothing — the path-aware table cannot be inspected, so its coverage cannot be checked"
 elif [ "$deps_gates" = "$(printf '%s\n' $GATES | sort -u)" ]; then
@@ -1819,7 +1827,7 @@ fi
 # checks, because three checks below need it: 15b/15c subtract it to read "which
 # NARROWABLE gate reads this path", and 15f asserts each of them survives a
 # narrowed run.
-star_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p')"
+star_gates="$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_-]*\):[[:space:]]*\*$/\1/p')"
 
 # 15b. THE BITE: a diff whose ONLY reader is the `web` gate must select `web` and
 #      must NOT select `test`. A selection that cannot drop a gate is not a
@@ -2051,7 +2059,7 @@ fi
 #      above (15b needs it too), so there is a single reading of the class here.
 if [ -z "$star_gates" ]; then
   bad "no gate is marked '*' (cannot narrow) in --gate-deps — the always-run class is empty, which cannot be right for a full-history secret scan"
-elif [ "$(printf '%s\n' "$star_gates" | wc -l)" != "$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p' | sort -u | wc -l)" ]; then
+elif [ "$(printf '%s\n' "$star_gates" | wc -l)" != "$(printf '%s\n' "$deps" | sed -n 's/^\([A-Za-z0-9_-]*\):[[:space:]]*\*$/\1/p' | sort -u | wc -l)" ]; then
   bad "the '*' (cannot narrow) set has duplicates in --gate-deps — the table is being built inconsistently"
 else
   miss_star=""
@@ -2081,7 +2089,7 @@ else
   star_runs=""
   for _i in 1 2 3 4 5 6; do
     star_runs="${star_runs}$(cd "$LIVE_ROOT" && ./scripts/preflight.sh --gate-deps 2>/dev/null \
-      | sed -n 's/^\([A-Za-z0-9_]*\):[[:space:]]*\*$/\1/p' | sort | tr '\n' ' ')"$'\n'
+      | sed -n 's/^\([A-Za-z0-9_-]*\):[[:space:]]*\*$/\1/p' | sort | tr '\n' ' ')"$'\n'
   done
   star_uniq="$(grep -v '^$' <<<"$star_runs" | sort -u | wc -l)"
   if [ "$star_uniq" = 1 ]; then
@@ -2107,7 +2115,8 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     web)      printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
     lint)     printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
-    e2e)      printf '%s\n' 'web/e2e/*.spec.ts' 'web/playwright.config.ts' ;;
+    e2e-builder) printf '%s\n' 'web/e2e/builder-*.spec.ts' 'web/e2e/areas.tsv' 'web/scripts/e2e-scope.mjs' 'web/playwright.config.ts' ;;
+    e2e-core) printf '%s\n' 'web/e2e/*.spec.ts' 'web/e2e/areas.tsv' 'web/scripts/e2e-scope.mjs' 'web/playwright.config.ts' ;;
     menufixture) printf '%s\n' 'scripts/menu-fixture-e2e.sh' 'api/cmd/menu-fixture/*' 'api/internal/menufixture/*' 'web/e2e/menu-checkout-option-group.spec.ts' 'web/playwright.menufixture.config.ts' ;;
     speccounts) printf '%s\n' 'scripts/spec-counts.sh' ;;
     npmaudit) printf '%s\n' 'web/package.json' 'web/package-lock.json' 'web/npm-audit-exceptions.json' 'web/scripts/npm-audit-gate.mjs' ;;
@@ -2123,7 +2132,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
     refguard) printf '%s\n' 'scripts/refguard.sh' 'scripts/refguard_test.sh' ;;
     selfhost) printf '%s\n' 'deploy/selfhost/*' 'deploy/docker-compose.yml' 'deploy/.env.example' 'docs/SELF-HOST.md' 'README.md' ;;
     selftest) printf '%s\n' 'scripts/preflight.sh' 'scripts/preflight_test.sh' ;;
-    gitleaks) printf '%s\n' '.gitleaks.toml' ;;
+    gitleaks) printf '%s\n' '.gitleaks.toml' 'scripts/gitleaks_scan.sh' ;;
   esac
 }
 # GATES THAT LEGITIMATELY HAVE NO SOURCE ARM, declared rather than left silent (card
@@ -4042,6 +4051,15 @@ fi
 #     — which POSIX ERE has no notion of. `grep -E` warned "? at start of expression"
 #     and matched nothing, so the shell version reported EVERY feature spec as
 #     unowned. Both are properties of the pattern language, not of the split.
+#
+#     THE PATH, NOT THE BASENAME (card t_ec2aac42). Playwright evaluates a RegExp
+#     `testMatch` against the spec's FULL PATH, so the split's patterns are written
+#     against that path (`/\/builder-.*\.spec\.ts$/`). Matching them with `re.match`
+#     against a bare basename reported every `builder-*` spec as unowned — measured
+#     on this tree while the config also listed 0 builder tests under
+#     `--project=feature-builder`, which is the same fact seen from the other side.
+#     So each spec is matched as a synthetic path whose tail is the real path shape,
+#     with `re.search` (a pattern may or may not be anchored).
 s39_out="$(python3 - "$LIVE_ROOT" <<'PYEOF' 2>&1
 import re, sys, glob, os
 root = sys.argv[1]
@@ -4064,7 +4082,9 @@ if not projs:
     print("NO_PROJECTS"); sys.exit(0)
 unowned, double = [], []
 for sp in specs:
-    who = [name for name, pat in projs if re.match(pat, sp)]
+    # The full path Playwright matches against, shaped like this tree's (`web/e2e/`).
+    path = os.path.join(root, "web", "e2e", sp)
+    who = [name for name, pat in projs if re.search(pat, path)]
     if not who:
         unowned.append(sp)
     elif len(who) > 1:
@@ -4585,7 +4605,7 @@ rm -f "$RECORD_DIR/reuse-ledger.jsonl"
 #     false assertion — and a false red on e2e costs a lane 13 minutes and, on the merge
 #     lane, bounces a card back to dev for a defect that does not exist.
 #
-#     WHAT THIS CHECK DRIVES. The SHIPPED ./scripts/preflight.sh, `--only e2e`, TWICE and
+#     WHAT THIS CHECK DRIVES. The SHIPPED ./scripts/preflight.sh, `--only e2e-core`, TWICE and
 #     SIMULTANEOUSLY, in a THROWAWAY sandbox of its own — NOT $SB: the fixture plants an
 #     untracked web/node_modules and its own git history, and doing that inside $SB would
 #     move the working-tree sha the record checks (27-44) plant their fixtures against.
@@ -4648,7 +4668,7 @@ WS45NODE
 #!/usr/bin/env bash
 set -uo pipefail
 case "$*" in
-  *"run e2e"*) ;;
+  *"run e2e:core"*|*"run e2e"*) ;;
   *) echo "ws45 stub npm: unexpected invocation: $*" >&2; exit 9 ;;
 esac
 [ -n "${WS45_LOG:-}" ] || { echo "ws45 stub npm: WS45_LOG is unset" >&2; exit 9; }
@@ -4686,13 +4706,16 @@ WS45NPM
   cp -a "$ws45/base" "$ws45/tree"
   cp -a "$ws45/base" "$ws45/sab"
   # THE SABOTAGE: the one line that takes the host-wide lock becomes `:`. Everything else
-  # — pool, port claim, retry, gate body — is the shipped bytes.
-  sed 's/^  webserver_lock_take "\$name" || return 1$/  :  # ws45 SABOTAGE: the host-wide suite lock take is removed here/' \
+  # — pool, port claim, retry, gate body — is the shipped bytes. The line moved into
+  # `browser_group_lock` when the browser gates became one concurrent group (card
+  # t_ec2aac42); the sabotage follows it there, and the assertion below proves the
+  # substitution landed exactly once rather than assuming it did.
+  sed 's/^  webserver_lock_take "\$group_name" || return 1$/  :  # ws45 SABOTAGE: the host-wide suite lock take is removed here/' \
     "$ws45/tree/scripts/preflight.sh" > "$ws45/sab/scripts/preflight.sh"
   chmod +x "$ws45/sab/scripts/preflight.sh"
   ws45_sab_landed=0
   if [ "$(grep -c 'ws45 SABOTAGE' "$ws45/sab/scripts/preflight.sh")" -eq 1 ] &&
-     [ "$(grep -c 'webserver_lock_take "\$name"' "$ws45/sab/scripts/preflight.sh")" -eq 0 ]; then
+     [ "$(grep -c 'webserver_lock_take "\$group_name"' "$ws45/sab/scripts/preflight.sh")" -eq 0 ]; then
     ws45_sab_landed=1
   fi
   ws45_ts() {  # $1 = interval file, $2 = START|END -> the first such timestamp
@@ -4722,7 +4745,7 @@ WS45NPM
           WS45_LOG="$ws45/$label-$i.npm" WS45_SHARED="$ws45/$label.shared" \
           WS45_RELEASE="$release" WS45_HOLD=2 WS45_LINGER="${WS45_LINGER:-0}" \
           WS45_RENDEZVOUS="${WS45_RENDEZVOUS:-0}" \
-          ./scripts/preflight.sh --only e2e >"$ws45/$label-$i.log" 2>&1
+          ./scripts/preflight.sh --only e2e-core >"$ws45/$label-$i.log" 2>&1
         echo "EXIT=$?" >>"$ws45/$label-$i.log"
       ) &
     done
@@ -4751,7 +4774,7 @@ WS45NPM
   grep -q 'another playwright suite is running on this host' "$ws45/tree-1.log" && ws45_waited=1
   grep -q 'another playwright suite is running on this host' "$ws45/tree-2.log" && ws45_waited=1
   if [ "$ws45_e1" != "EXIT=0" ] || [ "$ws45_e2" != "EXIT=0" ]; then
-    bad "check 45 — a simultaneous e2e pair on the sandboxed runner did not both exit 0 ($ws45_e1 / $ws45_e2): the second suite must WAIT for the first, not refuse or fail. Output: [$(grep -hE 'PREFLIGHT FAIL|browser-suite|gate \[e2e\]' "$ws45/tree-1.log" "$ws45/tree-2.log" | tr '\n' ' ')]"
+    bad "check 45 — a simultaneous e2e pair on the sandboxed runner did not both exit 0 ($ws45_e1 / $ws45_e2): the second suite must WAIT for the first, not refuse or fail. Output: [$(grep -hE 'PREFLIGHT FAIL|browser-suite|gate \[e2e-core\]' "$ws45/tree-1.log" "$ws45/tree-2.log" | tr '\n' ' ')]"
   elif [ "$ws45_v" = "incomplete" ]; then
     bad "check 45 could not measure: a stub suite never recorded both a START and an END ([$(grep -hE '^START|^END|stub npm' "$ws45/tree-1.npm" "$ws45/tree-2.npm" | tr '\n' ' ')]), so the intervals this check compares do not exist"
   elif [ "$ws45_v" = "overlap" ]; then
@@ -4862,8 +4885,9 @@ s45_stub() {  # <ok|fail|nototal> — the fake `playwright` the checker will exe
       cat > "$s45/web/node_modules/.bin/playwright" <<'S45PW'
 #!/bin/sh
 case "$*" in
-  *--project=a11y*)        echo "Total: 159 tests in 17 files" ;;
-  *--project=feature-e2e*) echo "Total: 276 tests in 55 files" ;;
+  *--project=a11y*)           echo "Total: 159 tests in 17 files" ;;
+  *--project=feature-builder*) echo "Total: 78 tests in 17 files" ;;
+  *--project=feature-core*)   echo "Total: 276 tests in 55 files" ;;
   *) exit 3 ;;
 esac
 S45PW
@@ -4900,32 +4924,34 @@ s45_note() {
   printf '# `%s` — web gate detail\n\nCommand (what the table row runs): `x`\n\n## What it catches\n\n%s\n' \
     "$1" "$2" > "$s45/gate-inventory/$1.md"
 }
-s45_both() { s45_row a11y; s45_note a11y "$1"; s45_row e2e; s45_note e2e "$2"; }
+s45_both() { s45_row a11y; s45_note a11y "$1"; s45_row e2e-builder; s45_note e2e-builder "$2"; s45_row e2e-core; s45_note e2e-core "$3"; }
 # A. current figures -> PASS (a red-only checker would pass every arm below and
 #    still be useless: this one has to be able to say yes).
-{ s45_both '**159 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+{ s45_both '**159 tests in 17 files**' '**78 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm current 0 'every spec count the gate detail files quote is what this tree runs'
 # B. a stale a11y figure -> RED, naming both numbers.
-{ s45_both '**147 tests in 16 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+{ s45_both '**147 tests in 16 files**' '**78 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm stale 1 '`a11y`: the detail file says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
 # C. the SAME stale figure followed by a matching historical one -> still RED.
-{ s45_both '**147 tests in 16 files**, re-measured by a card that forgot; the figure before it was **159 tests in 17 files**.' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+{ s45_both '**147 tests in 16 files**, re-measured by a card that forgot; the figure before it was **159 tests in 17 files**.' '**78 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm history 1 '`a11y`: the detail file says **147 tests in 16 files**; --list reads **159 tests in 17 files**'
-# D. the e2e ROW is gone -> RED (a guard that reads nothing must not pass).
+# D. one feature half's ROW is gone -> RED (a guard that reads nothing must not pass).
 { s45_row a11y; s45_note a11y '**159 tests in 17 files**'
-  s45_note e2e '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
-s45_arm norow 1 'GATE-INVENTORY.md has no row for the `e2e` gate'
-# E. the e2e DETAIL FILE is gone (the row is there) -> RED naming the file. This is
-#    the arm that pins the figure's new home: without it, "the row no longer carries
-#    the number" could degrade into "nobody carries it" and stay green.
+  s45_row e2e-builder; s45_note e2e-builder '**78 tests in 17 files**'
+  s45_note e2e-core '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+s45_arm norow 1 'GATE-INVENTORY.md has no row for the `e2e-core` gate'
+# E. one feature half's DETAIL FILE is gone (the row is there) -> RED naming the file.
+#    This is the arm that pins the figure's new home: without it, "the row no longer
+#    carries the number" could degrade into "nobody carries it" and stay green.
 { s45_row a11y; s45_note a11y '**159 tests in 17 files**'
-  s45_row e2e; rm -f "$s45/gate-inventory/e2e.md"; } > "$s45/GATE-INVENTORY.md"
-s45_arm nonote 1 'gate-inventory/e2e.md is missing'
+  s45_row e2e-builder; s45_note e2e-builder '**78 tests in 17 files**'
+  s45_row e2e-core; rm -f "$s45/gate-inventory/e2e-core.md"; } > "$s45/GATE-INVENTORY.md"
+s45_arm nonote 1 'gate-inventory/e2e-core.md is missing'
 # F. the figure is there but not in the parseable form -> RED, never a skip.
-{ s45_both '159 tests in 17 files' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+{ s45_both '159 tests in 17 files' '**78 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm nofigure 1 'carries no `**N tests in M files**` figure'
 # G. the enumeration itself fails -> RED, and it says the count was not read.
-{ s45_both '**159 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
+{ s45_both '**159 tests in 17 files**' '**78 tests in 17 files**' '**276 tests in 55 files**'; } > "$s45/GATE-INVENTORY.md"
 s45_arm listfail 1 'exited 1 on this tree' fail
 # H. the enumeration prints no Total line -> RED (a parse that finds nothing
 #    must not be mistaken for a match).
@@ -5279,7 +5305,7 @@ rm -rf "$r48_dir"
 #     (GATE-INVENTORY.md and gate-inventory/*.md copied into a throwaway repo — the
 #     live tree is never mutated):
 #       * arm 1: one branch grows the `a11y` figure in its own detail file, another
-#         grows `e2e` in its own — the merge must be CLEAN, both figures must survive,
+#         grows `e2e-core` in its own — the merge must be CLEAN, both figures must survive,
 #         and the shared table must be untouched (neither side edited it);
 #       * arm 2, the CONTROL: the SAME pair of edits in the OLD one-line-row shape
 #         must CONFLICT. Without it a clean merge could be git being tolerant rather
@@ -5308,9 +5334,9 @@ s50_next() {
 s50_git() { local d="$1"; shift; git -C "$d" -c user.email=t@t -c user.name=t "$@"; }
 
 s50_a="$(s50_fig "$s50/live/gate-inventory/a11y.md")"
-s50_e="$(s50_fig "$s50/live/gate-inventory/e2e.md")"
+s50_e="$(s50_fig "$s50/live/gate-inventory/e2e-core.md")"
 if [ -z "$s50_a" ] || [ -z "$s50_e" ]; then
-  bad "check 50 cannot run: gate-inventory/{a11y,e2e}.md do not both carry a \`**N tests in M files**\` figure (a11y=[$s50_a] e2e=[$s50_e]), so the two edits this check merges would not be the edits that used to conflict"
+  bad "check 50 cannot run: gate-inventory/{a11y,e2e-core}.md do not both carry a \`**N tests in M files**\` figure (a11y=[$s50_a] e2e-core=[$s50_e]), so the two edits this check merges would not be the edits that used to conflict"
 else
   s50_a_new="$(s50_next "$s50_a")"
   s50_e_new="$(s50_next "$s50_e")"
@@ -5330,8 +5356,8 @@ else
   s50_git "$s50/live" commit -qam "a11y detail grows" >/dev/null 2>&1
   s50_git "$s50/live" checkout -q "$s50_base"
   s50_git "$s50/live" checkout -q -b side-b
-  sed -i "s/\*\*$s50_e\*\*/**$s50_e_new**/" "$s50/live/gate-inventory/e2e.md"
-  if grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e.md"; then
+  sed -i "s/\*\*$s50_e\*\*/**$s50_e_new**/" "$s50/live/gate-inventory/e2e-core.md"
+  if grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e-core.md"; then
     s50_e_bit=yes
   else
     s50_e_bit=no
@@ -5346,12 +5372,12 @@ else
     bad "check 50 — two branches that each grew ONE gate's detail file CONFLICTED (git merge rc=$s50_rc): $(printf '%s' "$s50_out" | tr '\n' ' ') — the split is not delivering the property it exists for"
   elif ! grep -qF "**$s50_a_new**" "$s50/live/gate-inventory/a11y.md"; then
     bad "check 50 — the merge was clean but the a11y edit ($s50_a_new) is not in the merged file: a merge that silently drops one side is worse than a conflict"
-  elif ! grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e.md"; then
-    bad "check 50 — the merge was clean but the e2e edit ($s50_e_new) is not in the merged file: a merge that silently drops one side is worse than a conflict"
+  elif ! grep -qF "**$s50_e_new**" "$s50/live/gate-inventory/e2e-core.md"; then
+    bad "check 50 — the merge was clean but the e2e-core edit ($s50_e_new) is not in the merged file: a merge that silently drops one side is worse than a conflict"
   elif ! s50_git "$s50/live" diff --quiet "$s50_base" -- GATE-INVENTORY.md; then
     bad "check 50 — the shared table CHANGED in a merge that only grew two detail files, so a detail edit still reaches the adjacent one-liner rows"
   else
-    ok "check 50 arm 1 — two branches that each grew ONE gate's figure ($s50_a_new in gate-inventory/a11y.md, $s50_e_new in gate-inventory/e2e.md) merged CLEAN with both edits surviving and the table untouched"
+    ok "check 50 arm 1 — two branches that each grew ONE gate's figure ($s50_a_new in gate-inventory/a11y.md, $s50_e_new in gate-inventory/e2e-core.md) merged CLEAN with both edits surviving and the table untouched"
   fi
 
   # ---- arm 2: the CONTROL, in the old one-line-row shape ----------------------

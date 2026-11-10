@@ -73,12 +73,13 @@ for anything that is not a runnable gate. The name must match `--list` exactly.
 An empty or unparseable table is a FAILURE, never a pass — a guard that reads
 nothing proves nothing.
 
-### The counted rows: two gates carry MEASURED numbers, and a gate re-reads them
+### The counted rows: three gates carry MEASURED numbers, and a gate re-reads them
 
-`selftest` reads the table for **names only**. The `a11y` and `e2e` gates also run a
-spec family whose size is known, and that figure is read by the **`speccounts`** gate
-(`scripts/spec-counts.sh`): it runs `playwright test --project=a11y --list` /
-`--project=feature-e2e --list` on the tree under test and compares playwright's
+`selftest` reads the table for **names only**. The `a11y`, `e2e-builder` and
+`e2e-core` gates also run a spec family whose size is known, and that figure is read
+by the **`speccounts`** gate (`scripts/spec-counts.sh`): it runs
+`playwright test --project=<project> --list` (`a11y`, `feature-builder`,
+`feature-core`, in turn) on the tree under test and compares playwright's
 `Total: N tests in M files` against the figure the gate's detail file carries.
 
 The contract that makes it parseable: **the CURRENT figure is the FIRST
@@ -104,11 +105,12 @@ conflict.
 | `design` | web | `bash scripts/design-guard_test.sh` | design-system drift in `web/src/**/*.tsx`: raw hex literals and arbitrary px font sizes — see [`gate-inventory/design.md`](gate-inventory/design.md) |
 | `webimage` | web | `docker build -f web/Dockerfile .` (cache-only) | the shipping web artifact — no other gate builds the web image — see [`gate-inventory/webimage.md`](gate-inventory/webimage.md) |
 | `a11y` | web | `cd web && npm run a11y` | axe-core critical/serious violations — the axe family only (project `a11y`) — see [`gate-inventory/a11y.md`](gate-inventory/a11y.md) |
-| `e2e` | web | `cd web && npm run e2e` | the feature end-to-end specs under `web/e2e/` (project `feature-e2e`) — see [`gate-inventory/e2e.md`](gate-inventory/e2e.md) |
+| `e2e-builder` | web | `cd web && npm run e2e:builder` | the `builder-*.spec.ts` half of the feature end-to-end family (project `feature-builder`) — runs CONCURRENTLY with `e2e-core` and `a11y` — see [`gate-inventory/e2e-builder.md`](gate-inventory/e2e-builder.md) |
+| `e2e-core` | web | `cd web && npm run e2e:core` | the rest of the feature end-to-end family (project `feature-core`); a `--for-diff <ref>` run NARROWS it to the specs that diff can reach and prints the decision (`PREFLIGHT_E2E=full` forces every spec) — see [`gate-inventory/e2e-core.md`](gate-inventory/e2e-core.md) |
 | `menufixture` | web | `bash scripts/menu-fixture-e2e.sh` | the menu checkout's option-group **layout** in Chromium at 1200px and 375px, against the real public handler on a scratch schema — see [`gate-inventory/menufixture.md`](gate-inventory/menufixture.md) |
-| `speccounts` | web | `bash scripts/spec-counts.sh` | the two spec counts the `a11y` and `e2e` detail files quote, re-read from the tree — see [`gate-inventory/speccounts.md`](gate-inventory/speccounts.md) |
+| `speccounts` | web | `bash scripts/spec-counts.sh` | the spec counts the `a11y`, `e2e-builder` and `e2e-core` detail files quote, re-read from the tree (and the e2e area map's coverage of every feature spec) — see [`gate-inventory/speccounts.md`](gate-inventory/speccounts.md) |
 | `npmaudit` | web | `cd web && npm run audit:gate` | high/critical npm advisories, plus a self-expiring exception list — see [`gate-inventory/npmaudit.md`](gate-inventory/npmaudit.md) |
-| `gitleaks` | secrets | `gitleaks detect` over the **full git history** | committed secrets over the full git history (the repo may go public) — see [`gate-inventory/gitleaks.md`](gate-inventory/gitleaks.md) |
+| `gitleaks` | secrets | `bash scripts/gitleaks_scan.sh` — `gitleaks detect` since the watermark each run, **full sweep** every 7 days | committed secrets anywhere in the git history (the repo may go public). Incremental between sweeps so the cost stops growing with history; the mode that ran is printed — see [`gate-inventory/gitleaks.md`](gate-inventory/gitleaks.md) |
 | `monitor` | watchdog | `deploy/monitoring/jomform-watch_test.sh` | the uptime watchdog alerts on failure, stays quiet on success, and is never green without a way to alert — see [`gate-inventory/monitor.md`](gate-inventory/monitor.md) |
 | `tmpkey` | helper | `deploy/tmp-apikey_test.sh` | the temp-API-key helper's key-id rule, exact-name deletion and fail-closed verdict — see [`gate-inventory/tmpkey.md`](gate-inventory/tmpkey.md) |
 | `mediaprobe` | suite | `scripts/media-purge-probe_test.sh` | the media purge probe's verdict, against a stub origin+edge (no network) — see [`gate-inventory/mediaprobe.md`](gate-inventory/mediaprobe.md) |

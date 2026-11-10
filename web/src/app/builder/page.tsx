@@ -1449,7 +1449,7 @@ export default function Builder() {
           </summary>
           <div className="mt-2 space-y-2">
             {input("style", t("bld.inlineStyle"), t("bld.inlineStylePh"))}
-            <p className="text-jf-2xs leading-relaxed text-[var(--jf-muted-on-tint)]">{t("bld.inlineStyleHint")}</p>
+            <p className="text-xs leading-relaxed text-[var(--jf-muted-on-tint)]">{t("bld.inlineStyleHint")}</p>
           </div>
         </details>
 
@@ -1860,7 +1860,7 @@ export default function Builder() {
                 `select-name`, critical); the operator select and the value input
                 only had one while `placeholder` supplied it. text-slate-500 was
                 4.47 on --jf-bg — just under the 4.5 line; slate-600 is 7.13. */}
-            <p id={`jf-cond-${b.id}`} className="text-jf-2xs font-medium text-slate-600">
+            <p id={`jf-cond-${b.id}`} className="text-xs font-medium text-slate-600">
               {t("bld.condLogic")}
             </p>
             {/* Card t_a81a9165: the picker's value is the STORED id, so a stored
@@ -1899,7 +1899,7 @@ export default function Builder() {
             {condUnavailable && (
               <p
                 role="alert"
-                className="mt-1 rounded-md border border-[var(--jf-warning-text)] bg-[var(--jf-warning-bg)] p-2 text-jf-2xs leading-relaxed text-[var(--jf-warning-text)]"
+                className="mt-1 rounded-md border border-[var(--jf-warning-text)] bg-[var(--jf-warning-bg)] p-2 text-xs leading-relaxed text-[var(--jf-warning-text)]"
               >
                 {t("bld.condWarnUnavailable", { id: b.condition!.field_id })}
               </p>
@@ -1965,6 +1965,7 @@ export default function Builder() {
           competing with the picker's own choices. */}
       <TemplatePicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
       <main
+        data-jf-page="builder"
         inert={pickerOpen}
         className="min-h-screen bg-[var(--jf-bg)] text-[var(--jf-text)]"
       >
@@ -1980,6 +1981,31 @@ export default function Builder() {
           >
             ←
           </a>
+          {/* CARD t_a5334287: this was the ONLY one of 62 routes whose rendered
+              document carried no `<h1>` (measured h1Count=0; every other page
+              rendered exactly 1). The heading IS the form title, in the place a
+              reader looks for it — but the visible control there is the EDITABLE
+              title input, so the h1 is `sr-only`: same text, announced as the
+              page title, nothing moved on screen.
+
+              WHY NOT WRAP THE INPUT IN THE `<h1>` (the obvious edit). A heading
+              names itself from its content, and a heading whose only content is
+              a textbox falls back to the control's VALUE — measured with
+              Playwright's `toHaveAccessibleName` on that shape: with an
+              `sr-only` title node beside the input the name read
+              "Guard form Guard form" (the text node AND the embedded value), and
+              with no text node at all it read "Guard form" only because this
+              browser resolves embedded-control values in name-from-content,
+              which the spec does not promise for a heading. A plain text node is
+              the one name source every implementation agrees on, so the h1 holds
+              the title and the input keeps the layout it had.
+
+              `sr-only` is `position: absolute`, so the h1 is not a flex item of
+              this row: the bar is byte-for-byte the layout it was before, and
+              the input keeps its own `aria-label` + placeholder.
+              `forms.new` is the same string /forms uses for an unsaved form, so
+              a brand-new form is titled "New form" rather than "". */}
+          <h1 className="sr-only">{title.trim() || t("forms.new")}</h1>
           <input
             value={title}
             onChange={(e) => {
@@ -2153,7 +2179,7 @@ export default function Builder() {
                     href={liveLink(publishNotice.url) as string}
                     target="_blank"
                     rel="noreferrer"
-                    className="min-w-0 truncate font-mono text-jf-2xs text-emerald-800 underline"
+                    className="min-w-0 truncate font-mono text-xs text-emerald-800 underline"
                   >
                     {publishNotice.url}
                   </a>
@@ -2210,7 +2236,7 @@ export default function Builder() {
               "anyone who opens this link" beside it contradicts itself — which
               the render proof caught. */}
           {publishNotice.kind === "live" && Boolean(publishNotice.url) && (
-            <p className="text-jf-2xs text-emerald-800">{t("bld.liveHint")}</p>
+            <p className="text-xs text-emerald-800">{t("bld.liveHint")}</p>
           )}
         </div>
       )}
@@ -2245,18 +2271,18 @@ export default function Builder() {
       <div className="grid w-full grid-cols-1 md:grid-cols-[240px_1fr_260px]">
         {/* ── left: categorized palette (drag sources) − mobile: only on the
              Add tab, desktop: always visible. Tap = add (already exists). */}
-        <aside className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block jf-panel-in`}>
+        <aside data-jf-aside="palette" className={`border-r border-[var(--jf-border)] p-4 ${mobileTab === "add" ? "block" : "hidden"} md:block jf-panel-in`}>
           {/* Issue #256: AI form builder — prompt input. The backend calls
               deepseek-v4.1-flash:1017 to draft a validated form config. Kept in
               template mode (controls.aiGenerate): it only drafts blocks into
               the canvas, which is exactly what a template is made of. */}
           {controls.aiGenerate && (
           <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-white p-3">
-            <p className="mb-1 flex items-center gap-1 text-jf-2xs font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
+            <p className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
               <span>✨</span>
               {t("bld.aiTitle")}
             </p>
-            <p className="mb-2 text-jf-2xs leading-snug text-[var(--jf-muted-on-tint)]">{t("bld.aiHint")}</p>
+            <p className="mb-2 text-xs leading-snug text-[var(--jf-muted-on-tint)]">{t("bld.aiHint")}</p>
             <textarea
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
@@ -2276,7 +2302,7 @@ export default function Builder() {
             >
               {aiGenerating ? t("bld.aiGenerating") : t("bld.aiGenerate")}
             </button>
-            {aiMsg && <p className="mt-2 text-jf-2xs leading-snug text-[var(--jf-text-secondary)]">{aiMsg}</p>}
+            {aiMsg && <p className="mt-2 text-xs leading-snug text-[var(--jf-text-secondary)]">{aiMsg}</p>}
           </div>
           )}
           <p className="mb-3 text-xs font-medium uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
@@ -2287,7 +2313,7 @@ export default function Builder() {
             if (items.length === 0) return null;
             return (
               <div key={group.key} className="mb-4">
-                <p className="mb-1.5 flex items-center gap-1 text-jf-2xs font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
+                <p className="mb-1.5 flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
                   <span>{group.icon}</span>
                   {t(`bld.palette.${group.key}` as import("../../components/i18n").Key)}
                 </p>
@@ -2305,7 +2331,7 @@ export default function Builder() {
                       }`}
                     >
                       <span className="text-sm">{p.icon}</span>
-                      <span className="mt-0.5 block text-jf-2xs font-medium text-[var(--jf-text-secondary)]">{typeLabel(p.type)}</span>
+                      <span className="mt-0.5 block text-xs font-medium text-[var(--jf-text-secondary)]">{typeLabel(p.type)}</span>
                     </div>
                   ))}
                 </div>
@@ -2386,7 +2412,7 @@ export default function Builder() {
                       : "border-[var(--jf-border)] hover:border-slate-300"
                   }`}
                 >
-                  <div className="mb-1.5 flex items-center justify-between text-jf-3xs uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
+                  <div className="mb-1.5 flex items-center justify-between text-xs uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span>{typeLabel(b.type)}</span>
                       {/* Card t_a81a9165: a rule whose field is not available on
@@ -2399,7 +2425,7 @@ export default function Builder() {
                       {conditionTargetUnavailable(blocks, b.id, b.condition?.field_id, fieldTypes) && (
                         <span
                           title={t("bld.condWarnUnavailable", { id: b.condition!.field_id })}
-                          className="shrink-0 rounded bg-[var(--jf-warning-bg)] px-1 py-0.5 text-jf-4xs normal-case tracking-normal text-[var(--jf-warning-text)]"
+                          className="shrink-0 rounded bg-[var(--jf-warning-bg)] px-1 py-0.5 text-xs normal-case tracking-normal text-[var(--jf-warning-text)]"
                         >
                           {t("bld.condBrokenBadge")}
                         </span>
@@ -2418,7 +2444,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, -1)}
                         title={t("bld.moveUp")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-jf-3xs"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
                       >
                         ↑
                       </button>
@@ -2429,7 +2455,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, 1)}
                         title={t("bld.moveDown")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-jf-3xs"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
                       >
                         ↓
                       </button>
@@ -2446,7 +2472,7 @@ export default function Builder() {
                           aria-haspopup="true"
                           aria-expanded={menuOpen === b.id}
                           title={t("bld.blockMenu")}
-                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-jf-3xs"
+                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-xs"
                         >
                           ⋯
                         </button>
@@ -2516,7 +2542,7 @@ export default function Builder() {
              when the Canvas tab is active AND the panel is open, so tapping a
              block card on a phone opens this panel in place of the canvas, and
              the panel's own header row is the way back out. */}
-        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "canvas" && panelVisible ? "block" : "hidden"} md:block jf-panel-in`}>
+        <aside className={`border-l border-[var(--jf-border)] p-4 ${mobileTab === "canvas" && panelVisible ? "block" : "hidden"} md:block jf-panel-in`} data-jf-aside="settings">
           {/* #652: the exit. The old Settings tab had no back button either, so
               without this row the change would trade one trap (a tab at the
               top) for a worse one (no way out at all). Mobile only — `md:` and
@@ -2644,7 +2670,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
     return (
       <div>
         <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Field"}</p>
-        <p className="text-jf-2xs text-[var(--jf-muted-on-tint)]">{t("bld.withdrawnBlock")}</p>
+        <p className="text-xs text-[var(--jf-muted-on-tint)]">{t("bld.withdrawnBlock")}</p>
       </div>
     );
   }

@@ -73,7 +73,7 @@ type Msg = { id: string; role: "user" | "assistant"; content: string; created_at
  * by every arm, and the rename arm mutates the row the PATCH finds — with a
  * shallow copy that write landed on the shared seed, so a later arm in the same
  * worker read "Live forms check" where it asserts the original label. Measured
- * on a 10m feature-e2e run (350 tests, `fullyParallel: true`): the rename arm and
+ * on a 10m feature-core run (350 tests, `fullyParallel: true`): the rename arm and
  * the sign-out arm landed in one worker and the sign-out arm failed on a row the
  * rename had renamed. A per-test store must not be able to write through to the
  * seed, so both the rows and their message arrays are copied.

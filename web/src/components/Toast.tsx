@@ -71,12 +71,22 @@ export function Toast({
   ok,
   onDismiss,
   closeTitle,
+  raised,
 }: {
   message: string;
   /** true = a save confirmation, false = a failure. Never inferred from the text. */
   ok: boolean;
   onDismiss: () => void;
   closeTitle: string;
+  /**
+   * Lift the toast clear of a sticky action bar at the bottom of the view
+   * (card t_f11d676f: `/settings` → CHIP pins its Save to the bottom edge on a
+   * phone). The wrapper is `fixed … bottom-0` with its own padding, so the lift
+   * is padding — no arbitrary offset, no transform on the positioner (a
+   * transform there would make it the containing block for the toast inside it).
+   * Above `sm` the sticky bar is not rendered, so the toast returns to the edge.
+   */
+  raised?: boolean;
 }) {
   useEffect(() => {
     // A FAILURE IS NOT ON A TIMER. `setMsg("")` clears the page banner as well as
@@ -91,7 +101,9 @@ export function Toast({
 
   return (
     <div
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-4 pb-4 sm:justify-end sm:pr-6"
+      className={`pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-4 sm:justify-end sm:pr-6 ${
+        raised ? "pb-20 sm:pb-4" : "pb-4"
+      }`}
     >
       <div
         role="status"

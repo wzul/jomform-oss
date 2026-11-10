@@ -890,9 +890,58 @@ type ChipOverride struct {
 	MethodWhitelist []string
 }
 
+// EffectivePayWhitelist is the CHIP payment-method whitelist that applies to a
+// checkout: the form/chip-feed override when one is set (exactly the rule
+// CreateChipPurchaseForSaleWithOverride applies to the purchase), else the
+// account's own. The buyer-facing picker reads THIS, so the rows it offers and
+// the whitelist the purchase is created with cannot disagree.
+//
+// No network call: the merchant's stored setting is the answer, and a page
+// render must not wait on CHIP. The brand's live availability is applied where
+// it belongs — on the purchase (ResolveWhitelist) — and an order naming a group
+// that turns out to be unavailable is refused there with
+// ErrPayMethodUnavailable, not silently swapped for another method.
+//
+// A nil/empty result means "the merchant restricted nothing", which the picker
+// renders as every group it can label.
+func (s *Service) EffectivePayWhitelist(ctx context.Context, accountID string, ov *ChipOverride) ([]string, error) {
+	if ov != nil && ov.BrandID != "" && ov.SecretEnc != "" {
+		return ov.MethodWhitelist, nil
+	}
+	acc, err := s.Accounts.ByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return acc.ChipMethodWhitelist, nil
+}
+
+// CheckBuyerPayMethod validates the buyer's chosen group against the effective
+// whitelist BEFORE the sale is recorded, so an impossible choice is a clean 4xx
+// instead of a stored pending sale. The purchase path re-checks it against the
+// resolved (live) whitelist — see CreateChipPurchaseForSaleWithOverride.
+func (s *Service) CheckBuyerPayMethod(ctx context.Context, accountID string, ov *ChipOverride, method string) error {
+	if strings.TrimSpace(method) == "" {
+		return nil
+	}
+	wl, err := s.EffectivePayWhitelist(ctx, accountID, ov)
+	if err != nil {
+		// A whitelist we cannot read is not a reason to refuse the buyer's
+		// choice: the purchase path still validates it against the live list.
+		return nil
+	}
+	return ValidatePayMethod(method, wl)
+}
+
 // CreateChipPurchaseForSaleWithOverride behaves like CreateChipPurchaseForSale
 // but resolves credentials as: form override first, then account default.
-func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sale *dbstore.Sale, ov *ChipOverride) error {
+//
+// payMethod is the buyer's own choice from the JomForm page (card t_453489b9),
+// one of the PayMethod* groups. It is NOT trusted: an unavailable group is
+// refused with ErrPayMethodUnavailable (a 4xx at the door) rather than silently
+// falling back to the merchant's whole whitelist — a fallback would let the
+// buyer pay with a method they never chose. Empty means "the page did not ask"
+// and the request is byte-for-byte the pre-feature behaviour.
+func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sale *dbstore.Sale, ov *ChipOverride, payMethod string) error {
 	acc, err := s.Accounts.ByID(ctx, sale.AccountID)
 	if err != nil {
 		return fmt.Errorf("account: %w", err)
@@ -927,6 +976,24 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 	// whitelist and wherever it came from.
 	wl := s.ResolveWhitelist(ctx, string(secret), sale.Currency, sale.TotalSen, feeWhitelist(sale, whitelist))
 
+	// Card t_453489b9: the buyer chose a method on OUR page, so narrow the
+	// purchase to that group — CHIP then has nothing else to offer — and
+	// pre-select it on the checkout URL below. A group the resolved whitelist
+	// cannot honour is refused here (4xx at the door), never downgraded.
+	preferred := ""
+	if m := strings.ToLower(strings.TrimSpace(payMethod)); m != "" {
+		group, ok := PayMethodGroup(m)
+		if !ok {
+			return ErrPayMethodUnavailable
+		}
+		narrowed := NarrowWhitelist(group, wl)
+		if len(narrowed) == 0 {
+			return ErrPayMethodUnavailable
+		}
+		wl = narrowed
+		preferred, _ = PreferredParam(group, narrowed)
+	}
+
 	// Issue #83: thank-you redirects must land on the workspace subdomain (or
 	// custom domain) the buyer came from, not the apex base. Fall back to the
 	// apex base only when no workspace/custom domain is resolvable.
@@ -959,11 +1026,17 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 	if err != nil {
 		return fmt.Errorf("chip create: %w", err)
 	}
-	if err := s.Sales.AttachChipPurchase(ctx, sale.ID, p.ID, p.CheckoutURL); err != nil {
+	// Card t_453489b9: the URL the buyer is sent to. With a method chosen this
+	// is CHIP's checkout page with ?preferred=<id> appended — never the
+	// direct_post_url CHIP returns for a card-only whitelist (PITFALL 1, see
+	// CheckoutRedirect). With no method chosen it is CHIP's URL untouched, so
+	// every pre-existing checkout keeps its exact behaviour.
+	redirect := CheckoutRedirect(p.CheckoutURL, p.DirectPostURL, preferred)
+	if err := s.Sales.AttachChipPurchase(ctx, sale.ID, p.ID, redirect); err != nil {
 		return fmt.Errorf("attach purchase: %w", err)
 	}
 	sale.ChipPurchaseID = p.ID
-	sale.ChipCheckoutURL = p.CheckoutURL
+	sale.ChipCheckoutURL = redirect
 	// keep the secret used on the sale for later capture/release of THIS purchase
 	return nil
 }

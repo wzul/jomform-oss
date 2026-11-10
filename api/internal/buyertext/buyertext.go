@@ -74,10 +74,14 @@ const (
 	CodeOrderFeeMethodRequired = "order.feeMethodRequired"
 	CodeOrderFeeMethodInvalid  = "order.feeMethodInvalid"
 	CodeOrderFeeInactive       = "order.feeInactive"
-	CodeOrderShopNotFound      = "order.shopNotFound"
-	CodeOrderFormSlugRequired  = "order.formSlugRequired"
-	CodeOrderMenuNotFound      = "order.menuNotFound"
-	CodeOrderNotFound          = "order.notFound"
+	// Card t_453489b9: the buyer picked a CHIP payment method the checkout
+	// cannot honour (not enabled for this workspace/form, or the brand cannot
+	// take it). Refused rather than silently paying with another method.
+	CodeOrderPayMethodUnavailable = "order.payMethodUnavailable"
+	CodeOrderShopNotFound         = "order.shopNotFound"
+	CodeOrderFormSlugRequired     = "order.formSlugRequired"
+	CodeOrderMenuNotFound         = "order.menuNotFound"
+	CodeOrderNotFound             = "order.notFound"
 	// Merchant-declared checkout fields (formfields.ValidateFields). The label
 	// is the merchant's text and is interpolated verbatim.
 	CodeFieldRequired      = "field.required"
@@ -285,6 +289,13 @@ var catalog = map[string]map[string]string{
 		"zh": "此表单未启用手续费",
 		"ta": "இந்தப் படிவத்தில் செயலாக்கக் கட்டணம் இயக்கப்படவில்லை",
 		"ar": "لا توجد رسوم معالجة مفعّلة لهذا النموذج",
+	},
+	CodeOrderPayMethodUnavailable: {
+		"en": "That payment method is not available. Please choose another one.",
+		"ms": "Kaedah bayaran itu tidak tersedia. Sila pilih kaedah lain.",
+		"zh": "该付款方式不可用，请选择其他方式。",
+		"ta": "அந்தக் கட்டண முறை கிடைக்கவில்லை. வேறு ஒன்றைத் தேர்ந்தெடுக்கவும்.",
+		"ar": "طريقة الدفع هذه غير متاحة. يرجى اختيار طريقة أخرى.",
 	},
 	CodeOrderShopNotFound: {
 		"en": "Shop not found",

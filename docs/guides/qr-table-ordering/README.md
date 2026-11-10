@@ -68,6 +68,11 @@ The guest gets the restaurant name, a **Best Seller** filter, a search box, the 
 row per dish with its price and a **+** button. The **Table 7** banner at the top came from the QR
 link, not from the diner, so the order that follows is already tied to the table.
 
+In the basket sheet the diner also picks **how they want to pay** (FPX, DuitNow QR, card or
+e-wallet) from a radio group directly above the **Bayar** button, and the button says the pick —
+“Bayar RM 24.50 / melalui FPX”. Only the methods this workspace enabled in Settings → CHIP appear,
+and CHIP's page then opens on the chosen method instead of asking a second time.
+
 ## Notes
 
 - **The form has to be published.** The menu is the published form's public page; a draft shows the

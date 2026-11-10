@@ -19,7 +19,7 @@ import { defineConfig, devices } from "@playwright/test";
 //   - `reuseExistingServer` is deliberately false there (a leftover server must
 //     never answer a gate), so it could not be talked out of it.
 //
-// The main config STILL selects this spec through its `feature-e2e` project
+// The main config STILL selects this spec through its `feature-core` project
 // (filename prefix rule), so it is enumerated by `scripts/spec-counts.sh` and
 // runs in the `e2e` gate — where, with no MENU_FIXTURE_URL, it skips and says so.
 // That keeps the spec in the family (a spec in no project is a silent coverage

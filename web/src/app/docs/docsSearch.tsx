@@ -120,7 +120,11 @@ function SearchOption({
       ].join(" ")}
     >
       <span className="block text-sm font-semibold text-slate-900">{hit.title}</span>
-      <span className="mt-0.5 block text-xs text-slate-600">{hit.description || hit.snippet}</span>
+      {/* The snippet is the text that explains the match (the description when nothing in the
+          prose does), so it is what the row shows. It used to be the other way round, and an
+          empty-or-not description always won — the row was the same line for every query that
+          matched the page, including queries whose match was a body paragraph (t_a92da047). */}
+      <span className="mt-0.5 block text-xs text-slate-600">{hit.snippet || hit.description}</span>
     </div>
   );
 }

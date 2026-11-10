@@ -42,24 +42,40 @@ export default defineConfig({
     baseURL: BASE,
     trace: "retain-on-failure",
   },
-  // TWO NAMED FAMILIES, selected by name so neither gate can drift (t_34fd25cb).
+  // THREE NAMED FAMILIES, selected by name so none of them can drift (t_34fd25cb,
+  // split further by card t_ec2aac42).
   //
   // The `a11y` gate scans axe; every fixture whose name starts with `a11y`
   // belongs to it, and nothing else does. The feature specs in web/e2e/ are real
-  // end-to-end regressions that happened to live under this config — they are
-  // selected by the `feature-e2e` project and run by the `e2e` script.
+  // end-to-end regressions that happened to live under this config; they are
+  // selected by the `feature-builder` / `feature-core` projects and run by the
+  // `e2e-builder` / `e2e-core` gates.
+  //
+  // WHY THE FEATURE FAMILY IS SPLIT IN TWO. It is the most expensive thing in
+  // the preflight (measured 2026-11-10 on this host: the whole family, 348+
+  // tests, ~570s — 21% of a release run). One `next start` serving three
+  // workers is the ceiling: the 17 `builder-*` specs alone go 565s at one worker
+  // and only 303s at three (1.86x, not 3x), so the server, not the worker count,
+  // is what saturates. TWO servers on TWO reserved ports, each running one half,
+  // removes that ceiling; the preflight runs both halves concurrently and the
+  // `a11y` gate alongside them (see the split block in `scripts/preflight.sh`).
   //
   // THE SPLIT IS BY FILENAME PREFIX ON PURPOSE: a list of explicit spec paths
   // here would have to be edited every time a spec is added, and a spec that is
   // in no project is a silent coverage loss — the exact failure this split must
   // not introduce. A PREFIX is a rule: a new `a11y-*.spec.ts` is scanned by the
-  // a11y gate automatically, and any other new spec runs under `e2e`.
-  //
-  // `npm run a11y` is therefore NOT the whole directory any more; the gate's own
-  // label and GATE-INVENTORY.md row say what it is.
+  // a11y gate automatically, a new `builder-*.spec.ts` joins the builder half,
+  // and any other new spec runs under `feature-core`. `node --test`'s guard in
+  // the `selftest` gate (check 39) proves every spec belongs to exactly one
+  // project, so a rule that stops matching anything cannot pass unnoticed.
   projects: [
     { name: "a11y", use: { ...devices["Desktop Chrome"] }, testMatch: /a11y.*\.spec\.ts/ },
-    { name: "feature-e2e", use: { ...devices["Desktop Chrome"] }, testMatch: /^(?!.*a11y).*\.spec\.ts$/ },
+    // `testMatch` regexes are evaluated against the FILE'S FULL PATH (measured on
+    // this tree: `^builder-` matched 0 specs while `/builder-` matched the family),
+    // so each pattern must name the file it wants where the basename starts, not
+    // anchor at the start of the string.
+    { name: "feature-builder", use: { ...devices["Desktop Chrome"] }, testMatch: /\/builder-.*\.spec\.ts$/ },
+    { name: "feature-core", use: { ...devices["Desktop Chrome"] }, testMatch: /^(?!.*a11y)(?!.*\/builder-).*\.spec\.ts$/ },
   ],
   webServer: {
     command: `npm run start -- -p ${PORT}`,

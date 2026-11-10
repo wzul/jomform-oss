@@ -72,9 +72,14 @@ type PurchaseRequest struct {
 
 // Purchase is the response/callback Purchase object (subset).
 type Purchase struct {
-	ID               string `json:"id"`
-	Status           string `json:"status"`
-	CheckoutURL      string `json:"checkout_url"`
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	CheckoutURL string `json:"checkout_url"`
+	// DirectPostURL is present when the purchase's whitelist is card-only: CHIP
+	// returns a URL its hosted card fields POST to instead of a page to visit
+	// (card t_453489b9). It is never a redirect target and never gains a query
+	// — payments.CheckoutRedirect enforces that in one place.
+	DirectPostURL    string `json:"direct_post_url,omitempty"`
 	Reference        string `json:"reference"`
 	Total            int64  `json:"total"`
 	Currency         string `json:"currency"`

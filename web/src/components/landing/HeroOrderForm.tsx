@@ -27,7 +27,7 @@
 import { useState } from "react";
 
 import { useI18n } from "../i18n";
-import { LANDING_PAY_METHODS } from "../i18nDict";
+import { LANDING_PAY_OPTIONS } from "../i18nDict";
 import { formatMoney } from "../../lib/money";
 
 /** 8900 sen = RM89.00, the price of each row. */
@@ -49,6 +49,26 @@ const ROWS = [
 export default function HeroOrderForm() {
   const { t } = useI18n();
   const [qty, setQty] = useState<readonly number[]>([1, 1]);
+  // Card t_453489b9: the row the mock has picked. The first option is
+  // preselected — the product's own picker does the same, so a buyer with one
+  // sensible default is never asked to click for nothing — and the Pay button's
+  // second line follows the pick.
+  const [method, setMethod] = useState<string>(LANDING_PAY_OPTIONS[0].id);
+  const chosen =
+    LANDING_PAY_OPTIONS.find((option) => option.id === method) ?? LANDING_PAY_OPTIONS[0];
+  // The rows' copy, in LANDING_PAY_OPTIONS' order, resolved with LITERAL keys
+  // rather than `t(option.labelKey)` inside the map: a key built from a variable
+  // is invisible to src/lib/i18nKeys.ts, the scan that catches a key dropped in a
+  // merge (t() then renders the raw key to every user in every locale). It is a
+  // LIST, not a map keyed by option id, so this file names no method at all —
+  // src/lib/landingPayMethods.test.ts fails if it does, and asserts this list's
+  // length and order against the options list it renders.
+  const copy = [
+    { label: t("land.payfpx"), desc: t("land.payfpxdesc") },
+    { label: t("land.paydnqr"), desc: t("land.paydnqrdesc") },
+    { label: t("land.paycard"), desc: t("land.paycarddesc") },
+    { label: t("land.paywallet"), desc: t("land.paywalletdesc") },
+  ];
 
   const subtotalSen = PRICE_SEN * qty.reduce((sum, q) => sum + q, 0);
   const totalSen = subtotalSen + SHIPPING_SEN;
@@ -157,37 +177,75 @@ export default function HeroOrderForm() {
           </div>
         </dl>
 
+        {/* Card t_453489b9: the payment-method CHOICE, above the Pay button —
+            the approved mockup. It replaces the chip strip that used to sit
+            under the button (card t_b4e5881d deleted the duplicate caption and
+            kept one strip; this card replaces that strip with the real control
+            the product now has). The rows are the four method GROUPS, in the
+            product's own order, and every label/description comes from the
+            dictionary — no method name is written in this file
+            (src/lib/landingPayMethods.test.ts fails if one is). */}
+        <div
+          role="radiogroup"
+          aria-labelledby="landPayTitle"
+          className="mt-3 overflow-hidden rounded-xl border border-[var(--jf-border)]"
+        >
+          <div className="flex items-baseline justify-between gap-2 px-3 pb-1.5 pt-2.5">
+            <span
+              id="landPayTitle"
+              className="text-jf-3xs font-semibold uppercase tracking-wider text-[var(--jf-muted)]"
+            >
+              {t("land.paytitle")}
+            </span>
+            <span className="text-jf-3xs text-[var(--jf-muted)]">{t("land.paypick")}</span>
+          </div>
+          {LANDING_PAY_OPTIONS.map((option, i) => {
+            const selected = option.id === method;
+            const text = copy[i];
+            return (
+              <label
+                key={option.id}
+                className={
+                  "flex min-h-11 cursor-pointer items-center gap-2.5 border-t border-[var(--jf-border)] px-3 py-2.5 " +
+                  (selected
+                    ? "bg-[var(--jf-bg)] shadow-[inset_3px_0_0_var(--jf-accent)]"
+                    : "")
+                }
+              >
+                <input
+                  type="radio"
+                  name="land-pay"
+                  checked={selected}
+                  onChange={() => setMethod(option.id)}
+                  tabIndex={-1}
+                  className="h-5 w-5 shrink-0 accent-[var(--jf-accent)]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-[var(--jf-text)]">
+                    {text.label}
+                  </span>
+                  <span className="block text-jf-2xs text-[var(--jf-muted)]">
+                    {text.desc}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+          <p className="border-t border-[var(--jf-border)] px-3 py-2 text-jf-3xs text-[var(--jf-muted)]">
+            {t("land.paynote")}
+          </p>
+        </div>
+
         <button
           type="button"
           tabIndex={-1}
-          className="mt-3 w-full rounded-xl bg-[var(--jf-ink)] px-4 py-3 text-sm font-bold text-[var(--jf-ink-text)]"
+          className="mt-3 flex w-full flex-col items-center justify-center gap-0.5 rounded-xl bg-[var(--jf-ink)] px-4 py-3 text-sm font-bold text-[var(--jf-ink-text)]"
         >
-          {t("land.fmpay", { amount: formatMoney(totalSen) })}
+          <span>{t("land.fmpay", { amount: formatMoney(totalSen) })}</span>
+          <span className="text-jf-2xs font-medium opacity-90">
+            {t("land.payvia", { method: t(chosen.labelKey) })}
+          </span>
         </button>
-
-        {/* ONE method list, brand names only (card t_b4e5881d).
-            This used to print the methods TWICE — a caption ("Card · FPX · DuitNow QR ·
-            GrabPay") and, right under it, a five-chip strip — and the two copies
-            disagreed: "Card" in the caption where the chips said "VISA" (a buyer reads
-            those as two different methods), four methods in one and five in the other, in
-            a different order. The caption is deleted; the strip stays, once.
-            The names are not written in this file: they come from `LANDING_PAY_METHODS`
-            in components/i18nDict.ts, because this page is translated into five locales
-            and the strip used to be hardcoded English. What IS translated is the claim
-            that these methods are accepted (`land.path2b`, `land.f2`); the brand tokens
-            read the same everywhere, so they live in one list rather than five entries a
-            translator could "fix". src/lib/landingPayMethods.test.ts fails if a landing
-            component names a method in its own source. */}
-        <ul className="mt-2 flex flex-wrap justify-center gap-1.5">
-          {LANDING_PAY_METHODS.map((method) => (
-            <li
-              key={method}
-              className="rounded-md bg-[var(--jf-bg)] px-2 py-0.5 text-jf-3xs font-semibold text-[var(--jf-text-secondary)]"
-            >
-              {method}
-            </li>
-          ))}
-        </ul>
       </div>
     </div>
   );

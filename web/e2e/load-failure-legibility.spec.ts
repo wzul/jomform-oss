@@ -39,7 +39,7 @@
 //   forced by making the specific load route answer 500 — the banner then renders
 //   from the ordinary error path, not from a fixture.
 //
-// Run with (it is a `feature-e2e` spec, so the `e2e` preflight gate runs it):
+// Run with (it is a `feature-core` spec, so the `e2e` preflight gate runs it):
 //   cd web && npm run e2e
 import { test, expect, type Page } from "@playwright/test";
 

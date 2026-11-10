@@ -47,16 +47,22 @@ row (`Card 2.00%`) is the rate your buyers will now be charged. No reload is nee
 
 ## 6. What your buyer sees
 
-![Buyer page with the method radio and the fee line boxed](06-buyer-sees-fee.png)
+![Buyer page with the payment-method picker and the fee line boxed](06-buyer-sees-fee.png)
 
-On the payment form the buyer picks a method, and the summary shows the fee line and the final total
-before they proceed. With RM100.00 at 2%:
+The buyer picks **how** they want to pay on your own page, above the Pay button — FPX, DuitNow QR,
+card or e-Wallet. The picker lists only the methods your workspace enables, preselects the first one,
+and the fee line, the total and the button all follow that choice: switch the method and they re-price
+on the spot. This example has FPX and Card both set to 2.00%, so FPX (the first row) shows the fee.
+With RM100.00 at 2%:
 
 | Line | Amount |
 |---|---|
 | Subtotal | RM100.00 |
-| Processing fee (Card 2.00%) | RM2.04 |
+| Processing fee — FPX | RM2.04 |
 | **Total** | **RM102.04** |
+
+The button reads **Pay RM102.04** with **via FPX** under it. The same pick is what CHIP is given, so
+CHIP's own method screen is skipped and the buyer lands on the method they chose.
 
 The fee is **RM2.04, not RM2.00**. Charging a flat 2% of RM100.00 would leave you with RM99.96 after
 CHIP takes its 2%, so the total is solved backwards (`100 / (1 − 0.02) = 102.04`). You receive the

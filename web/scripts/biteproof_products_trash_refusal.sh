@@ -175,7 +175,7 @@ run_case() {
   shift 3
   echo "== $name"
   local out
-  out="$(nolock "$PLAYWRIGHT" test "$@" --project=feature-e2e --reporter=list 2>&1)"
+  out="$(nolock "$PLAYWRIGHT" test "$@" --project=feature-core --reporter=list 2>&1)"
   local error_block
   error_block="$(grep -E '^ +Error: |^ +expect\(|^ +Received|^ +Expected|^ +Locator:|^ +Timeout:|^ +Call log:|^ +at ' <<<"$out")"
   if [ "$want" = pass ]; then

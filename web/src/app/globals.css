@@ -779,6 +779,96 @@ body {
   outline-offset: -2px;
 }
 
+/* THE STRIP SAYS IT CONTINUES (card t_f11d676f).
+   The settings strip is one scrolling row, and a row cut off at the right edge
+   with no fade, arrow or scrollbar reads as a COMPLETE row: measured on the
+   built page at 390px, 13 tabs sat in a 342px box with scrollWidth 1,135, so
+   two thirds of the tab set was off screen behind an edge that looked like the
+   end of the list, and nothing on screen suggested swiping.
+
+   Three cues, each doing a different job:
+   * a THIN scrollbar (`scrollbar-width: thin` + the WebKit parts). It is the
+     platform's own affordance and it is what a mouse user can grab — but it is
+     an OVERLAY scrollbar on a phone (and in headless Chromium), so it paints
+     only while scrolling and cannot be the only cue;
+   * an ARROW BUTTON at each edge that still hides tabs (`data-edge` in the page,
+     which is also what drives the fade below). It is the cue that always reads:
+     a chevron a reader can see, name and press;
+   * a FADE over that same edge.
+
+   NO `scroll-snap` HERE, AND THAT IS A MEASURED DECISION. The obvious third cue
+   is `scroll-snap-type: x proximity` with `scroll-snap-align: start` on each
+   tab, and it was tried: with it, `settings/page.tsx`'s `revealTab` — the
+   keyboard reveal the strip already guarantees — lands on the nearest snap
+   point instead of the position it scrolled to. Measured at 390px, focusing
+   "Payment fees" left it **36px OUTSIDE** the strip's clip box (scrollLeft 62,
+   where the reveal had scrolled to 98), which is `e2e/settings-tabs.spec.ts`
+   RULE 8 red: the focused tab's focus ring is clipped and the tab itself is
+   half off screen. The same walk with snapping disabled lands every tab flush
+   (0px). A cosmetic alignment is not worth a keyboard-visible defect, so the
+   arrows and the fade carry the cue and the snap is deliberately absent.
+
+   THE FADE IS 2.5rem WIDE ON PURPOSE. The tab that is cut off starts ~16px
+   inside the strip's edge (4px gap + 12px of `px-3`), so the ramp has to still
+   be holding alpha at 16px or the next tab's first glyph is simply gone and the
+   edge reads as the end of the row again — measured with a 1.5rem ramp, the
+   only pixels beyond the last full tab were a faint vertical stroke, which is
+   not a cue. At 2.5rem the first letters of the hidden tab are legible and
+   dissolving, and the arrow states it outright.
+
+   `mask-image` (not an overlay gradient) because the strip is the scroll
+   container: a pseudo-element on it would scroll away with the tabs, and an
+   absolutely-positioned child has to be painted in the PAGE's background
+   colour, which is not a fixed value across the dark surfaces. The RTL rules
+   mirror the gradient: `dir="rtl"` is set on <html> (components/i18n.tsx), so
+   "the end edge" is the LEFT one there. */
+.jf-tabstrip {
+  scrollbar-width: thin;
+  scrollbar-color: var(--jf-muted) transparent;
+  overscroll-behavior-x: contain;
+}
+.jf-tabstrip::-webkit-scrollbar {
+  height: 6px;
+}
+.jf-tabstrip::-webkit-scrollbar-track {
+  background: transparent;
+}
+.jf-tabstrip::-webkit-scrollbar-thumb {
+  background: var(--jf-muted);
+  border-radius: 9999px;
+}
+.jf-tabstrip[data-edge="end"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+}
+.jf-tabstrip[data-edge="start"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem);
+  mask-image: linear-gradient(to right, transparent, #000 2.5rem);
+}
+.jf-tabstrip[data-edge="both"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+}
+html[dir="rtl"] .jf-tabstrip[data-edge="end"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+}
+html[dir="rtl"] .jf-tabstrip[data-edge="start"] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 2.5rem);
+  mask-image: linear-gradient(to left, transparent, #000 2.5rem);
+}
+html[dir="rtl"] .jf-tabstrip[data-edge="both"] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to left, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+}
+/* The edge arrows (`.jf-tabstrip-arrow`, rendered by settings/page.tsx) sit at
+   the inline start/end of the strip, so in RTL the "forward" arrow is on the
+   LEFT and its chevron has to point left. Mirroring the glyph is what keeps the
+   arrow's direction true to the side it sits on, without a second icon. */
+html[dir="rtl"] .jf-tabstrip-arrow svg {
+  transform: scaleX(-1);
+}
+
 /* ── the motion layer (card t_d5336ec6) ─────────────────────────────────────
    Measured on origin/main before this: 0 `@keyframes`, 0 `animation:` rules,
    63 transitions that all ran at Tailwind's default 150ms, and 0 occurrences of

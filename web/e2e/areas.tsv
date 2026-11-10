@@ -1,0 +1,126 @@
+# web/e2e/areas.tsv — which feature spec a changed source path makes necessary.
+#
+# WHAT THIS IS FOR. The `e2e-builder`/`e2e-core` preflight gates run the whole
+# feature family on a default run. A `--for-diff <base-ref>` run narrows them to
+# the specs this file maps, so a release pays for the areas it touched instead of
+# the whole suite (measured 2026-11-10: the family costs ~570s, 21% of a release
+# run). This file is DATA, not code: the matcher is
+# `web/scripts/e2e-scope.mjs`, and it is re-checked by `scripts/spec-counts.sh`
+# (the `speccounts` gate) so a spec that arrives without a row cannot silently
+# fall out of the narrowed set.
+#
+# FORMAT. TAB separated, one row per line:
+#
+#     <spec-glob>  <area-glob>  [<area-glob> ...]
+#
+# * `spec-glob` is matched against the spec's BASENAME (`builder-save-failure.spec.ts`).
+#   A `*` spec-glob marks a GLOBAL area: any changed path matching it selects the
+#   WHOLE family, because it is shared by specs this file cannot enumerate.
+# * `area-glob` is matched against the changed path as git reports it, i.e. from
+#   the repo root (`web/src/app/sales/page.tsx`). `**` spans directories.
+# * Blank lines and `#` lines are ignored.
+#
+# THE RULES THAT MAKE NARROWING SAFE (implemented in `e2e-scope.mjs`, asserted by
+# its `--self-test`):
+#
+#   1. A change to a spec file selects that spec.
+#   2. A change to any source path the spec NAMES (`src/...` inside its own
+#      text — the import it drives) selects that spec. This is derived, not
+#      typed here, so a shared helper the spec imports cannot be missed by a row.
+#   3. A change to a path matched by a row's area globs selects that row's spec.
+#   4. ANY OTHER changed path under `web/` selects the WHOLE family. A change
+#      nothing in this file claims might still reach any spec, so it is never
+#      narrowed away.
+#   5. A feature spec with NO row here selects the WHOLE family (the family's
+#      coverage is not knowable, so it is not narrowed).
+#   6. `web/playwright.config.ts`, `web/playwright.menufixture.config.ts`, this
+#      file, and every non-spec file under `web/e2e/` (the shared helpers) select
+#      the WHOLE family.
+#
+# So the file can only ever make a run SMALLER when a change is positively
+# attributed. Getting a row wrong costs coverage of one area; leaving a path
+# unclaimed costs the whole family's run time, never coverage.
+#
+# THE BLIND SPOT, NAMED. A narrowed run does not exercise a spec whose area the
+# diff did not touch, and the printed decision line says so (`e2e-core: 41/76
+# specs`) — it is never reported as the full family. `PREFLIGHT_E2E=full` forces
+# every spec on any run, and that is the run a release card must quote as full.
+
+# ---- GLOBAL: shared by the whole family, so any change selects all of it ----
+*	web/src/app/globals.css
+*	web/src/app/layout.tsx
+*	web/src/components/i18n.tsx
+*	web/src/components/i18nDict.ts
+*	web/src/components/Shell.tsx
+*	web/src/components/WorkspaceSwitcher.tsx
+*	web/src/components/ui/**
+*	web/src/lib/i18nKeys.ts
+*	web/src/lib/langWriteQueue.ts
+*	web/src/lib/ownLang.ts
+*	web/src/lib/endonymLang.ts
+*	web/src/lib/apiErr.ts
+*	web/src/middleware.ts
+*	web/next.config.mjs
+
+# ---- builder ----
+builder-*.spec.ts	web/src/app/builder/**	web/src/lib/builder*.ts	web/src/lib/blockHydrate.ts	web/src/lib/blockReorder.ts	web/src/lib/builderCondition.ts
+builder-save-as-template.spec.ts	web/src/app/templates/**
+builder-publish-panel.spec.ts	web/src/app/form-settings/**
+
+# ---- chat ----
+chat-*.spec.ts	web/src/app/chat/**	web/src/lib/chat*.ts
+chat-scope-400.spec.ts	web/src/lib/chatConfirm.ts
+
+# ---- forms list ----
+forms-*.spec.ts	web/src/app/forms/**
+trash-products-media.spec.ts	web/src/app/forms/**
+
+# ---- form settings ----
+form-settings-*.spec.ts	web/src/app/form-settings/**
+form-slug-rename-refusal.spec.ts	web/src/app/form-settings/**
+
+# ---- settings / workspaces / CHIP ----
+settings-*.spec.ts	web/src/app/settings/**
+workspace-*.spec.ts	web/src/app/settings/**	web/src/app/workspace-picker/**
+workspace-set-default.spec.ts	web/src/app/products/**
+cf-status-*.spec.ts	web/src/app/settings/**	web/src/lib/cf*.ts
+chip-mode-choice.spec.ts	web/src/app/settings/**	web/src/lib/chip*.ts
+affiliate-row.spec.ts	web/src/app/settings/**
+email-language-rule.spec.ts	web/src/app/settings/**	web/src/app/form-settings/**
+deliveries-enqueue-failed.spec.ts	web/src/app/deliveries/**
+
+# ---- sales / products / media / templates ----
+sales-*.spec.ts	web/src/app/sales/**	web/src/lib/sales*.ts
+products-trash-refusal.spec.ts	web/src/app/products/**
+media-trash-refusal.spec.ts	web/src/app/media/**
+templates-action-refusal.spec.ts	web/src/app/templates/**
+activity-page.spec.ts	web/src/app/activity/**	web/src/lib/activity*.ts
+
+# ---- admin / feedback ----
+feedback-notify-marker.spec.ts	web/src/app/admin/**	web/src/app/feedback/**
+
+# ---- login / session / shell ----
+login-*.spec.ts	web/src/app/login/**	web/src/lib/passkey*.ts	web/src/lib/rateLimitErr.ts
+magic-link-*.spec.ts	web/src/app/magic-link/**	web/src/app/login/**
+session-bootstrap-anon.spec.ts	web/src/lib/sessionCookie.ts
+ssr-*.spec.ts	web/src/app/profile/**	web/src/lib/sessionCookie.ts	web/src/lib/authedGuard.ts
+stale-workspace-slug.spec.ts	web/src/lib/workspace*.ts	web/src/lib/sessionCookie.ts
+load-failure-legibility.spec.ts	web/src/app/builder/**	web/src/app/form-settings/**	web/src/components/SessionFault.tsx	web/src/components/PageLoading.tsx
+
+# ---- profile / language ----
+profile-*.spec.ts	web/src/app/profile/**
+
+# ---- cross-page presentation, security and caching ----
+action-failure-tone.spec.ts	web/src/app/sales/**	web/src/app/spam/**	web/src/app/form-settings/**
+mobile-tables.spec.ts	web/src/app/sales/**	web/src/app/products/**	web/src/app/subscriptions/**	web/src/app/deliveries/**	web/src/app/spam/**	web/src/components/MobileRecord.tsx
+security-headers.spec.ts	web/next.config.mjs
+static-asset-cache.spec.ts	web/next.config.mjs
+
+# ---- docs ----
+docs-passkeys-anchor.spec.ts	web/src/app/docs/**
+
+# ---- the menu-checkout fixture spec: it SKIPS unless MENU_FIXTURE_URL is set,
+#      and its measurement is owned by `scripts/menu-fixture-e2e.sh` (the
+#      `menufixture` gate). Mapping it to its own runner keeps it selected by a
+#      change to that runner and never by an unrelated web change.
+menu-checkout-option-group.spec.ts	scripts/menu-fixture-e2e.sh	web/playwright.menufixture.config.ts

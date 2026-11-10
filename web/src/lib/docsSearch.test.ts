@@ -272,6 +272,150 @@ test("tokenising folds case and punctuation", () => {
   assert.deepEqual(searchTokens("⌘K"), [], "a keyboard glyph is not a word");
 });
 
+// ── the result row's second line (card t_a92da047) ─────────────────────────────────────
+// A hit's subtitle used to be `description || snippet`, and the snippet itself anchored on the
+// EARLIEST query token — which the page text opens with (title, then description). So a
+// multi-word query showed the same description for every page it matched, never the sentence
+// that matched, and a reader could reasonably call the result unrelated. These pin both
+// halves: the window is chosen by the token that actually explains the match, and the row
+// renders that window.
+
+function syntheticDoc(
+  path: string,
+  description: string,
+  body: string,
+  overrides: Partial<SearchDoc> = {},
+): SearchDoc {
+  const title = overrides.title ?? "Field ordering";
+  return {
+    path,
+    title,
+    description,
+    layer: "More",
+    section: "More",
+    order: 0,
+    headings: [],
+    // The page text opens with the title and description, exactly as the generator builds it.
+    text: `${title} — JomForm Docs ${description} ${body}`,
+    ...overrides,
+  };
+}
+
+test("a multi-word query shows the sentence that matched, not the description it opens with", () => {
+  const description =
+    "How the field palette and the canvas work: the field list, the settings panel, and what each block does on a phone.";
+  const docs = [
+    syntheticDoc(
+      "/docs/target",
+      description,
+      "Adding a field Drag a palette item onto the canvas, or tap it. A tap appends the field to the end of the list.",
+    ),
+    syntheticDoc("/docs/other", description, "The canvas holds the field list."),
+  ];
+
+  const hit = flattenHits(searchDocs(docs, "palette appends the field")).find(
+    (entry) => entry.path === "/docs/target",
+  );
+  assert.ok(hit, "the query matched nothing — the page carries every token");
+  assert.notEqual(
+    hit.snippet,
+    description,
+    "the row still shows the description: the snippet anchored on the earliest token again",
+  );
+  assert.ok(
+    hit.snippet.toLowerCase().includes("appends"),
+    `the snippet "${hit.snippet}" does not contain the word the query was about`,
+  );
+});
+
+test("the snippet's window is the rarest query token's, not the first one's", () => {
+  // Equal weighting would anchor on "alpha" purely because it comes first, and the row would
+  // explain the match with the word six pages share. The rarity weight is what makes the row
+  // show the word that makes this page the answer.
+  const filler =
+    "The canvas holds the fields in the order a buyer sees them and the settings panel edits the selected block. ".repeat(
+      3,
+    );
+  const hit = syntheticDoc(
+    "/docs/alpha",
+    "How the canvas and the settings panel work on desktop and on a phone.",
+    `alpha lands where you drop it. ${filler} A tap appends beta to the end of the list.`,
+  );
+  const others = [1, 2, 3, 4, 5].map((n) =>
+    syntheticDoc(`/docs/filler-${n}`, `Filler page ${n}: alpha only appears here.`, "Nothing else."),
+  );
+
+  const found = flattenHits(searchDocs([hit, ...others], "alpha beta")).find(
+    (entry) => entry.path === "/docs/alpha",
+  );
+  assert.ok(found, "the two-token query matched nothing");
+  assert.ok(
+    found.snippet.toLowerCase().includes("beta"),
+    `the snippet "${found.snippet}" anchored on the common token — the rare one is the reason this page matched`,
+  );
+});
+
+test("a guide whose body does not repeat the summary's word still explains the match", () => {
+  // Guide entries index the markdown body as `text` and the summary as `description`, so a
+  // token can be in the row's description and nowhere in the prose. There is no window to
+  // show; the description is the explanation and must not be replaced by an unrelated slice.
+  const guide: SearchDoc = {
+    path: "/docs/guides/example",
+    title: "Example guide",
+    description: "A walkthrough of the screenshot workflow.",
+    layer: "Guides",
+    section: "Guides",
+    order: 0,
+    headings: [],
+    text: "Open the page and follow the steps.",
+  };
+  const hit = flattenHits(searchDocs([guide], "screenshot"))[0];
+  assert.ok(hit, "the query matched nothing");
+  assert.equal(hit.snippet, guide.description);
+});
+
+test("a page the description itself matches keeps showing the description", () => {
+  const hits = flattenHits(searchDocs(DOCS, "shipping"));
+  assert.equal(hits[0].path, "/docs/shipping");
+  assert.equal(
+    hits[0].snippet,
+    hits[0].description,
+    "a title/description match must not be replaced by an arbitrary window of prose",
+  );
+});
+
+test("a body-prose hit shows that prose, measured on the shipped index", () => {
+  // The card's own reproduction: the phrase is in /docs/builder's body, the page's description
+  // shares "palette", "canvas" and "field" with the query, and the row used to show the
+  // description for every one of those queries.
+  for (const [query, mustContain] of [
+    ["Drag a palette item onto the canvas", "drag a palette item onto the canvas"],
+    ["palette appends the field", "appends the field"],
+  ] as const) {
+    const hit = flattenHits(searchDocs(DOCS, query)).find((entry) => entry.path === "/docs/builder");
+    assert.ok(hit, `'${query}' did not reach /docs/builder`);
+    assert.ok(
+      hit.snippet.toLowerCase().includes(mustContain),
+      `'${query}' showed "${hit.snippet}" — the matched sentence is missing`,
+    );
+    assert.notEqual(hit.snippet, hit.description, `'${query}' still shows the page description`);
+  }
+});
+
+test("the result row renders the snippet, not the description", () => {
+  // The fix lives in the scorer, but the reader only sees it through this expression. It was
+  // `description || snippet`, so a page with a description never showed its snippet at all.
+  const source = readFileSync(join(WEB_DIR, "src", "app", "docs", "docsSearch.tsx"), "utf8");
+  assert.ok(
+    source.includes("{hit.snippet || hit.description}"),
+    "the result row no longer renders the snippet first — the matched sentence is invisible again",
+  );
+  assert.ok(
+    !source.includes("hit.description || hit.snippet"),
+    "the result row still prefers the description — every query would show the same line",
+  );
+});
+
 test("the client search path never touches the network", () => {
   for (const relative of ["src/app/docs/docsSearch.tsx", "src/lib/docsSearch.ts"]) {
     const source = readFileSync(join(WEB_DIR, relative), "utf8");

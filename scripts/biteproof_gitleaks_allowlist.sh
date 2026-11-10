@@ -39,6 +39,13 @@
 #      no-op (the config then REPLACES gitleaks' ruleset with an empty one), so it shows
 #      a green result is worth nothing on its own and pins why `useDefault` is asserted
 #      separately by both the selftest (check 11) and the harness's premise leg.
+#   5  THE PURGE HARNESS FIXTURE (card t_cf0f6063): the empty-credential line in
+#      `deploy/biteproof_ship_static_purge.sh` is GREEN under the shipped config, so
+#      the fixture that redded the gate on main is covered — by its LINE, not its path.
+#   6  ...AND STILL SCOPED: the SAME file carrying a REAL-valued token is RED naming
+#      that path, which is the direction a PATH allowlist for `deploy/biteproof_*.sh`
+#      would break. The harness drives real curl requests against a real CDN, so a
+#      token pasted into it while debugging must still be reported.
 #
 # WHAT IT DOES NOT PROVE: it does not re-read the repo's own history (the foreign blob
 # that started this was amended away from every ref, so a `detect` on this clone no
@@ -78,6 +85,21 @@ ANCHOR='web/.*\.spec\.(ts|tsx|js|jsx)'
 
 SPEC_PATH="web/e2e/probe.spec.ts"
 NONTEST_PATH="web/src/lib/probe.ts"
+
+# THE PURGE HARNESS (card t_cf0f6063). `deploy/biteproof_ship_static_purge.sh` is a
+# NON-test deploy path whose case-0 fixture SETS the purge credentials to empty —
+# `env JF_CF_PURGE_TOKEN= JF_CF_PURGE_ZONE_ID=` — a shape `generic-api-key` reads as
+# a keyword whose "secret" is the SIBLING VARIABLE'S NAME. The shipped config covers
+# it with a LINE-scoped entry and deliberately NOT a path entry (the harness drives
+# real curl requests against a real CDN, so a token pasted into it while debugging is
+# a plausible thing to find). Cases 5 and 6 are the two directions of that decision.
+PURGE_PATH="deploy/biteproof_ship_static_purge.sh"
+PURGE_KW_A="JF_CF_PURGE_TOKEN="
+PURGE_KW_B="JF_CF_PURGE_ZONE_ID="
+# Assembled, never one literal — see FIXTURE_VALUE above for why.
+PURGE_REAL_HEAD="7c1e9a03b5d2a8f4"
+PURGE_REAL_TAIL="d6b0e1c9a4f38527"
+PURGE_REAL_VALUE="${PURGE_REAL_HEAD}${PURGE_REAL_TAIL}"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/biteproof-gitleaks.XXXXXX")"
 cleanup() {
@@ -164,6 +186,22 @@ write_nontest_probe() {
     "$FIXTURE_VALUE" >"$f"
 }
 
+# write_purge_probe DIR [real] — a `deploy/biteproof_ship_static_purge.sh` carrying
+# the EMPTY-credential fixture line, and (with `real`) a second line whose token has
+# a real-shaped VALUE. The pair is the line-scoped allowlist's two directions.
+write_purge_probe() {
+  local f="$1/$PURGE_PATH"
+  mkdir -p "$(dirname "$f")"
+  {
+    printf '#!/bin/bash\n'
+    printf 'run_purge out err env %s %s APP_BASE_URL=https://example.com\n' \
+      "$PURGE_KW_A" "$PURGE_KW_B"
+    if [ "${2:-}" = "real" ]; then
+      printf '%s%s\n' "$PURGE_KW_A" "$PURGE_REAL_VALUE"
+    fi
+  } >"$f"
+}
+
 # commit_repo DIR — a real commit, because the incident was a committed blob and
 # `detect` reads history, not the working tree.
 commit_repo() {
@@ -213,12 +251,18 @@ fi
 # ---- the probe repos: one fixture in a spec path, one holding BOTH shapes
 R_SPEC="$TMP/repo-spec"
 R_BOTH="$TMP/repo-both"
-mkdir -p "$R_SPEC" "$R_BOTH"
+R_PURGE="$TMP/repo-purge-fixture"
+R_PURGE_REAL="$TMP/repo-purge-real"
+mkdir -p "$R_SPEC" "$R_BOTH" "$R_PURGE" "$R_PURGE_REAL"
 write_spec_probe "$R_SPEC"
 write_spec_probe "$R_BOTH"
 write_nontest_probe "$R_BOTH"
+write_purge_probe "$R_PURGE" ""
+write_purge_probe "$R_PURGE_REAL" real
 commit_repo "$R_SPEC"
 commit_repo "$R_BOTH"
+commit_repo "$R_PURGE"
+commit_repo "$R_PURGE_REAL"
 
 # ---- 1. the defect: the shipped-before-this-card allowlist reds on a spec fixture
 rc1="$(scan "$R_SPEC" "$TMP/cfg-prefix/.gitleaks.toml" c1)"
@@ -273,6 +317,29 @@ if classify green "$rc4" "$files4" "" && saw_no_leaks c4; then
   pass_case "case 4 (useDefault removed, same repo as case 3): GREEN at 0 findings — a green with an empty ruleset is a no-op, which is why [extend] useDefault is load-bearing"
 else
   fail_case "case 4: dropping [extend] useDefault must blind the scan (0 findings) — rc=$rc4, findings=[$(echo "$files4" | tr '\n' ' ')]"
+fi
+
+# ---- 5. the purge harness's EMPTY-credential fixture is covered BY LINE
+rc5="$(scan "$R_PURGE" "$CFG" c5)"
+files5="$(findings c5)"
+ran c5 || bug "case 5: the scan printed no 'commits scanned' line — it did not walk the probe repo"
+if classify green "$rc5" "$files5" "" && saw_no_leaks c5; then
+  pass_case "case 5 (shipped config, $PURGE_PATH carrying ONLY the empty-credential fixture): GREEN — the fixture that redded the gate on main is allowlisted, and by the LINE entry rather than by its path"
+else
+  fail_case "case 5: the empty-credential fixture in $PURGE_PATH must be allowlisted — rc=$rc5, findings=[$(echo "$files5" | tr '\n' ' ')]"
+fi
+
+# ---- 6. ...and the SAME file carrying a REAL-valued token is still reported
+#     This is the direction a path entry for `deploy/biteproof_*.sh` would break:
+#     the harness drives real curl requests against a real CDN, so a token pasted
+#     into it while debugging must still be found.
+rc6="$(scan "$R_PURGE_REAL" "$CFG" c6)"
+files6="$(findings c6)"
+ran c6 || bug "case 6: the scan printed no 'commits scanned' line — it did not walk the probe repo"
+if classify red "$rc6" "$files6" "$PURGE_PATH"; then
+  pass_case "case 6 (shipped config, same file + a REAL-valued token): RED, naming $PURGE_PATH — the coverage is scoped to the fixture's line, not to the harness's path"
+else
+  fail_case "case 6: a real token in $PURGE_PATH must still be reported and nothing else — rc=$rc6, findings=[$(echo "$files6" | tr '\n' ' ')]"
 fi
 
 # ---- the repository must be exactly as it was
