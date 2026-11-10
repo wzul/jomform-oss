@@ -23,6 +23,11 @@ export default function GuidesIndexPage() {
   return (
     <div className="max-w-3xl min-w-0">
       <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Screenshot guides</h1>
+      {/* THE ONE PLACE the red-box convention is stated (card t_b5ea9103). It used to be repeated
+          on all eight guide pages, as a "N screenshots, one per step, captured from the running
+          product. The red box marks…" paragraph — maintainer metadata on a customer page, sitting
+          between two copies of the guide's intro and pushing step 1 below the fold on a phone.
+          Stating it here means a guide page opens with its title, its lede and step 1. */}
       <p className="mt-3 text-sm leading-relaxed text-slate-600">
         Each guide below walks one setup from the settings page to the live form. Every step has
         its own screenshot, captured from the running product, with the control you touch at that

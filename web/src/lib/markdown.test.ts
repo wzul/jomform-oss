@@ -757,12 +757,37 @@ test("links become <a> with rel=noopener noreferrer in a new tab", () => {
 test("a blank line separates paragraphs, and a single newline stays a line break", () => {
   const two = render("Perenggan satu.\n\nPerenggan dua.");
   assert.equal([...two.matchAll(/<p[^>]*>/g)].length, 2, "a blank line did not start a new paragraph");
-  // The page used to render with whitespace-pre-wrap; a line break the user (or
-  // the model) typed must not disappear.
+  // The page used to render with whitespace-pre-wrap; a line break the user (or the
+  // model) typed must not disappear.
   assert.match(two, /<p class="[^"]*whitespace-pre-wrap[^"]*"/, "line breaks inside a paragraph are no longer preserved");
   const one = render("Baris satu.\nBaris dua.");
   assert.equal([...one.matchAll(/<p[^>]*>/g)].length, 1, "a single newline became a paragraph break");
   assert.match(visible(one), /Baris satu\.\nBaris dua\./, "the single newline was dropped");
+
+  // ── THE COMPANION, and the reason the rule is scoped rather than deleted (card
+  // t_b5ea9103). The same typed newline in DOCS prose must NOT be preserved: the guides'
+  // READMEs are hard-wrapped at ~100 columns, and under pre-wrap every one of those wraps
+  // became a real line break on the page — the "tiba-tiba ada new line" Wan saw at 390px.
+  // Authored prose is wrapped by the browser; user-typed text keeps its line breaks.
+  const docs = (text: string) =>
+    renderToStaticMarkup(createElement(Markdown, { text, mode: "docs" }));
+  const docsPara = docs("Perenggan satu.\nPerenggan dua.");
+  assert.doesNotMatch(
+    docsPara,
+    /whitespace-pre-wrap/,
+    "a docs paragraph still preserves the source's hard wrap — the README's ~100-column wrapping renders as broken text on a phone",
+  );
+  assert.match(docsPara, /<p class="[^"]*break-words[^"]*"/, "a docs paragraph lost its word-breaking class");
+  assert.equal(
+    visible(docsPara).replace(/\s+/g, " ").trim(),
+    "Perenggan satu. Perenggan dua.",
+    "a docs paragraph lost its text",
+  );
+  // The list branch carries its own copy of the class, so it gets its own assertion: a
+  // hard-wrapped bullet ("… the couple gets a page\n  with a title …") was ragged too.
+  const docsList = docs("- Item satu\n  bersambung\n- Item dua");
+  assert.equal([...docsList.matchAll(/<li[^>]*>/g)].length, 2, "a docs list lost an item");
+  assert.doesNotMatch(docsList, /whitespace-pre-wrap/, "a docs list item still preserves the source's hard wrap");
 });
 
 test("an empty answer renders nothing rather than an empty bubble", () => {

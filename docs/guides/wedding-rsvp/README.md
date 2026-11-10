@@ -1,45 +1,37 @@
 # Wedding page and RSVP form: setup guide
 
-A step-by-step guide to putting a wedding page and an RSVP form online with JomForm. Every screenshot
-below was captured from the running product; the red box marks the control you touch at that step.
+Put a wedding page and an RSVP form online in nine steps, from a blank form to the list of replies.
 
-**What this does:** an RSVP collects answers, not money, so the form runs in *response* mode. The
-couple gets a page with a title, a short invitation line and the questions they need answered: who is
-coming, how many guests, and a message. The form has its own public link, so it can go straight into
-a WhatsApp invitation, and it can sit behind a full landing page (see the Notes).
+**What this does:** an RSVP collects answers, not money, so the form runs in *response* mode and
+sells nothing.
 
 ## 1. Start a new form
 
 ![Forms page with the New form button boxed](01-new-form.png)
 
-Forms → **New form**. Every form in JomForm starts here. The list on this page holds the drafts and
-the published forms of the workspace you are in (its name is at the top right: *Panduan Demo* here).
+Forms → **New form**. The list behind it holds the drafts and the published forms of the workspace
+you are in.
 
 ## 2. Choose Blank form
 
 ![Template gallery with the Blank form card boxed](02-blank-form.png)
 
-**New form** opens the template gallery. There is no wedding template in it, so start from
-**Blank form**. The gallery's other cards (Event Registration, Donation, F&B Order + Payment, Tuition
-Class Registration, …) are for the other showcases. A blank form gives you an empty canvas and the
-full field palette.
+There is no wedding template, so start from **Blank form** — an empty canvas with the full field
+palette.
 
 ## 3. Set Form mode to Response form
 
 ![Builder with the Form mode dialog open and the Response form option boxed](03-response-mode.png)
 
-In the builder, the mode sits in the **top bar next to the slug**: the button reads *Payment form*,
-the default. Press it and pick **Response form**. You do not need to select a block or open the
-settings panel to reach it. The change asks you to confirm first, and says what it is about to do.
-
-Response form collects responses only, with no products and no payment. Leave it on *Payment form*
-and the form will expect a product to sell, while an RSVP has nothing to sell.
+The mode sits in the builder's **top bar next to the slug**: the button reads *Payment form*, press
+it and pick **Response form**. A response form collects answers only, so there is no product to sell
+and no payment step.
 
 ## 4. Add the questions and mark the required ones
 
 ![Builder canvas with the RSVP blocks and the Required checkbox boxed](04-blocks-required.png)
 
-Click a field in the **palette** on the left to add it to the form. For an RSVP:
+Click a field in the **palette** to add it; for this RSVP the six blocks are:
 
 | Block | Label used here | Notes |
 |---|---|---|
@@ -50,60 +42,46 @@ Click a field in the **palette** on the left to add it to the form. For an RSVP:
 | **Number** | Number of guests (including you) | Optional. Only an attending guest answers it |
 | **Note** | Message to the couple | Free-form message |
 
-Select a block and its settings appear in the right-hand panel: **Text / label**, Description,
-Placeholder, an **Advanced** disclosure, and **Required**. Tick **Required** on the question that
-must be answered, here the attendance radio, so the guest cannot submit without it. A *Text* block
-that reads like a sentence offers **Treat as intro line** and becomes a heading; use **Section** for
-that from the start.
+Select a block and its settings open in the right-hand panel; tick **Required** on the attendance
+question so a guest cannot submit without answering it.
 
 ## 5. Publish
 
 ![Builder toolbar with the Save & publish button boxed](05-publish.png)
 
-**Save & publish** in the top bar writes the form and puts it live in one step. Until you click it
-the toolbar shows **• unsaved** and the form stays a draft that nobody else can open.
+**Save & publish** in the top bar writes the form and puts it live in one step.
 
 ## 6. Copy the public link
 
 ![Live banner with the Copy link button boxed](06-live-link.png)
 
-The green **Your form is live** banner confirms the publish and holds the guest URL. **Copy link**
-(or **Open form**) is what you paste into the invitation, a poster QR code, or your website.
+The green **Your form is live** banner holds the guest URL, and **Copy link** is what goes into the
+invitation.
 
 ## 7. Set the theme colour
 
 ![Form Settings → General with the Theme color control boxed](07-theme-colour.png)
 
-The form's look lives in **Form Settings**, not in the builder. Open it from the form's row in Forms,
-or from the **Form Settings →** button at the bottom of the builder's right panel. Under **General**,
-**Theme color (primary)** is the colour of the page's buttons and accents, and the PREVIEW panel next
-to it shows a sample product in that colour. The same tab carries **Status**
-(*Draft / Private / Published / Unlisted*), **Logo URL (https)**, **Custom JS** and
-**Allow embedding (iframe)**. Press **Save** at the bottom and the page answers **Saved ✓**.
+**Form Settings → General → Theme color (primary)** is the colour of the page's buttons and accents;
+press **Save** and the page answers **Saved ✓**.
 
 ## 8. What the guest sees
 
 ![Public RSVP page with the rose theme, five questions and a Submit button](08-guest-rsvp.png)
 
-Anyone with the link gets the title, the invitation line, the five fields and one **Submit** button
-in the theme colour you chose. The labels marked required carry *(required)*, and the guest never
-sees the dashboard.
+The guest gets the title, the invitation line, the five fields and one **Submit** button, with
+*(required)* beside the questions that need an answer.
 
 ## 9. Read the replies
 
 ![Sales → Responses (this form) with one RSVP answer row and the Export CSV button boxed](09-responses.png)
 
-There is no separate inbox. **Submission** at the top of Form Settings opens **Sales** filtered to
-this form (*Responses (this form)*). Each RSVP is one row with its **Received** time, the **Buyer**'s
-name and email, the answers, and a **View** action that opens the full reply. **Export CSV**
-downloads every reply in the filter.
+**Submission** at the top of Form Settings opens **Sales** filtered to this form, one row per reply.
+**Export CSV** downloads every reply in that filter.
 
 ## Notes
 
-- **A full page in front of the form is optional.** Settings → **Storefront** turns the workspace's
-  home page into a landing page (hero, subtitle, body, image, logo and a CTA button that points at
-  the form). Use it when you want the couple's story and photos on a page of their own rather than
-  just the form. The [design-with-MCP guide](../design-with-mcp/README.md) walks that page.
-- **The slug can change without breaking invitations.** Saving a new slug moves the form to the new
-  URL, and the old address keeps working through a temporary redirect. A link already sent still
-  lands on the form.
+- **A landing page in front of the form is optional.** Settings → **Storefront** turns the workspace
+  home page into a hero, subtitle, body, image and a CTA button that points at the form.
+- **A new slug does not break invitations.** The old address keeps working through a temporary
+  redirect.

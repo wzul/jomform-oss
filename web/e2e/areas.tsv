@@ -112,12 +112,18 @@ profile-*.spec.ts	web/src/app/profile/**
 
 # ---- cross-page presentation, security and caching ----
 action-failure-tone.spec.ts	web/src/app/sales/**	web/src/app/spam/**	web/src/app/form-settings/**
+landing-header-mobile.spec.ts	web/src/app/landing/page.tsx
 mobile-tables.spec.ts	web/src/app/sales/**	web/src/app/products/**	web/src/app/subscriptions/**	web/src/app/deliveries/**	web/src/app/spam/**	web/src/components/MobileRecord.tsx
 security-headers.spec.ts	web/next.config.mjs
 static-asset-cache.spec.ts	web/next.config.mjs
 
 # ---- docs ----
 docs-passkeys-anchor.spec.ts	web/src/app/docs/**
+# The guide pages' fold/wrap/lede-once guards (card t_b5ea9103). Claimed here so a change to
+# the guides' content or to GuideArticle narrows to the spec that reads it; web/src/components/
+# Markdown.ts is deliberately NOT claimed — the chat and feedback surfaces render through it
+# too, so a change there stays unclaimed and keeps selecting the whole family.
+docs-guide-fold.spec.ts	web/src/app/docs/guides/**	web/src/components/GuideArticle.tsx	web/src/lib/guides.gen.ts	docs/guides/**
 
 # ---- the menu-checkout fixture spec: it SKIPS unless MENU_FIXTURE_URL is set,
 #      and its measurement is owned by `scripts/menu-fixture-e2e.sh` (the

@@ -63,8 +63,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Start here",
     "order": 2,
     "kind": "product",
-    "updated": "2026-11-08",
-    "digest": "5201c0708a2a3017",
+    "updated": "2026-11-09",
+    "digest": "887f4b47bf2e87c5",
     "guides": []
   },
   {
@@ -124,7 +124,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
   },
   {
     "path": "/docs/guides/qr-table-ordering",
-    "label": "QR table ordering: setup guide",
+    "label": "Table ordering with a QR menu: setup guide",
     "layer": "Learn",
     "section": "Screenshot guides",
     "order": 8,

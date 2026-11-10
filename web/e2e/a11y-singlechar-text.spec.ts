@@ -78,6 +78,13 @@
 //      and a scan of it would be a clean 0 over nothing;
 //   2. the page's own shell rendered (`nav` for the signed-in routes, `main` +
 //      real body text for the public ones);
+//   2b. the route's LATE-MOUNTING panel is on the page, when it has one (card
+//      t_1bd2b132): `/settings` resolves the session role after the shell paints,
+//      so it waits for `#set-panel-chip` and requires the grid's twelve method
+//      labels inside it. Without this step the arm measured the pre-role frame —
+//      15 nav+initial glyphs, exactly its floor — and passed with the payment grid
+//      out of the census entirely, which is the vacuity that made a run of the
+//      white-on-white tick (card t_5dc6bb86) green on a tree the gate reds;
 //   3. it found at least the MEASURED number of single-character elements — the
 //      floor is the census, so a route that stops rendering fails instead of
 //      passing over an empty page;
@@ -281,6 +288,31 @@ type Route = {
   /** Measured number of single-character elements; a route that renders fewer did not render. */
   min: number;
   what: string;
+  /**
+   * A panel this route paints only AFTER it has resolved something the Shell does
+   * not wait for (card t_1bd2b132). `open()` will not return until `anchor` is on
+   * the page, and the arm asserts BOTH that it appeared and that its `labels` are
+   * inside it — a panel that never mounts is then RED instead of a census that
+   * happens to match the floor over a page without it.
+   */
+  panel?: Panel;
+};
+
+/**
+ * A late-mounting panel, named by what it is rather than by the count it happens
+ * to produce. `labels` is the panel's CONTENT: its own visible strings, which must
+ * all be in the page the census measures. They are matched by text, not by a
+ * `data-testid`, because the panel's markup is free to rename its attributes
+ * (the payment-method grid changed from buttons to labelled checkboxes in
+ * PR #1682) while its twelve method labels did not.
+ */
+type Panel = {
+  /** CSS selector that only exists once the panel has mounted. */
+  anchor: string;
+  /** What the panel is, for the failure message. */
+  what: string;
+  /** Visible strings that must ALL be present inside the anchor. */
+  labels: readonly string[];
 };
 
 // MEASURED 2026-10-15 on this tree (production build, fresh state, API stubbed).
@@ -288,6 +320,26 @@ type Route = {
 // FLOOR, so a page that gains a single-character element is measured by this scan
 // automatically, and one that renders fewer than the census fails loudly. Re-measure
 // with the run log (`[single-char]` lines) rather than editing a number by hand.
+//
+// A FLOOR IS NOT A PRESENCE CHECK (card t_1bd2b132). `/settings` reached its floor of
+// 15 from the sidebar's 14 nav icons + the profile initial BEFORE the CHIP tab — and
+// therefore the twelve payment-method controls this route is really about — had
+// mounted, so "the grid is there and clean" and "the grid never rendered" produced
+// the SAME census. A number cannot tell those apart; a selector can. That is what
+// `panel` is for on the one route measured with a late-mounting panel.
+//
+// THE SWEEP BEHIND THAT "ONE ROUTE" (measured on this tree, production build, the
+// spec's own stubs, super-admin bundle): every authed route was sampled at the frame
+// the settle returned and again 250/1250 ms later. The ROLE arrives after the shell
+// everywhere — the sidebar's profile chip is painted with a "?" placeholder that is
+// swapped for the real initial, and a role-gated nav item appears, on `/products`,
+// `/sales`, `/templates`, `/activity` and `/settings` — but only on `/settings` does
+// that role gate the CONTENT this scan judges: the CHIP tab, and with it the twelve
+// payment-method controls. The other routes' late work is chrome the census already
+// counts on both sides of the swap, so their `min` floors moved by nothing (measured:
+// products 18/18, sales 16/16, activity 16/16; templates 16/16 with the placeholder
+// initial replaced by the real one). `/settings` was the one route whose census could
+// legitimately be taken over a page with no grid in it — hence the single `panel`.
 const ROUTES: Route[] = [
   { name: "login", path: "/login", authed: false, min: 1, what: "the key glyph in the 2FA card" },
   { name: "landing", path: "/landing", authed: false, min: 33, what: "24 ✓ marks + the emoji glyphs" },
@@ -304,7 +356,40 @@ const ROUTES: Route[] = [
   { name: "deliveries", path: "/deliveries", authed: true, min: 15, what: "the sidebar's nav icons" },
   { name: "spam", path: "/spam", authed: true, min: 15, what: "the sidebar's nav icons" },
   { name: "activity", path: "/activity", authed: true, min: 15, what: "the sidebar's nav icons" },
-  { name: "settings", path: "/settings", authed: true, min: 15, what: "the sidebar's nav icons" },
+  {
+    name: "settings",
+    path: "/settings",
+    authed: true,
+    min: 15,
+    what: "the sidebar's nav icons (the CHIP grid's twelve method controls are multi-character labels)",
+    // The CHIP tab is ADMIN-ONLY, and `activeTab` derives from the role the page
+    // fetches AFTER the Shell has painted: the pre-role frame renders the Domains
+    // tab. `#set-panel-chip` is the CHIP panel's own landmark (`panelDomId("set",
+    // "chip")`, web/src/lib/tablist.ts) and it exists in BOTH shapes of the grid —
+    // the twelve pill buttons this route had, and the labelled checkboxes PR #1682
+    // replaced them with — so the anchor is the panel, not one markup's testid.
+    panel: {
+      anchor: "#set-panel-chip",
+      what: "CHIP payment-method panel",
+      // The twelve labels are `METHODS` in web/src/app/settings/page.tsx, in source
+      // order. If a method is added or renamed, this list is what says the scan is
+      // still looking at the grid — update it WITH the source change.
+      labels: [
+        "FPX",
+        "FPX B2B1",
+        "Card (Visa, Mastercard, Maestro)",
+        "Google Pay",
+        "Apple Pay",
+        "Atome",
+        "GrabPay",
+        "Maybank QRPay",
+        "ShopeePay",
+        "Touch 'n Go eWallet",
+        "DuitNow QR",
+        "Crypto Coin",
+      ],
+    },
+  },
   { name: "profile", path: "/profile", authed: true, min: 15, what: "nav icons + BOTH avatar circles" },
   { name: "chat", path: "/chat", authed: true, min: 15, what: "the sidebar's nav icons" },
   { name: "builder", path: "/builder", authed: true, min: 30, what: "the block palette's glyphs (the builder has its own chrome, not the sidebar)" },
@@ -397,6 +482,11 @@ async function open(page: Page, baseURL: string | undefined, route: Route) {
   // never renders is still RED, with the state the wait saw in the message.
   const settled = await waitForSettled(page, {
     wantsShell: route.authed && route.path !== "/builder",
+    // A route's late-mounting panel is part of "this page has rendered" (card
+    // t_1bd2b132): without it the wait is satisfied by the frame BEFORE the panel
+    // exists, and the census below measures a page that does not contain the
+    // content this route is scanned for.
+    anchor: route.panel?.anchor,
   });
   console.log(settledLine(route.path, settled));
   return settled;
@@ -422,6 +512,37 @@ test.describe("a11y: single-character text is measured against its own floor", (
         route.path,
       );
 
+      const waited = `waited ${settled.waitedMs}ms (ceiling ${SETTLE_TIMEOUT_MS}ms): hydrated=${settled.hydrated}, bodyText=${settled.bodyText}`;
+
+      // (1b) THE ROUTE'S LATE-MOUNTING PANEL IS IN THE PAGE (card t_1bd2b132).
+      // BEFORE the census, because this is what makes the census a measurement of
+      // the ROUTE rather than of the chrome that was already there. `/settings`
+      // resolves the session role after the Shell paints, and the CHIP tab — the
+      // ONLY place the twelve payment-method controls live — mounts a frame
+      // later. `open()` now waits for the panel, and this is the state that wait
+      // reports: a panel that never appeared is RED here, on its own message,
+      // instead of a 15-element census over a page that has no grid in it.
+      const panel = route.panel;
+      if (panel) {
+        expect(
+          settled.anchored,
+          `${route.path} rendered no ${panel.what} — ${panel.anchor} never appeared within the ` +
+            `${SETTLE_TIMEOUT_MS}ms settle ceiling, so the census would have measured this page WITHOUT its ` +
+            `grid and could have matched the floor anyway. This is the settle, NOT a contrast verdict [${waited}]`,
+        ).toBe(true);
+        const anchored = page.locator(panel.anchor);
+        const missing: string[] = [];
+        for (const label of panel.labels) {
+          if ((await anchored.getByText(label, { exact: true }).count()) === 0) missing.push(label);
+        }
+        expect(
+          missing,
+          `${route.path} — ${panel.what} mounted, but ${missing.length} of its ${panel.labels.length} content ` +
+            `label(s) are not in it: ${JSON.stringify(missing)}. The page is not the grid this route is scanned ` +
+            `for, so the census below would judge something else [${waited}]`,
+        ).toEqual([]);
+      }
+
       const { found, settle, navLinks, hasMain, bodyText } = (await page.evaluate(SCAN)) as {
         found: Found[];
         settle: AnimationsSettled;
@@ -437,7 +558,6 @@ test.describe("a11y: single-character text is measured against its own floor", (
       // could be satisfied by chrome that is not the route's. The wait in `open()`
       // is bounded, not a sleep, so a shell that genuinely never renders is still
       // RED here — the message carries what the wait saw and how long it waited.
-      const waited = `waited ${settled.waitedMs}ms (ceiling ${SETTLE_TIMEOUT_MS}ms): hydrated=${settled.hydrated}, bodyText=${settled.bodyText}`;
       if (route.authed && route.path !== "/builder") {
         // The sidebar routes: the Shell's nav is the thing that carries the fixed
         // glyphs, so its absence is the failure this arm is about.

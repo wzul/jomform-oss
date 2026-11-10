@@ -115,6 +115,25 @@ const visible = (html: string) =>
     .replace(/&quot;/g, '"')
     .replace(/&#x27;/g, "'");
 
+/**
+ * The plain text of a markdown paragraph — the same strip the generator applies to the lede
+ * before it becomes `summary` (images dropped, link text kept, emphasis markers removed).
+ * Small on purpose: it exists to compare the README's lede with the committed summary.
+ */
+const plainText = (md: string) =>
+  md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** Words in a rendered string, whitespace-collapsed. Alt attributes are not text. */
+const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
+
+/** How many times `needle` occurs in `haystack`, counting overlaps as separate hits. */
+const occurrences = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+
 const renderGuide = (slug: string) => {
   const guide = GUIDES.find((g) => g.slug === slug);
   assert.ok(guide, `no guide ${JSON.stringify(slug)} in src/lib/guides.gen.ts`);
@@ -254,14 +273,26 @@ test("the generated content matches docs/guides byte for byte (checkout only)", 
   for (const g of GUIDES) {
     const dir = join(DOCS_GUIDES, g.slug);
     const readme = readFileSync(join(dir, "README.md"), "utf8").replace(/\r\n?/g, "\n");
-    // The generated body is the README minus its title line (the page renders that as its h1).
+    // The generated body is the README minus its title line (the page renders that as its h1)
+    // and minus its FIRST PARAGRAPH, which the generator turns into `summary` — the lede the
+    // page prints once (card t_b5ea9103). Recomputing both halves here is what makes "the
+    // generated module drifted from docs/guides" a red rather than a silent double intro.
     const lines = readme.split("\n");
     const titleAt = lines.findIndex((l) => /^#\s+\S/.test(l));
     const title = titleAt === -1 ? "" : lines[titleAt].replace(/^#\s+/, "").trim();
     lines.splice(titleAt, 1);
-    const body = lines.join("\n").replace(/^\n+/, "").replace(/\s+$/, "") + "\n";
+    const paras = lines.join("\n").split("\n\n");
+    const ledeAt = paras.findIndex(
+      (p) => p.trim() !== "" && !p.trim().startsWith("#") && !p.trim().startsWith("!["),
+    );
+    const lede = ledeAt === -1 ? "" : paras[ledeAt].trim().replace(/\s+/g, " ");
+    if (ledeAt !== -1) paras.splice(ledeAt, 1);
+    const body = paras.join("\n\n").replace(/^\n+/, "").replace(/\s+$/, "") + "\n";
     if (title !== g.title) problems.push(`${g.slug}: title is "${g.title}", the README says "${title}"`);
     if (body !== g.body) problems.push(`${g.slug}: the generated body differs from docs/guides/${g.slug}/README.md`);
+    if (plainText(lede) !== g.summary) {
+      problems.push(`${g.slug}: summary is "${g.summary}", the README's lede is "${plainText(lede)}"`);
+    }
 
     // The manifest must be exactly the PNGs the README references, in document order.
     const refs = [...readme.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((m) => m[1]);
@@ -281,4 +312,98 @@ test("the generated content matches docs/guides byte for byte (checkout only)", 
     }
   }
   assert.deepEqual(problems, [], `docs/guides and the generated output drifted:\n  ${problems.join("\n  ")}`);
+});
+
+// ── the intro is printed once, wraps like prose, and fits on a phone (card t_b5ea9103) ──────
+
+/**
+ * The defect this set pins, as Wan saw it on the live page ("susunan tu tak ok, tiba-tiba ada
+ * new line, wordy sgt"):
+ *
+ *   1. the guide's opening sentence rendered TWICE — once as `{guide.summary}` and once as the
+ *      body's first paragraph, because the generator took the README's first paragraph as the
+ *      summary and left it in the body;
+ *   2. every body paragraph kept its README hard-wrap as a REAL line break (`whitespace-pre-wrap`
+ *      on authored prose), so at 390px the text had a ragged right edge and single words on
+ *      their own line;
+ *   3. a maintainer's "N screenshots, one per step … the red box marks …" paragraph sat between
+ *      the two copies of the intro on a customer page, pushing step 1 below the fold.
+ *
+ * The first two are asserted here on the REAL renderer output, for every guide. The third lives
+ * in the GuideArticle component, which is JSX and cannot be rendered by `node --test`; it is
+ * measured on the served page by web/e2e/docs-guide-fold.spec.ts, together with the computed
+ * `white-space` of those paragraphs and the y-offset of the first step.
+ */
+
+test("the guide's opening sentence is printed exactly once", () => {
+  const problems: string[] = [];
+  for (const g of GUIDES) {
+    const lede = plainText(g.summary);
+    if (lede === "") {
+      problems.push(`${g.slug}: the summary is empty`);
+      continue;
+    }
+    if (g.summary.includes("…")) {
+      problems.push(
+        `${g.slug}: the summary is TRUNCATED ("…") — it is the page's lede, so it has to be a ` +
+          `sentence someone wrote, not 200 characters cut off`,
+      );
+    }
+    // The article as the page composes it: <h1>, the lede paragraph, then the rendered body.
+    const article = [g.title, g.summary, visible(renderGuide(g.slug))]
+      .map((part) => plainText(part))
+      .join("\n");
+    const hits = occurrences(article, lede);
+    if (hits !== 1) {
+      problems.push(
+        `${g.slug}: the lede sentence appears ${hits} time(s) in the rendered article (want 1) — ` +
+          `it is owned by \`summary\` and the generator must not leave it in \`body\` as well`,
+      );
+    }
+  }
+  assert.deepEqual(problems, [], `the guide intros are not printed once each:\n  ${problems.join("\n  ")}`);
+});
+
+test("docs-mode prose does not preserve the README's hard wraps", () => {
+  // The rule is SCOPED ON THE MODE, not deleted (see lineBreakClass in components/Markdown.ts):
+  // `whitespace-pre-wrap` still protects a newline the user TYPED into a chat answer or a
+  // feedback body — src/lib/markdown.test.ts pins that companion. Authored guides are wrapped
+  // by the browser instead, because their source is wrapped at ~100 columns and every one of
+  // those wraps was becoming a line break in the article.
+  const problems: string[] = [];
+  for (const g of GUIDES) {
+    const html = renderGuide(g.slug);
+    const paragraphs = [...html.matchAll(/<(p|li)\b[^>]*>/g)].map((m) => m[0]);
+    const wrapped = paragraphs.filter((tag) => /whitespace-pre-wrap/.test(tag));
+    if (wrapped.length > 0) {
+      problems.push(
+        `${g.slug}: ${wrapped.length} of ${paragraphs.length} paragraph/list tags carry ` +
+          `whitespace-pre-wrap (e.g. ${wrapped[0]}) — the README's line breaks would render`,
+      );
+    }
+    if (paragraphs.length === 0) problems.push(`${g.slug}: rendered no paragraph at all`);
+  }
+  assert.deepEqual(problems, [], `docs prose still preserves hard wraps:\n  ${problems.join("\n  ")}`);
+});
+
+test("every guide page stays inside its word budget", () => {
+  // For guides whose job is "do this, then this" the page is a checklist, not an essay. The
+  // budget is per guide and covers the article's own prose — the <h1>, the lede and the
+  // rendered body; the footer's list of the other guides is chrome and is not this page's
+  // content (web/e2e/docs-guide-fold.spec.ts measures the whole served page at 390px, footer
+  // included, against the same 700).
+  const GUIDE_WORD_BUDGET = 700;
+  const counts = GUIDES.map((g) => ({
+    slug: g.slug,
+    words: words([g.title, g.summary, visible(renderGuide(g.slug))].join(" ")),
+  }));
+  const over = counts.filter((c) => c.words > GUIDE_WORD_BUDGET);
+  assert.deepEqual(
+    over,
+    [],
+    `these guides are over the ${GUIDE_WORD_BUDGET}-word budget: ` +
+      `${over.map((c) => `${c.slug} (${c.words})`).join(", ")} — measured: ` +
+      `${counts.map((c) => `${c.slug} ${c.words}`).join(", ")}. Trim the steps: one action per ` +
+      `step plus at most one clarifying sentence, and move caveats to Notes.`,
+  );
 });

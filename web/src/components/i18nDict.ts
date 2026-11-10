@@ -2031,6 +2031,10 @@ export const DICT = {
   "land.cta2": { en: "How it works", ms: "Macam mana ia berfungsi", zh: "查看演示", ta: "டெமோ பார்க்க", ar: "شاهد العرض" },
   "land.buildForm": { en: "Build a form", ms: "Bina borang", zh: "+ 创建表单", ta: "+ படிவம் உருவாக்கு", ar: "+ أنشئ نموذجاً" },
   "land.login": { en: "Log in", ms: "Log masuk", zh: "登录", ta: "உள்நுழை", ar: "تسجيل الدخول" },
+  /* The phone header's menu button (card t_2b2da6a7). "Menu" is the same noun in
+     Malay, so the two locales this page offers read naturally; the state is
+     carried by `aria-expanded`, not by a second name. */
+  "land.menu": { en: "Menu", ms: "Menu", zh: "菜单", ta: "மெனு", ar: "القائمة" },
   /* ── landing redesign (card t_09f60795) ───────────────────────────────────
      The product-led hero, its three-step lane, the showcase section head, the
      MCP terminal transcript and the "Free. Not a trial." block. Every key is

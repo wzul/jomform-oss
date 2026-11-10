@@ -683,6 +683,25 @@ function tone(variant: MarkdownVariant) {
 type RenderCtx = { variant: MarkdownVariant; mode: MarkdownMode; resolveImage?: ResolveImage };
 
 /**
+ * How a line break INSIDE a paragraph or a list item is rendered.
+ *
+ * `whitespace-pre-wrap` is the right rule for USER-TYPED text: a newline the merchant or the
+ * model typed into a chat answer or a feedback body is a break the reader meant, and the chat
+ * surface used to render raw text, so it must keep them (src/lib/markdown.test.ts pins that).
+ * It is the WRONG rule for AUTHORED prose: the /docs guides' READMEs are hard-wrapped at ~100
+ * columns, so under pre-wrap every one of those source wraps became a real line break on the
+ * page — at 390px the source wrap inside "Every screenshot below was captured…" stranded
+ * "screenshot" on a line of its own and left a ragged right edge that reads as broken (card
+ * t_b5ea9103, Wan: "tiba-tiba ada new line"). Authored prose is wrapped by the browser, at the
+ * width it is actually read.
+ *
+ * So the rule is SCOPED ON THE MODE, not deleted: docs prose wraps normally, chat keeps its
+ * typed line breaks. Deleting it outright would silently un-break every typed newline in the
+ * chat, which is the regression this shape exists to avoid.
+ */
+const lineBreakClass = (mode: MarkdownMode) => (mode === "docs" ? "" : "whitespace-pre-wrap ");
+
+/**
  * One image reference → an <img>, or the alt text when there is nothing safe to point at.
  *
  * The resolver is what makes the URL safe: /docs/guides closes over that guide's generated
@@ -787,7 +806,7 @@ function renderBlock(b: Block, ctx: RenderCtx, key: string): ReactNode {
       ...b.items.map((item, i) =>
         createElement(
           "li",
-          { key: `${key}-${i}`, className: "whitespace-pre-wrap break-words" },
+          { key: `${key}-${i}`, className: `${lineBreakClass(ctx.mode)}break-words` },
           ...renderInline(parseInline(item, 0, ctx.mode), ctx, `${key}-${i}`),
         ),
       ),
@@ -850,9 +869,9 @@ function renderBlock(b: Block, ctx: RenderCtx, key: string): ReactNode {
   }
   return createElement(
     "p",
-    // whitespace-pre-wrap preserves the line breaks the old raw-text rendering
-    // showed; break-words handles a long unbroken token.
-    { key, className: "whitespace-pre-wrap break-words" },
+    // A typed line break survives in chat and is collapsed in docs prose (lineBreakClass);
+    // break-words handles a long unbroken token either way.
+    { key, className: `${lineBreakClass(ctx.mode)}break-words` },
     ...renderInline(parseInline(b.text, 0, ctx.mode), ctx, key),
   );
 }

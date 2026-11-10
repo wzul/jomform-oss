@@ -48,7 +48,7 @@
 // `--jf-primary-strong` is used for small accent text because `--jf-primary`
 // measures 4.42:1 on `--jf-bg` (under AA for normal text); it is only used for
 // large text and on white cards, where it measures 4.70:1 and up.
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { LANG_LABEL, LANG_SHORT, useI18n } from "../../components/i18n";
 import { endonymLangProps } from "../../lib/endonymLang";
@@ -73,11 +73,42 @@ const FEATURES = [
 ];
 
 export default function Landing() {
-  const { t, lang } = useI18n();
+  const { t, lang, setLang } = useI18n();
+  // The phone sheet's open state (card t_2b2da6a7). Kept in the page rather than
+  // in a component so the sheet's links stay inside the header in the SOURCE:
+  // `src/lib/landingHeaderHierarchy.test.ts` reads the header's anchors from the
+  // nav block, and a sheet rendered by another component would hide /docs and
+  // /login from it. (That guard matches the raw tag name in the source,
+  // comments included — the same reason the note at the top of this file never
+  // spells an h1 in angle brackets.)
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.lang = lang;
   }, [lang]);
+
+  // Escape closes the sheet, and so does a tap anywhere outside the header. The
+  // disclosure pattern gives a keyboard user no way out of a popover they did
+  // not focus into, and a phone sheet is dismissed by tapping the page — which a
+  // keyboard user does not have. No backdrop element: a fixed overlay with a
+  // click handler is a non-interactive element doing an interactive job, and the
+  // document listener does the same work without one.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    const onDown = (e: PointerEvent) => {
+      const bar = document.querySelector("nav");
+      if (bar && e.target instanceof Node && !bar.contains(e.target)) setMenuOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown);
+    };
+  }, [menuOpen]);
 
   return (
     /* `max-[17em]:[overflow-wrap:anywhere]` (card t_1aed910e): below 17em of
@@ -90,10 +121,24 @@ export default function Landing() {
        20em at a 16px root, outside the band. */
     <main className="min-h-screen bg-[var(--jf-bg)] max-[17em]:[overflow-wrap:anywhere]">
       {/* nav
+          ONE ROW AT PHONE WIDTH (card t_2b2da6a7). The five-item desktop row
+          used to run on a phone too: measured on the shipped page at a real
+          390px viewport (isMobile/hasTouch/dpr 2, fresh state, lang=en) the
+          header was 111px tall — it had WRAPPED into two rows — and the five
+          controls sat on three different baselines with two 20px-tall text
+          links (Docs 34x20, Log in 41x20) beside a 36px CTA and a 44px
+          segmented control. Below `sm` the row is now
+          [JF + wordmark] … [Build a form] [menu button]: the CTA and the menu
+          button are the only controls in the bar (both 44px), and Docs · Log in
+          · the two languages live in the sheet the menu button opens, each as a
+          44px row. `sm` and up renders the original row unchanged.
+
           `flex-wrap` + `gap-y-2` (card t_68456ead): the brand and the link
           cluster are each as wide as their own text; at a raised root font they
           no longer fit on one row and, without wrapping, the last item was
-          pushed 26.7px past a 320px viewport.
+          pushed 26.7px past a 320px viewport. It is INERT at 100% text now that
+          the phone row carries two items instead of five — the raise still
+          wraps instead of panning.
 
           HEADER HIERARCHY — DO NOT INVERT (card t_53bcd451, measured from the
           shipped 390px and 1440px screenshots):
@@ -109,22 +154,34 @@ export default function Landing() {
             `src/lib/landingHeaderHierarchy.test.ts` fails the unit suite if the
             fill moves back onto /login, if /builder loses it, if the Docs link
             leaves the header, if the language buttons drop under 44px, or if
-            the trust bullets go back to 12px muted text. */}
-      <nav className="flex flex-wrap items-center justify-between gap-y-2 border-b border-[var(--jf-border)] bg-[var(--jf-surface)] px-5 py-3">
+            the trust bullets go back to 12px muted text.
+            `src/lib/landingHeaderMobile.test.ts` pins the phone branch: ONE
+            filled anchor in the header, the two desktop text links hidden below
+            `sm`, the menu button's 44px hit area, and the sheet's contents. */}
+      <nav className="relative flex flex-wrap items-center justify-between gap-y-2 border-b border-[var(--jf-border)] bg-[var(--jf-surface)] px-5 py-3">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--jf-primary)] text-sm font-bold text-white">
             JF
           </div>
-          <span className="text-jf-md font-semibold text-[var(--jf-text)]">
+          {/* The wordmark is what makes the phone row wider than a phone below
+              `sm` (card t_2b2da6a7): mark + wordmark + the 44px CTA + the 44px
+              menu button need 327px of row at 100% text, so from 320px to 336px
+              the wordmark is what would force a second row. Below 21em the mark
+              alone stands in for the brand — the sheet still carries every link
+              and both languages — and the 100% text layout at 390px (24.4em) is
+              untouched. */}
+          <span className="text-jf-md font-semibold text-[var(--jf-text)] max-[21em]:hidden">
             Jom<span className="text-[var(--jf-primary)]">Form</span>
           </span>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+        <div className="flex items-center justify-end gap-x-4 gap-y-1">
           {/* /docs is a full product surface, so it is reachable from the
-              header and not only from the footer. */}
+              header and not only from the footer. Below `sm` it moves into the
+              sheet (the phone row has no room for a 20px text link), so the
+              display is stated for BOTH widths rather than left implicit. */}
           <a
             href="/docs"
-            className="whitespace-nowrap text-sm text-[var(--jf-text-secondary)] hover:text-[var(--jf-text)]"
+            className="hidden whitespace-nowrap text-sm text-[var(--jf-text-secondary)] hover:text-[var(--jf-text)] sm:inline"
           >
             Docs
           </a>
@@ -134,17 +191,103 @@ export default function Landing() {
               hierarchy note above. */}
           <a
             href="/login"
-            className="whitespace-nowrap text-sm text-[var(--jf-muted)] hover:text-[var(--jf-text)]"
+            className="hidden whitespace-nowrap text-sm text-[var(--jf-muted)] hover:text-[var(--jf-text)] sm:inline"
           >
             {t("land.login")}
           </a>
+          {/* `max-sm:` (card t_2b2da6a7): below `sm` this is the row's one
+              filled control and must be a 44px target, so it becomes an
+              inline-flex box with a 44px minimum height (the label is centred
+              in the box, the type is NOT enlarged). At `sm` and up every
+              override drops out and the anchor measures exactly what it did
+              before: 113x36 at 100% text. */}
           <a
             href="/builder"
-            className="whitespace-nowrap rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+            className="whitespace-nowrap rounded-lg bg-[var(--jf-primary)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center"
           >
             {t("land.buildForm")}
           </a>
-          <LangButtons />
+          {/* The wrapper exists only to make the segmented control desktop-only;
+              `shrink-0` keeps the box the same flex item it was before. */}
+          <div className="hidden shrink-0 sm:flex">
+            <LangButtons />
+          </div>
+          {/* MENU BUTTON (card t_2b2da6a7): phone-only. 44x44, and it names the
+              region it discloses; `aria-expanded` carries the state, so the
+              accessible name does not have to change with it. `aria-controls`
+              is safe because the sheet is ALWAYS in the DOM — a conditional
+              render would leave the IDREF dangling and axe's
+              `aria-valid-attr-value` treats that as a serious violation. */}
+          <button
+            type="button"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-[var(--jf-border)] text-[var(--jf-text)] hover:bg-[var(--jf-bg)] sm:hidden"
+            aria-expanded={menuOpen}
+            aria-controls="landing-header-menu"
+            aria-label={t("land.menu")}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              {menuOpen ? <path d="M6 6l12 12M18 6L6 18" /> : <path d="M4 7h16M4 12h16M4 17h16" />}
+            </svg>
+          </button>
+        </div>
+        {/* THE PHONE SHEET (card t_2b2da6a7). A popover, not a page: it is
+            absolutely positioned under the bar, so opening it does not change
+            the header's height (measured: 69px closed and 69px open at 390px).
+            Every row is a `min-h-11` (44px) target and the language choice is
+            two taps from the page — the menu button, then the language — never
+            a settings page. `sm:hidden` keeps it out of the desktop row. */}
+        <div
+          id="landing-header-menu"
+          className={`absolute left-4 right-4 top-full z-50 mt-1 flex-col gap-1 rounded-xl border border-[var(--jf-border)] bg-[var(--jf-surface)] p-2 shadow-lg sm:hidden ${
+            menuOpen ? "flex" : "hidden"
+          }`}
+        >
+          <a
+            href="/docs"
+            className="flex min-h-11 items-center rounded-lg px-3 text-sm text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg)]"
+            onClick={() => setMenuOpen(false)}
+          >
+            Docs
+          </a>
+          <a
+            href="/login"
+            className="flex min-h-11 items-center rounded-lg px-3 text-sm text-[var(--jf-muted)] hover:bg-[var(--jf-bg)]"
+            onClick={() => setMenuOpen(false)}
+          >
+            {t("land.login")}
+          </a>
+          <div className="my-1 h-px bg-[var(--jf-border)]" />
+          {(["en", "ms"] as const).map((l) => (
+            <button
+              key={l}
+              type="button"
+              className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-3 text-sm text-[var(--jf-text)] hover:bg-[var(--jf-bg)]"
+              {...endonymLangProps(l)}
+              aria-pressed={lang === l}
+              aria-label={`${LANG_SHORT[l]} — ${LANG_LABEL[l]}`}
+              title={LANG_LABEL[l]}
+              onClick={() => setLang(l)}
+            >
+              <span {...endonymLangProps(l)}>{LANG_LABEL[l]}</span>
+              <span
+                {...endonymLangProps(l)}
+                className={`rounded px-2 py-0.5 text-xs font-medium ${
+                  lang === l ? "bg-[var(--jf-primary)] text-white" : "text-[var(--jf-muted)]"
+                }`}
+              >
+                {LANG_SHORT[l]}
+              </span>
+            </button>
+          ))}
         </div>
       </nav>
 

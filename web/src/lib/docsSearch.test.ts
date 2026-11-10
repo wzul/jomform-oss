@@ -233,8 +233,13 @@ test("a guide topic reaches its guide", () => {
 });
 
 test("every token must match (a second word narrows, it does not widen)", () => {
+  // The PAIR is data, and it had to change with card t_b5ea9103: the trimmed guides no longer
+  // carry both "donation" and "wedding" on one page (the wedding guide used to name the gallery's
+  // other templates, which was 40 words of padding in a nine-step checklist). "donation amount"
+  // is the same shape of query a reader would type, and it narrows the same way — measured on
+  // this tree: "donation" matches 2 pages, "donation amount" 1.
   const single = flattenHits(searchDocs(DOCS, "donation")).map((hit) => hit.path);
-  const pair = flattenHits(searchDocs(DOCS, "donation wedding")).map((hit) => hit.path);
+  const pair = flattenHits(searchDocs(DOCS, "donation amount")).map((hit) => hit.path);
   assert.ok(pair.length > 0, "the two-word query matched nothing");
   // The second token must EXCLUDE some pages the first token matched: otherwise the
   // scorer is OR-ing, and a reader who narrows the query gets a longer list.
@@ -242,10 +247,10 @@ test("every token must match (a second word narrows, it does not widen)", () => 
     single.some((path) => !pair.includes(path)),
     "the second token excluded nothing — the scorer is OR-ing tokens",
   );
-  for (const hit of flattenHits(searchDocs(DOCS, "donation wedding"))) {
+  for (const hit of flattenHits(searchDocs(DOCS, "donation amount"))) {
     const haystack = [hit.title, hit.description, ...hit.headings, hit.text].join(" ").toLowerCase();
     assert.ok(haystack.includes("donation"), `${hit.path} matched the pair without the first token`);
-    assert.ok(haystack.includes("wedding"), `${hit.path} matched the pair without the second token`);
+    assert.ok(haystack.includes("amount"), `${hit.path} matched the pair without the second token`);
   }
 });
 

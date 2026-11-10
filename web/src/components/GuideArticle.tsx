@@ -37,11 +37,17 @@ export function GuideArticle({ guide }: { guide: Guide }) {
   return (
     <article className="max-w-3xl min-w-0">
       <h1 className="mt-3 text-2xl font-bold text-slate-900 sm:text-3xl">{guide.title}</h1>
-      <p className="mt-2 text-sm text-slate-600">{guide.summary}</p>
-      <p className="mt-3 text-xs text-slate-600">
-        {guide.shots.length} screenshots, one per step, captured from the running product. The red
-        box marks the control you touch at that step.
-      </p>
+      {/* The LEDE. `guide.summary` is the README's first paragraph, and the generator REMOVES
+          that paragraph from `guide.body` — so this is the only place the sentence can render
+          (card t_b5ea9103: it used to render here AND as the body's first paragraph).
+
+          The "N screenshots, one per step, captured from the running product. The red box
+          marks…" line that used to sit here is GONE with it. That was build metadata for the
+          maintainer who captured the shots, not guidance for the merchant reading the guide,
+          and it pushed the first step below the fold on a phone. The red-box convention is
+          stated ONCE, on /docs/guides (src/app/docs/guides/page.tsx), and every guide page
+          inherits it. */}
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">{guide.summary}</p>
 
       <div className="mt-6">
         <Markdown text={guide.body} mode="docs" resolveImage={resolveImage} />

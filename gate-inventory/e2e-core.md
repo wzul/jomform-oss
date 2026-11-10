@@ -12,13 +12,30 @@ file per gate" there).
 
 every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (the
 `a11y` gate) nor a `builder-*` spec (the `e2e-builder` gate) — playwright project
-`feature-core`, **314 tests in 60 files**: sales, chat, forms, form settings,
-settings/workspaces, products, media, templates, deliveries, activity, login,
+`feature-core`, **320 tests in 62 files**: sales, chat, forms, form settings,
+settings/workspaces, products, media, templates, deliveries, activity, landing, login,
 session, profile, docs and the cross-page presentation specs. The figure grew by
-card `t_f11d676f` / PR #1682, whose `web/e2e/settings-chip-mobile-actions.spec.ts`
-is the 60th FILE and holds 5 arms on the phone `/settings` screen — its sticky Save
-bar, its tab strip's "it continues" cue and edge arrows, and the twelve payment
-methods as labelled checkboxes. What each arm holds is under History.
+card `t_2b2da6a7`, whose `web/e2e/landing-header-mobile.spec.ts` is the 61st FILE and
+holds 5 arms on the landing page's header at a real phone viewport (390x844,
+isMobile/hasTouch/dpr 2): header height <= 72px with every control on one baseline,
+no visible control under 44px, exactly one filled primary and it is `/builder`, the
+phone sheet opening onto Docs + Log in + both languages as 44px rows (and picking
+Bahasa Melayu really switching `html[lang]` and the CTA label), Escape closing it, the
+1280px row still measuring Docs 34x20 · Log in 41x20 · CTA 113x36 · EN/BM 44x44 at
+71px tall, and the 320px raised-root arm still not panning. Measured with
+`cd web && ./node_modules/.bin/playwright test --project=feature-core --list`, which
+read **314 in 60** on this same tree before that spec existed (measured, not inferred),
+so the delta is exactly its 1 file and 5 arms. The figure before it was **314 tests in
+60 files**, which card `t_f11d676f` / PR #1682 grew with
+`web/e2e/settings-chip-mobile-actions.spec.ts` — the 60th FILE, 5 arms on the phone
+`/settings` screen: its sticky Save bar, its tab strip's "it continues" cue and edge
+arrows, and the twelve payment methods as labelled checkboxes. Card `t_b5ea9103` put
+the NEWER figure on top of that, `web/e2e/docs-guide-fold.spec.ts` as the 62nd FILE:
+one arm over all eight screenshot guides at 390x844 — each page's word count against
+700, the y-offset of its first step's heading against the 844px first screen, the
+computed `white-space` of its paragraphs and list items, and its lede sentence exactly
+once. The figure before it was **319 tests in 61 files**; what the arm holds is under
+History.
 
 It runs CONCURRENTLY with `e2e-builder` and `a11y`, each on its own claimed port with
 its own `next start` (card `t_ec2aac42`; see `gate-inventory/e2e-builder.md` for the
@@ -55,6 +72,17 @@ reds the scoped run; the same regression in an area it does not claim is caught 
 the full run and by nothing else).
 
 ## History
+
+**320 tests in 62 files** on the tree that merges card `t_b5ea9103` onto `origin/main`
+`494ab6bf1` (the landing-header tree), read with `cd web && ./node_modules/.bin/playwright
+test --project=feature-core --list`. The SAME command reads **319 in 61** on that tree
+with `web/e2e/docs-guide-fold.spec.ts` moved aside — BOTH measured, so the delta is
+exactly the 62nd FILE and its one arm over the eight screenshot guides at 390x844
+(`/docs/guides/<slug>`): each page's `innerText` word count against 700, the first
+step's heading y-offset against the 844px first screen, the computed `white-space` of
+every paragraph and list item (must be `normal`), and the guide's lede sentence
+appearing exactly once — the four readings card t_b5ea9103 was verified on after the
+intro stopped being printed twice.
 
 **314 tests in 60 files** on the tree that carries card `t_f11d676f` / PR #1682
 (`origin/main` `3d1e30ff` with that PR merged and the retired `gate-inventory/e2e.md`

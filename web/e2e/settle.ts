@@ -41,6 +41,14 @@ export type Settled = {
   navLinks: number;
   hasMain: boolean;
   bodyText: number;
+  /** The selector `anchor` asked for, or `""` when the caller did not ask for one. */
+  anchor: string;
+  /**
+   * True when the anchor selector matched a node — always true when no anchor was
+   * asked for. A caller that DID ask for one and reads false here is looking at a
+   * page that is missing the panel it is about to measure (the ceiling was hit).
+   */
+  anchored: boolean;
   /** How long the poll ran before it returned — logged by callers on failure. */
   waitedMs: number;
   /** False when the conditions were met; true when the ceiling was reached. */
@@ -65,6 +73,21 @@ export type SettleOptions = {
   mainCountsAsChrome?: boolean;
   /** Visible text required, so a loading shell is not a settled page. */
   bodyFloor?: number;
+  /**
+   * A CSS selector for content that is NOT the shell: a panel the route paints
+   * only AFTER it has resolved something the shell does not wait for (card
+   * t_1bd2b132 — `/settings` resolves the session ROLE, and the CHIP tab, with
+   * the twelve payment-method controls, mounts one frame after the nav is on
+   * the page). Without this the wait is satisfied by the pre-role frame and the
+   * caller measures a page that does not contain what it exists to judge: the
+   * `/settings` arm then counted 15 nav+initial glyphs, exactly its census
+   * floor, and passed over a payment grid it never saw.
+   *
+   * A selector that never matches reaches the ceiling and reports
+   * `anchored: false`, so the caller's own assertion goes RED naming the state
+   * it saw instead of measuring nothing and passing.
+   */
+  anchor?: string;
   timeoutMs?: number;
 };
 
@@ -72,6 +95,11 @@ export type SettleOptions = {
  * Poll until the page is really rendered, or the ceiling is reached. Never throws:
  * the returned record is what the caller asserts on, so the failure lands on the
  * caller's own message ("the shell did not render") rather than on a timeout.
+ *
+ * When `anchor` is set, the record's `anchored` says whether that selector was on
+ * the page (and painted) at the frame the wait settled on — a caller that asked for
+ * one and reads false has a page WITHOUT the panel it is about to measure, which is
+ * the state this option exists to make visible instead of silently passing.
  *
  * `bodyText` here is the TRIMMED innerText length — a coarse "there is a page
  * here" guard, deliberately without the whitespace collapsing the scan itself
@@ -83,20 +111,35 @@ export async function waitForSettled(page: Page, opts: SettleOptions): Promise<S
   const bodyFloor = opts.bodyFloor ?? 200;
   const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
   const mainCounts = opts.mainCountsAsChrome === true;
+  const anchor = opts.anchor ?? "";
 
   const probe = `(async () => {
     const wantsShell = ${JSON.stringify(opts.wantsShell)};
     const mainCounts = ${JSON.stringify(mainCounts)};
     const navFloor = ${navFloor};
     const bodyFloor = ${bodyFloor};
+    const anchor = ${JSON.stringify(anchor)};
     const deadline = Date.now() + ${timeoutMs};
     const started = Date.now();
+    // The anchor has to be PAINTED, not merely present: a panel left in the DOM
+    // with \`display: none\` is exactly the state a scan over it would measure as
+    // nothing, so \`getClientRects().length\` is the test. A selector the browser
+    // cannot parse is reported as not matched, never thrown out of the probe.
+    const anchored = () => {
+      if (anchor === "") return true;
+      try {
+        const el = document.querySelector(anchor);
+        return !!el && el.getClientRects().length > 0;
+      } catch (e) {
+        return false;
+      }
+    };
     // React marks the nodes it owns; read on a PAGE-OWNED node so the wait cannot
     // be satisfied by the Shell hydrating while the route's own body is still a
     // loading state.
     const taken = (el) =>
       !!el && Object.keys(el).some((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactProps$"));
-    let last = { hydrated: false, navLinks: 0, hasMain: false, bodyText: 0 };
+    let last = { hydrated: false, navLinks: 0, hasMain: false, bodyText: 0, anchor: anchor, anchored: anchor === "" };
     while (Date.now() < deadline) {
       const main = document.querySelector("#main-content") || document.querySelector("main");
       const read = {
@@ -104,10 +147,12 @@ export async function waitForSettled(page: Page, opts: SettleOptions): Promise<S
         navLinks: document.querySelectorAll("nav a[href]").length,
         hasMain: !!document.querySelector("main"),
         bodyText: (document.body.innerText || "").trim().length,
+        anchor: anchor,
+        anchored: anchored(),
       };
       last = read;
       const rendered = wantsShell ? read.navLinks >= navFloor || (mainCounts && read.hasMain) : read.hasMain;
-      if (read.hydrated && rendered && read.bodyText >= bodyFloor) {
+      if (read.hydrated && rendered && read.bodyText >= bodyFloor && read.anchored) {
         return { ...read, waitedMs: Date.now() - started, timedOut: false };
       }
       await new Promise((r) => setTimeout(r, 50));
@@ -122,7 +167,8 @@ export async function waitForSettled(page: Page, opts: SettleOptions): Promise<S
 export function settledLine(what: string, s: Settled): string {
   return (
     `[settle] ${what} waited=${s.waitedMs}ms timedOut=${s.timedOut} hydrated=${s.hydrated} ` +
-    `navLinks=${s.navLinks} hasMain=${s.hasMain} bodyText=${s.bodyText}`
+    `navLinks=${s.navLinks} hasMain=${s.hasMain} bodyText=${s.bodyText} ` +
+    `anchor=${s.anchor === "" ? "-" : s.anchor} anchored=${s.anchored}`
   );
 }
 

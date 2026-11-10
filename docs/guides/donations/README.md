@@ -1,97 +1,72 @@
 # Collect donations: setup guide
 
-A step-by-step guide to taking donations with a JomForm payment form. Every screenshot below was
-captured from the running product; the red box marks the one control you touch at that step.
+Take donations with a JomForm payment form in eight steps, from your CHIP keys to the donor page.
 
-**What this does:** a donation is a normal payment form, and an amount is a **product**. There are
-two shapes of donation product:
-
-- **Fixed denominations**: one product per amount you accept (`Donation RM10`, `Donation RM50`,
-  `Donation RM100`), and the donor ticks the one they want. Steps 2–8 below walk this shape.
-- **Pay what you want**: a single product set to *Pay what you want (donation)*. The form shows the
-  donor an amount field instead of a price, and the amount is checked against the limits you set.
-  See the first two Notes.
-
-Either way the money lands in the same sale list and receipt flow as any other paid form.
+**What this does:** a donation is a normal payment form and an amount is a **product** — either
+fixed tiers, or one *Pay what you want* product the donor prices.
 
 ## 1. Connect CHIP Collect in Settings
 
 ![Settings with the CHIP tab open and the Brand ID field boxed](01-settings-chip.png)
 
-Settings → **CHIP**. Paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal, pick the **Mode** the key was created in there (Test or Live), and save. The mode is a label you choose, because the key itself carries no hint of which one it is. That save is what turns the form's pay button into a working payment.
+Settings → **CHIP**: paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal, pick
+the **Mode** the key was created in, and save. Nothing can be charged until this is done.
 
 ## 2. Add your first donation amount in Products
 
 ![Products page with the add row filled in and the Add product button boxed](02-products-add.png)
 
-Products → type the name (**Donation RM10**), the price (**10.00**), leave **Type** on *One-time*,
-then **Add product**. The price you type is exactly what the donor pays for that tier.
+Products → name it **Donation RM10**, set the price **10.00**, leave **Type** on *One-time*, then
+**Add product**.
 
 ## 3. Add the other amounts
 
 ![Product list with three donation tiers and the RM50 price cell boxed](03-tiers.png)
 
-Repeat step 2 for **Donation RM50** and **Donation RM100**. Each tier is its own product, and the
-price cell is the amount a donor gives when they pick that tier.
+Repeat step 2 for **Donation RM50** and **Donation RM100**. Each tier is its own product, and its
+price is what a donor gives when they pick it.
 
 ## 4. Start from the Donation template
 
 ![Template gallery with the Donation card's Use template button boxed](04-donation-template.png)
 
-Forms → **New form** opens the template gallery → **Use template** on *Donation*. That gives you a
-payment form already carrying a product block, name, email and an optional message.
+Forms → **New form** → **Use template** on *Donation*, which arrives as a payment form with a
+product block, name, email and an optional message.
 
 ## 5. Point each Product block at one amount
 
 ![Builder with three product blocks and the block's Product dropdown boxed](05-product-block.png)
 
-Add one **Product** block per amount. The quickest is the block's **⋯ → Duplicate** menu on the block
-the template gave you; *Pricing Fields → Product* in the palette also inserts one. Then select a
-block and choose its tier in the **Product** dropdown. The buyer sees that product's name and price
-on the form, and a pay-what-you-want product shows the amount field instead (see Notes).
+Add one **Product** block per amount (**⋯ → Duplicate** on the block the template gave you) and
+choose its tier in **Product**.
 
 ## 6. Publish
 
 ![Builder toolbar with the Publish button boxed](06-publish.png)
 
-**Publish** writes the form and puts it live. Until you click it the toolbar shows the unsaved state,
-and the form stays a draft that no one else can open.
+**Publish** puts the form live; until you click it the form stays a draft nobody else can open.
 
 ## 7. Copy the donation link
 
 ![Live banner with the Copy link button boxed](07-live-link.png)
 
-The green *Your form is live* banner confirms the publish and holds the donor URL. **Copy link** (or
-**Open form**) is what you paste into WhatsApp, a poster QR code, or your website.
+The green *Your form is live* banner holds the donor URL, and **Copy link** is what you paste into
+WhatsApp, a poster QR code, or your website.
 
 ## 8. What the donor sees
 
 ![Buyer page with the RM50 tier ticked and the total reading RM50.00](08-buyer.png)
 
-The donor ticks one amount (RM50.00 here), the total updates to **RM50.00**, and *Quantity* lets them
-give a multiple of a tier. After filling name and email they proceed to payment.
+The donor ticks one amount, the total follows it, and *Quantity* lets them give a multiple of a tier
+before they proceed to payment.
 
 ## Notes
 
-- **A product's price can be fixed or chosen by the donor.** A product's type is `one_time`,
-  `subscription` or `custom_amount`. The tiers in steps 2–3 are `one_time` products, one price each.
-  A `custom_amount` product (*Pay what you want (donation)*) has no fixed asking price: the form
-  renders an amount field instead of a price. The **server** checks the amount the donor typed
-  against that product's **Minimum amount** (never below RM1.00), its optional **Maximum amount**
-  and its optional **Suggested amount** before it prices the sale. An amount outside those limits is
-  refused with a readable reason and nothing is charged. An accepted one becomes the line item's
-  price, and the sale appears under **Sales** with that amount. The price stored on such a product
-  is for display only: the suggested amount when one is set, else the minimum.
-- **Where each shape lives.** The Products page add row in step 2 creates *One-time* products, which
-  is the fixed-denomination walkthrough in steps 2–8. The pay-what-you-want type is chosen on the
-  product editor page (`/products/new`, or `/products/<id>/edit`).
-- **A new amount later.** For a fixed tier: step 2 plus one more **Product** block in the builder,
-  then Publish again. For a pay-what-you-want product: a change to that product's minimum, maximum
-  or suggested amount.
-- **Nothing can be charged until step 1 is done.** On a workspace with no CHIP credentials the pay
-  button answers *"We could not start the payment, so nothing was charged"* with a sale reference.
-  That sale shows up under **Sales** as `failed`, and the donation is never silently collected as a
-  free response.
-- **Each donation is a sale from the first click.** The sale appears under **Sales** with its
-  reference (`JF-…`), the donor's name and email, what they picked and the amount. Once CHIP
-  confirms the payment the sale moves to `paid`, and the donor is emailed the workspace's receipt.
+- **Pay what you want is one product, not a tier.** A product of type `custom_amount`
+  (*Pay what you want (donation)*) renders an amount field instead of a price; the server checks the
+  amount against that product's **Minimum amount** (never below RM1.00), optional **Maximum** and
+  optional **Suggested** amount before pricing the sale. The type is chosen on the product editor at
+  `/products/new`.
+- **Every donation is a sale from the first click.** It appears under **Sales** with a `JF-…`
+  reference and moves to `paid` when CHIP confirms it; a workspace with no CHIP credentials produces
+  a `failed` sale with its reason, never a free response.

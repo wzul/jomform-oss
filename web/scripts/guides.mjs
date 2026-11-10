@@ -27,7 +27,11 @@
 //   * every PNG in the folder is referenced by the README — an unreferenced screenshot is a
 //     step whose image never renders, which is the defect this card exists to prevent;
 //   * the README starts with a title (`# …`), which becomes the page's <h1> and is removed
-//     from the body (so the page does not render two h1s).
+//     from the body (so the page does not render two h1s);
+//   * the README's FIRST PARAGRAPH becomes the page's lede (`summary`) and is removed from
+//     the body, so the sentence has ONE owner and cannot be printed twice (card t_b5ea9103);
+//     it must be a single sentence of at most SUMMARY_MAX characters — the generator refuses
+//     a longer one instead of cutting it with a "…" in the middle of the page's intro.
 //
 // Run:  node scripts/guides.mjs            (write the generated files)
 //       node scripts/guides.mjs --check    (write nothing; exit 1 if the tree is out of date)
@@ -62,6 +66,13 @@ function pngSize(buf, file) {
   }
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }
+
+/**
+ * The cap on the lede paragraph, in characters. It is the same 200 `plainSummary` cuts at —
+ * but the cap is ENFORCED (the generator fails) rather than paid for with a "…" in the middle
+ * of the guide's opening sentence.
+ */
+const SUMMARY_MAX = 200;
 
 /** Plain text of a markdown paragraph, for the index page's one-line summary. */
 function plainSummary(md) {
@@ -135,12 +146,41 @@ function readGuide(slug) {
     }
   }
 
-  const summaryPara = body
-    .split("\n\n")
-    .map((p) => p.trim())
-    .find((p) => p !== "" && !p.startsWith("#") && !p.startsWith("!["));
+  // ONE OWNER FOR THE SUMMARY (card t_b5ea9103). The README's first paragraph is the
+  // guide's LEDE: the page renders it ONCE, from `summary` (GuideArticle), and the
+  // renderer must not print it a second time out of `body` — which is exactly what
+  // happened before this card: the live page showed the same sentence twice, once as
+  // `{guide.summary}` and once as the body's first paragraph. So the paragraph is
+  // REMOVED from `body` here, where the two halves are split, and not hidden with CSS
+  // or deduplicated in the component: one sentence, one owner, and the generated
+  // module cannot carry it twice.
+  //
+  // The lede is REFUSED rather than truncated when it is too long. `plainSummary` used
+  // to cut at SUMMARY_MAX characters and end on "…", and the page rendered that cut
+  // sentence at the top of the guide (qr-table-ordering and tuition-class shipped with
+  // a dangling "…"). A lede is one sentence; keep it one.
+  const paragraphs = body.split("\n\n");
+  const ledeAt = paragraphs.findIndex(
+    (p) => p.trim() !== "" && !p.trim().startsWith("#") && !p.trim().startsWith("!["),
+  );
+  const lede = ledeAt === -1 ? "" : paragraphs[ledeAt].trim().replace(/\s+/g, " ");
+  if (lede === "") {
+    fail(
+      `docs/guides/${slug}/README.md: no lede paragraph after the title — the page renders ` +
+        `the first paragraph as its intro, so the guide would open with no summary.`,
+    );
+  } else if (lede.length > SUMMARY_MAX) {
+    fail(
+      `docs/guides/${slug}/README.md: the lede paragraph is ${lede.length} characters, over the ` +
+        `${SUMMARY_MAX}-character limit. The page renders this paragraph as the guide's intro and ` +
+        `as its meta description, so it has to be ONE sentence — trim it rather than let it be cut.`,
+    );
+  } else {
+    paragraphs.splice(ledeAt, 1);
+    body = `${paragraphs.join("\n\n").replace(/^\n+/, "").replace(/\s+$/, "")}\n`;
+  }
 
-  return { slug, title, summary: plainSummary(summaryPara ?? ""), body, shots };
+  return { slug, title, summary: plainSummary(lede), body, shots };
 }
 
 // ── read the source guides ───────────────────────────────────────────────────
