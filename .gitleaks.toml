@@ -14,11 +14,12 @@
 # [extend] useDefault = true all three are caught (rc=1), and the allowlists
 # below still suppress the historical false positives.
 #
-# TWO ALLOWLISTS, and each says what it is scoped to. They are separate
+# THREE ALLOWLISTS, and each says what it is scoped to. They are separate
 # `[[allowlists]]` entries rather than one because a `regexTarget` applies to the
-# whole entry it sits in: the path entry's regexes are matched against the found
-# SECRET (their default), and the fixture entry's regex is matched against the
-# whole LINE. Merging them would silently change what the existing entries match.
+# whole entry it sits in: the path and landing-demo entries' regexes are matched
+# against the found SECRET (their default), and the fixture entry's regex is
+# matched against the whole LINE. Merging them would silently change what the
+# existing entries match.
 [extend]
   useDefault = true
 
@@ -82,4 +83,43 @@
   regexTarget = "line"
   regexes = [
     '''JF_CF_PURGE_TOKEN=\s+JF_CF_PURGE_ZONE_ID=''',
+  ]
+
+# ---------------------------------------------------------------------------
+# 3. The landing-demo picker's dictionary KEYS, scoped to the SECRET.
+#
+# `web/src/components/i18nDict.ts` lists the marketing hero's demo payment
+# picker as `{ id: "fpx_b2b1", labelKey: "land.payfpxb2b1", descKey:
+# "land.payfpxb2b1desc" }`. `generic-api-key` reads `labelKey:` / `descKey:` as a
+# credential assignment and the dictionary KEY as its value, so the two keys are
+# reported as secrets: `land.payfpxb2b1` at entropy 3.51 and `…desc` at 3.83,
+# both above the rule's threshold. Nothing was leaked — a translation key is the
+# name of a string, and the strings themselves live in the dictionaries.
+#
+# WHY THE FIX IS HERE AND NOT IN THE DICTIONARY. The rule is entropy-based, not
+# shape-based: `land.payfpx` / `land.payfpxdesc` (the FPX B2C row that has been on
+# `main` since the picker was added) sit under the threshold, and renaming a key
+# only moves it back under until someone adds another letter or digit. Measured
+# on the branch that introduced the B2B1 row, same config and same rule, one
+# variable: `origin/main`'s copy of the file scans clean, the branch's reds on
+# exactly those two keys. A path entry would "fix" it too, and that is why it is
+# NOT used: it would stop a real secret in `web/src/` — the dashboard, by far the
+# largest surface in this repo — from ever being reported, which is the reason
+# the entries above are pinned to test files.
+#
+# WHAT THIS ENTRY CAN AND CANNOT MATCH. gitleaks matches a global allowlist's
+# `regexes` against the found SECRET by default (the `regexTarget` accepted
+# values are `secret` — the default — `match` and `line`), and it SEARCHES rather
+# than anchoring, so the pattern is anchored here at both ends: it matches only a
+# secret whose ENTIRE value is `land.pay<lowercase-alnum>` or
+# `land.pay<lowercase-alnum>desc`. A real credential — mixed case, a `_`/`-`, a
+# `:`-separated prefix, or any value longer than a dictionary key — cannot have
+# that shape, and one committed in the same file still reports. Proven both
+# ways, on the same tree: the scan goes green with this entry, and a real-shaped
+# key dropped into `web/src/` still reds the gate naming that file.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+  description = "landing-demo dictionary keys: the labelKey/descKey VALUE is an i18n key, not a credential"
+  regexes = [
+    '''^land\.pay[a-z0-9]+(desc)?$''',
   ]

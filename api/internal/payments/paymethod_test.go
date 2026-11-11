@@ -24,32 +24,45 @@ import (
 func TestPreferredParamMapping(t *testing.T) {
 	cases := []struct {
 		name string
-		ids  []string
-		want string
-		ok   bool
+		// group is the ROW the value is being resolved for. It is optional: an
+		// empty group means "the group the first identifier belongs to", which is
+		// how every pre-t_1d0198e3 case reads.
+		group string
+		ids   []string
+		want  string
+		ok    bool
 	}{
-		{"fpx", []string{"fpx"}, "fpx", true},
-		{"fpx b2b1", []string{"fpx_b2b1"}, "fpx_b2b1", true},
-		{"fpx prefers fpx over b2b1", []string{"fpx_b2b1", "fpx"}, "fpx", true},
-		{"card networks collapse to card", []string{"visa", "mastercard", "maestro"}, "card", true},
-		{"card from the aggregator id alone", []string{"card"}, "card", true},
-		{"dnqr", []string{"dnqr"}, "dnqr", true},
-		{"duitnow_qr is the legacy identifier", []string{"duitnow_qr"}, "duitnow_qr", true},
-		{"dnqr wins over duitnow_qr", []string{"duitnow_qr", "dnqr"}, "dnqr", true},
-		{"shopee_pay", []string{"shopee_pay"}, "shopee_pay", true},
-		{"legacy razer_shopeepay is the same group", []string{"razer_shopeepay"}, "razer_shopeepay", true},
-		{"shopee_pay wins over the legacy key", []string{"razer_shopeepay", "shopee_pay"}, "shopee_pay", true},
+		{"fpx", "", []string{"fpx"}, "fpx", true},
+		{"fpx b2b1", "", []string{"fpx_b2b1"}, "fpx_b2b1", true},
+		// Card t_1d0198e3: the two FPX products are separate groups, so a row
+		// holding both identifiers still names ITS OWN one — the FPX B2C row can
+		// never send preferred=fpx_b2b1 (or the buyer would land on B2B1), and the
+		// B2B1 row can never send preferred=fpx.
+		{"fpx row with both identifiers still prefers fpx", PayMethodFPX, []string{"fpx_b2b1", "fpx"}, "fpx", true},
+		{"b2b1 row with both identifiers still prefers b2b1", PayMethodFPXB2B1, []string{"fpx_b2b1", "fpx"}, "fpx_b2b1", true},
+		{"card networks collapse to card", "", []string{"visa", "mastercard", "maestro"}, "card", true},
+		{"card from the aggregator id alone", "", []string{"card"}, "card", true},
+		{"dnqr", "", []string{"dnqr"}, "dnqr", true},
+		{"duitnow_qr is the legacy identifier", "", []string{"duitnow_qr"}, "duitnow_qr", true},
+		{"dnqr wins over duitnow_qr", "", []string{"duitnow_qr", "dnqr"}, "dnqr", true},
+		{"shopee_pay", "", []string{"shopee_pay"}, "shopee_pay", true},
+		{"legacy razer_shopeepay is the same group", "", []string{"razer_shopeepay"}, "razer_shopeepay", true},
+		{"shopee_pay wins over the legacy key", "", []string{"razer_shopeepay", "shopee_pay"}, "shopee_pay", true},
 		// The wallets that need razer_bank_code=<display name> have no value
 		// this checkout can name, so it sends none (PITFALL 2): the narrowed
 		// whitelist is the lever.
-		{"grabpay has no honest preferred value", []string{"razer_grabpay"}, "", false},
-		{"boost has no honest preferred value", []string{"boost"}, "", false},
+		{"grabpay has no honest preferred value", "", []string{"razer_grabpay"}, "", false},
+		{"boost has no honest preferred value", "", []string{"boost"}, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := PreferredParam(PayMethodGroupOf(tc.ids[0]), tc.ids)
+			group := tc.group
+			if group == "" {
+				group = PayMethodGroupOf(tc.ids[0])
+			}
+			got, ok := PreferredParam(group, tc.ids)
 			if ok != tc.ok || got != tc.want {
-				t.Fatalf("PreferredParam(%q, %v) = (%q,%v), want (%q,%v)", tc.ids[0], tc.ids, got, ok, tc.want, tc.ok)
+				t.Fatalf("PreferredParam(%q, %v) = (%q,%v), want (%q,%v)", group, tc.ids, got, ok, tc.want, tc.ok)
 			}
 		})
 	}
@@ -64,8 +77,11 @@ func PayMethodGroupOf(id string) string {
 
 func TestPayMethodGroupMapping(t *testing.T) {
 	want := map[string]string{
-		"fpx":             PayMethodFPX,
-		"fpx_b2b1":        PayMethodFPX,
+		"fpx": PayMethodFPX,
+		// Card t_1d0198e3: FPX B2B1 is its OWN group, not a member of the FPX
+		// group — sharing one group is what made the picker ask the buyer
+		// B2C-or-B2B1 once and CHIP ask again.
+		"fpx_b2b1":        PayMethodFPXB2B1,
 		"card":            PayMethodCard,
 		"visa":            PayMethodCard,
 		"mastercard":      PayMethodCard,
@@ -162,10 +178,27 @@ func TestNarrowWhitelist(t *testing.T) {
 		t.Fatalf("ewallet aggregator must expand to its identifiers, got %v", got)
 	}
 	// fpx is an identifier, not an aggregator: narrowing must NOT add fpx_b2b1,
-	// which is a different product the merchant did not enable.
-	got = NarrowWhitelist(PayMethodFPX, []string{"fpx"})
+	// which is a different product (and a different fee) the merchant did not
+	// enable — card t_1d0198e3.
+	got = NarrowWhitelist(PayMethodFPX, []string{"fpx", "fpx_b2b1"})
 	if strings.Join(got, ",") != "fpx" {
 		t.Fatalf("fpx narrowing = %v", got)
+	}
+	// ...and the FPX B2B1 group narrows to ITS identifier alone, so CHIP cannot
+	// offer the personal product to a corporate payer.
+	got = NarrowWhitelist(PayMethodFPXB2B1, []string{"fpx", "fpx_b2b1"})
+	if strings.Join(got, ",") != "fpx_b2b1" {
+		t.Fatalf("fpx_b2b1 narrowing = %v", got)
+	}
+	// A whitelist holding only the other FPX product does not enable this one.
+	if got := NarrowWhitelist(PayMethodFPXB2B1, []string{"fpx"}); len(got) != 0 {
+		t.Fatalf("fpx_b2b1 must not be reachable from a B2C-only whitelist, got %v", got)
+	}
+	// An unrestricted checkout narrows FPX B2B1 to that identifier too, never to
+	// the whole FPX family.
+	got = NarrowWhitelist(PayMethodFPXB2B1, nil)
+	if strings.Join(got, ",") != "fpx_b2b1" {
+		t.Fatalf("empty whitelist b2b1 narrowing = %v", got)
 	}
 	// An unrestricted checkout (empty whitelist) narrows to the whole group;
 	// leaving it empty would let CHIP offer every method again.
@@ -192,9 +225,9 @@ func TestPayOptionsFromWhitelist(t *testing.T) {
 		t.Fatalf("e-wallet preferred = %q", opts[1].Preferred)
 	}
 	// An unrestricted checkout offers every group; the buyer's pick is what
-	// narrows the request.
-	if got := PayOptions(nil); len(got) != 4 {
-		t.Fatalf("empty whitelist must offer four groups, got %d", len(got))
+	// narrows the request. Card t_1d0198e3 made FPX two of those groups.
+	if got := PayOptions(nil); len(got) != 5 {
+		t.Fatalf("empty whitelist must offer five groups, got %d", len(got))
 	}
 	// card expands to its networks, and the redirect value stays `card`.
 	opts = PayOptions([]string{"card"})
@@ -223,9 +256,70 @@ func TestValidatePayMethod(t *testing.T) {
 			t.Fatalf("ValidatePayMethod(%q) = %v, want ErrPayMethodUnavailable", bad, err)
 		}
 	}
+	// Card t_1d0198e3: a B2C-only whitelist must refuse the corporate product —
+	// an existing ["fpx"] keeps meaning FPX B2C, never silently B2B1.
+	if err := ValidatePayMethod("fpx_b2b1", []string{"fpx"}); !errors.Is(err, ErrPayMethodUnavailable) {
+		t.Fatalf("ValidatePayMethod(fpx_b2b1, [fpx]) = %v, want ErrPayMethodUnavailable", err)
+	}
+	// Enabling both makes both choices valid.
+	if err := ValidatePayMethod("fpx_b2b1", []string{"fpx", "fpx_b2b1"}); err != nil {
+		t.Fatalf("both FPX products enabled must accept fpx_b2b1: %v", err)
+	}
 	// An unrestricted checkout enables everything it can label.
 	if err := ValidatePayMethod("duitnow_qr", nil); err != nil {
 		t.Fatalf("an empty whitelist must accept a group we can label: %v", err)
+	}
+}
+
+// TestFPXIsTwoBuyerChoices is the core of card t_1d0198e3: the picker offers FPX
+// B2C and FPX B2B1 as TWO rows, each carrying only its own CHIP identifier and its
+// own ?preferred= value.
+//
+// BITE PROOF (run and observed on 2026-11-11): fold `fpx_b2b1` back into
+// payMethodIdentifiers[PayMethodFPX] and these go RED —
+//
+//	TestFPXIsTwoBuyerChoices          "first FPX row … wanted the B2C product only"
+//	TestNarrowWhitelist               "fpx narrowing = [fpx fpx_b2b1]"
+//	TestPayMethodNarrowsWhitelistAndPrefersFPX (route level)
+//	TestB2B1ChoiceNarrowsToB2B1Alone  "whitelist = fpx,fpx_b2b1, want only fpx_b2b1"
+//	TestPickerHidesB2B1WhenChipDoesNotListIt "posting b2b1 status = 201, want 400"
+//
+// The two ROWS still render under that fold — the regression is the narrowing:
+// the purchase keeps offering the other product, which is exactly what lets CHIP
+// ask the buyer B2C-or-B2B1 again after the picker already asked.
+func TestFPXIsTwoBuyerChoices(t *testing.T) {
+	var fpx []PayOption
+	for _, o := range PayOptions(nil) {
+		if IsFPXPayMethod(o.Method) {
+			fpx = append(fpx, o)
+		}
+	}
+	if len(fpx) != 2 {
+		t.Fatalf("an unrestricted checkout must offer FPX B2C and FPX B2B1 as two rows, got %d: %+v", len(fpx), fpx)
+	}
+	if fpx[0].Method != PayMethodFPX || strings.Join(fpx[0].Identifiers, ",") != "fpx" || fpx[0].Preferred != "fpx" {
+		t.Fatalf("first FPX row = %+v, want the B2C product only (fpx/fpx)", fpx[0])
+	}
+	if fpx[1].Method != PayMethodFPXB2B1 || strings.Join(fpx[1].Identifiers, ",") != "fpx_b2b1" || fpx[1].Preferred != "fpx_b2b1" {
+		t.Fatalf("second FPX row = %+v, want the B2B1 product only (fpx_b2b1/fpx_b2b1)", fpx[1])
+	}
+	// A merchant who ticked only one product sees only that row (the migration
+	// rule: an existing ["fpx"] keeps working and does NOT become B2B1).
+	onlyB2C := PayOptions([]string{"fpx"})
+	if len(onlyB2C) != 1 || onlyB2C[0].Method != PayMethodFPX {
+		t.Fatalf(`whitelist ["fpx"] must render exactly the FPX B2C row, got %+v`, onlyB2C)
+	}
+	onlyB2B1 := PayOptions([]string{"fpx_b2b1"})
+	if len(onlyB2B1) != 1 || onlyB2B1[0].Method != PayMethodFPXB2B1 {
+		t.Fatalf(`whitelist ["fpx_b2b1"] must render exactly the FPX B2B1 row, got %+v`, onlyB2B1)
+	}
+	// Picking one narrows the CHIP request to that identifier alone, so CHIP
+	// cannot offer the other product on its own page.
+	if got := NarrowWhitelist(PayMethodFPXB2B1, []string{"fpx", "fpx_b2b1"}); strings.Join(got, ",") != "fpx_b2b1" {
+		t.Fatalf("B2B1 purchase whitelist = %v, want only fpx_b2b1", got)
+	}
+	if got := NarrowWhitelist(PayMethodFPX, []string{"fpx", "fpx_b2b1"}); strings.Join(got, ",") != "fpx" {
+		t.Fatalf("B2C purchase whitelist = %v, want only fpx", got)
 	}
 }
 

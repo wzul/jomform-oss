@@ -219,7 +219,7 @@ Parity checklist (dashboard → MCP):
 - Custom domains → `list_domains`, `add_domain`, `verify_domain`,
   `remove_domain`, `auto_cname_domain`
 - Tracking → `get_tracking`, `set_tracking`
-- CHIP account settings → `get_chip_settings`, `set_chip_settings`
+- CHIP account settings → `get_chip_settings`, `set_chip_settings`, `test_chip_connection`
 - Profile avatar → `set_avatar`
 - Profile language (the dashboard UI language, stored per-profile on `users.lang`) →
   `update_profile_language`.

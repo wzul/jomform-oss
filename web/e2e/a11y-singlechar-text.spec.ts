@@ -375,8 +375,8 @@ const ROUTES: Route[] = [
       // order. If a method is added or renamed, this list is what says the scan is
       // still looking at the grid — update it WITH the source change.
       labels: [
-        "FPX",
-        "FPX B2B1",
+        "FPX — personal online banking (B2C)",
+        "FPX B2B1 — corporate online banking",
         "Card (Visa, Mastercard, Maestro)",
         "Google Pay",
         "Apple Pay",

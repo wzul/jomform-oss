@@ -303,6 +303,7 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("PUT /v1/rest/settings/chip", h.authed(h.setChipCreds))
 	mux.Handle("GET /v1/rest/settings/chip", h.authed(h.chipStatus))
 	mux.Handle("DELETE /v1/rest/settings/chip", h.authed(h.deleteChipCreds))
+	mux.Handle("POST /v1/rest/settings/chip/test", h.authed(h.testChipCreds))
 	mux.Handle("PUT /v1/rest/settings/custom-domain", h.authed(h.setCustomDomain))
 	mux.Handle("GET /v1/rest/settings/custom-domain", h.authed(h.getCustomDomain))
 	mux.Handle("PUT /v1/rest/settings/einvoice", h.authed(h.putEinvoicing))

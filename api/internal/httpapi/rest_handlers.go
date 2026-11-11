@@ -2097,10 +2097,18 @@ type saleRow struct {
 	// Card t_135c3c72: the processing fee the BUYER bore, and the rate that was
 	// in force when they paid. Frozen on the sale, so a later rate change cannot
 	// rewrite what a past buyer was charged. FeeSen is part of TotalSen.
-	FeeSen       int64     `json:"fee_sen,omitempty"`
-	FeeMethod    string    `json:"fee_method,omitempty"`
-	FeeFixedSen  int64     `json:"fee_fixed_sen,omitempty"`
-	FeePercentBp int64     `json:"fee_percent_bp,omitempty"`
+	FeeSen       int64  `json:"fee_sen,omitempty"`
+	FeeMethod    string `json:"fee_method,omitempty"`
+	FeeFixedSen  int64  `json:"fee_fixed_sen,omitempty"`
+	FeePercentBp int64  `json:"fee_percent_bp,omitempty"`
+	// Card t_4ca2da1f: the fee's human label ("FPX 1.00%", "Card 2.00% + RM1.00"),
+	// rendered by the SAME function the buyer's receipt uses
+	// (payments.FeeRateLabel) from the sale's FROZEN rate snapshot. The dashboard
+	// puts its own word for "Processing fee" in front of it and never does the
+	// percentage arithmetic itself, so the drawer and the receipt cannot describe
+	// one charge two ways, and a later rate change cannot rewrite a past sale's
+	// line. Empty when the sale carries no fee.
+	FeeRateLabel string    `json:"fee_rate_label,omitempty"`
 	Items        []itemRow `json:"items,omitempty"`
 	Updated      string    `json:"updated_at,omitempty"`
 	// Issue #438: QR ordering flow — the table number the QR stand encoded
@@ -2224,6 +2232,12 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 	// what the submit path wrote when it priced the order.
 	if s.ShippingSen != 0 {
 		row.ShippingSource, row.ShippingSourceDetail, row.ShippingFallbackReason = shippingSourceSummary(s.ShippingDetail)
+	}
+	// Card t_4ca2da1f: the fee's label for the dashboard drawer, from the sale's
+	// frozen snapshot and the receipt's own formatter. A sale with no fee gets no
+	// label (omitempty), so a pre-fee sale's row is byte-identical to before.
+	if s.FeeSen > 0 {
+		row.FeeRateLabel = payments.FeeRateLabel(s.FeeMethod, s.FeeFixedSen, s.FeePercentBp)
 	}
 	if s.CapturedAt != nil {
 		row.CapturedAt = s.CapturedAt.UTC().Format(time.RFC3339)

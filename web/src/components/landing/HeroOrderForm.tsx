@@ -65,6 +65,7 @@ export default function HeroOrderForm() {
   // length and order against the options list it renders.
   const copy = [
     { label: t("land.payfpx"), desc: t("land.payfpxdesc") },
+    { label: t("land.payfpxb2b1"), desc: t("land.payfpxb2b1desc") },
     { label: t("land.paydnqr"), desc: t("land.paydnqrdesc") },
     { label: t("land.paycard"), desc: t("land.paycarddesc") },
     { label: t("land.paywallet"), desc: t("land.paywalletdesc") },
@@ -141,24 +142,15 @@ export default function HeroOrderForm() {
           ))}
         </ul>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <span className="rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg)] px-2.5 py-1.5">
-            <span className="block text-jf-3xs font-semibold uppercase tracking-wider text-[var(--jf-muted)]">
-              {t("land.fmname")}
-            </span>
-            <span className="block truncate text-xs font-medium text-[var(--jf-text)]">
-              Nurul Aisyah
-            </span>
-          </span>
-          <span className="rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg)] px-2.5 py-1.5">
-            <span className="block text-jf-3xs font-semibold uppercase tracking-wider text-[var(--jf-muted)]">
-              {t("land.fmwa")}
-            </span>
-            <span className="block truncate text-xs font-medium text-[var(--jf-text)]">
-              012-345 6789
-            </span>
-          </span>
-        </div>
+        {/* The decorative NAME / WHATSAPP pair is GONE (card t_a818aa21): 46px of
+            buyer-identity chrome that says nothing about the product and is
+            what a phone checkout shows on its own screen anyway. The hero sells
+            "an order form", and the rows that do that are the two products, the
+            figures and the payment choice — a real buyer still gets the name and
+            WhatsApp fields in the real checkout. `land.fmname` / `land.fmwa` stay
+            in the dictionary (unused by this card, and i18n.test.ts still holds
+            them to five locales) so nothing has to be re-added if a demo needs
+            them again. */}
 
         <dl className="mt-3 space-y-1 border-t border-dashed border-[var(--jf-border)] pt-2.5 text-xs">
           <div className="flex items-baseline justify-between gap-3">
@@ -197,7 +189,7 @@ export default function HeroOrderForm() {
             >
               {t("land.paytitle")}
             </span>
-            <span className="text-jf-3xs text-[var(--jf-muted)]">{t("land.paypick")}</span>
+            <span className="text-jf-2xs text-[var(--jf-muted)]">{t("land.paypick")}</span>
           </div>
           {LANDING_PAY_OPTIONS.map((option, i) => {
             const selected = option.id === method;
@@ -206,7 +198,7 @@ export default function HeroOrderForm() {
               <label
                 key={option.id}
                 className={
-                  "flex min-h-11 cursor-pointer items-center gap-2.5 border-t border-[var(--jf-border)] px-3 py-2.5 " +
+                  "flex min-h-11 cursor-pointer items-center gap-2.5 border-t border-[var(--jf-border)] px-3 py-1.5 " +
                   (selected
                     ? "bg-[var(--jf-bg)] shadow-[inset_3px_0_0_var(--jf-accent)]"
                     : "")
@@ -221,17 +213,17 @@ export default function HeroOrderForm() {
                   className="h-5 w-5 shrink-0 accent-[var(--jf-accent)]"
                 />
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-[var(--jf-text)]">
+                  <span className="block text-sm font-semibold leading-tight text-[var(--jf-text)]">
                     {text.label}
                   </span>
-                  <span className="block text-jf-2xs text-[var(--jf-muted)]">
+                  <span className="block text-jf-xs leading-tight text-[var(--jf-muted)]">
                     {text.desc}
                   </span>
                 </span>
               </label>
             );
           })}
-          <p className="border-t border-[var(--jf-border)] px-3 py-2 text-jf-3xs text-[var(--jf-muted)]">
+          <p className="border-t border-[var(--jf-border)] px-3 py-2 text-jf-2xs text-balance text-[var(--jf-muted)]">
             {t("land.paynote")}
           </p>
         </div>

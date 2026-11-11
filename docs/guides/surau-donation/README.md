@@ -22,9 +22,9 @@ Settings → **Ahli** → taip e-mel bendahari atau imam, pilih **Peranan**, kem
 
 ## 4. Sambungkan akaun pedagang CHIP
 
-![Tetapan CHIP dengan Brand ID, Kunci Rahsia dan Mod Live dibulatkan](04-chip-kunci.png)
+![Tetapan CHIP dengan medan Brand ID dan Kunci Rahsia dibulatkan](04-chip-kunci.png)
 
-Dalam Portal Pedagang CHIP → **Developers**, salin **Brand ID** dan **Secret Key**. Di JomForm: Settings → **CHIP**, tampal kedua-duanya, pilih **Mod: Live**, kemudian **Simpan**. JomForm menyimpan kunci itu **disulitkan** dan tidak memaparkannya semula.
+Dalam Portal Pedagang CHIP → **Developers**, salin **Brand ID** dan **Secret Key**. Di JomForm: Settings → **CHIP**, tampal kedua-duanya, kemudian **Simpan**. JomForm mengesahkan pasangan itu dengan CHIP, menyimpannya **disulitkan**, dan hanya memaparkan hujung kunci ("berakhir 4f2a"). Tiada pilihan Mod: kunci itu sendiri menentukan sama ada bayaran itu ujian atau sebenar.
 
 ## 5. Tetapkan caj CHIP pada pembayar
 

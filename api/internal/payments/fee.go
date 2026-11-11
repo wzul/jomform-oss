@@ -28,8 +28,15 @@ import (
 // against. They are the aggregator keys the merchant sees in the dashboard and
 // the same keys the CHIP purchase whitelist takes (payments.ResolveWhitelist
 // expands `card` to the network identifiers CHIP expects).
+//
+// FeeMethodFPX and FeeMethodFPXB2B1 are TWO keys (card t_1d0198e3): FPX B2C and
+// FPX B2B1 cost the merchant different amounts (RM1 vs RM2 in the common
+// configuration), so a workspace must be able to store a different rate for each.
+// They are also two BUYER choices, which is why the key split had to reach the
+// picker as well as this table.
 const (
 	FeeMethodFPX      = "fpx"
+	FeeMethodFPXB2B1  = "fpx_b2b1"
 	FeeMethodCard     = "card"
 	FeeMethodEWallet  = "ewallet"
 	FeeMethodDuitNowQ = "duitnow_qr"
@@ -37,7 +44,7 @@ const (
 
 // FeeMethods lists every method a rate can be stored for, in the order the
 // dashboard and the buyer-facing chooser display them.
-var FeeMethods = []string{FeeMethodFPX, FeeMethodCard, FeeMethodEWallet, FeeMethodDuitNowQ}
+var FeeMethods = []string{FeeMethodFPX, FeeMethodFPXB2B1, FeeMethodCard, FeeMethodEWallet, FeeMethodDuitNowQ}
 
 // feeMethodLabels are the human labels shown to the BUYER in the checkout
 // breakdown and on the receipt line ("Processing fee — Card 2.00%"). A raw
@@ -45,6 +52,7 @@ var FeeMethods = []string{FeeMethodFPX, FeeMethodCard, FeeMethodEWallet, FeeMeth
 // itself rather than an empty label.
 var feeMethodLabels = map[string]string{
 	FeeMethodFPX:      "FPX",
+	FeeMethodFPXB2B1:  "FPX B2B1",
 	FeeMethodCard:     "Card",
 	FeeMethodEWallet:  "e-Wallet",
 	FeeMethodDuitNowQ: "DuitNow QR",

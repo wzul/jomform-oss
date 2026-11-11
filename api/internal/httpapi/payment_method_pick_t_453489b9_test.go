@@ -44,6 +44,20 @@ type pickChip struct {
 	bodies []map[string]any
 	// respond is the JSON body returned by POST /purchases/.
 	respond func() map[string]any
+	// available is what GET /payment_methods/ answers with. nil means 404 —
+	// "CHIP could not be asked" — which is the pre-t_1d0198e3 behaviour of this
+	// fake and what the other tests in the package rely on.
+	available []string
+	// methodCalls / methodAmounts record the listing calls, so a test can prove
+	// the picker asked (and with what amount).
+	methodCalls   int
+	methodAmounts []string
+}
+
+func (pc *pickChip) listCalls() (int, []string) {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return pc.methodCalls, append([]string{}, pc.methodAmounts...)
 }
 
 func (pc *pickChip) last() map[string]any {
@@ -69,10 +83,18 @@ type pickFixture struct {
 	formSlug string
 	product  string
 	account  string
+	ws       string
+	fees     *dbstore.PaymentFeeStore
 	chip     *pickChip
 }
 
+// newPickFixture wires one workspace ... available is what CHIP's
+// GET /payment_methods/ answers with (nil = the endpoint 404s).
 func newPickFixture(t *testing.T, respond func() map[string]any) pickFixture {
+	return newPickFixtureWithAvailability(t, respond, nil)
+}
+
+func newPickFixtureWithAvailability(t *testing.T, respond func() map[string]any, available []string) pickFixture {
 	t.Helper()
 	ctx := context.Background()
 	pool := bundleTestPool(t)
@@ -113,7 +135,11 @@ func newPickFixture(t *testing.T, respond func() map[string]any) pickFixture {
 		Status: dbstore.FormStatusPublished,
 		Config: map[string]any{
 			"blocks": []any{
-				map[string]any{"id": "b1", "type": "product", "products": []any{
+				// product_id is what makes this a LIVE line-item control for the
+				// block renderer (blockLayoutPaintsNoLineItemControl): without it a
+				// payment form is served as "not accepting orders", so a test that
+				// needs the REAL page (the picker) would assert against that page.
+				map[string]any{"id": "b1", "type": "product", "product_id": prod.ID, "products": []any{
 					map[string]any{"id": prod.ID, "name": prod.Name, "price_sen": prod.PriceSen},
 				}},
 			},
@@ -124,7 +150,22 @@ func newPickFixture(t *testing.T, respond func() map[string]any) pickFixture {
 	}
 
 	pc := &pickChip{respond: respond}
+	pc.available = available
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/payment_methods/" {
+			pc.mu.Lock()
+			pc.methodCalls++
+			pc.methodAmounts = append(pc.methodAmounts, r.URL.Query().Get("amount"))
+			list := pc.available
+			pc.mu.Unlock()
+			if list == nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"available_payment_methods": list})
+			return
+		}
 		if r.URL.Path != "/purchases/" {
 			http.NotFound(w, r)
 			return
@@ -155,7 +196,7 @@ func newPickFixture(t *testing.T, respond func() map[string]any) pickFixture {
 		Pay:         pay,
 		PaymentFees: dbstore.NewPaymentFeeStore(pool),
 	}
-	return pickFixture{h: h, host: wsSlug + ".jomform.com", formSlug: formSlug, product: prod.ID, account: accountID, chip: pc}
+	return pickFixture{h: h, host: wsSlug + ".jomform.com", formSlug: formSlug, product: prod.ID, account: accountID, ws: wsID, fees: dbstore.NewPaymentFeeStore(pool), chip: pc}
 }
 
 // setWhitelist stores the account's CHIP method whitelist (what the merchant
@@ -203,9 +244,11 @@ func sentWhitelist(t *testing.T, sent map[string]any) []string {
 	return out
 }
 
-// TestPayMethodNarrowsWhitelistAndPrefersFPX: the buyer picked FPX, so CHIP gets
-// a whitelist holding only FPX and the buyer lands on CHIP's page with FPX
-// pre-selected.
+// TestPayMethodNarrowsWhitelistAndPrefersFPX: the buyer picked FPX B2C, so CHIP
+// gets a whitelist holding ONLY `fpx` — not the FPX family (card t_1d0198e3:
+// fpx_b2b1 is a separate product with its own fee, and a whitelist that still
+// offers it lets CHIP ask the buyer B2C-or-B2B1 again) — and the buyer lands on
+// CHIP's page with FPX pre-selected.
 func TestPayMethodNarrowsWhitelistAndPrefersFPX(t *testing.T) {
 	fx := newPickFixture(t, func() map[string]any {
 		return map[string]any{
@@ -223,8 +266,8 @@ func TestPayMethodNarrowsWhitelistAndPrefersFPX(t *testing.T) {
 	if sent == nil {
 		t.Fatalf("no CHIP purchase was created")
 	}
-	if got := strings.Join(sentWhitelist(t, sent), ","); got != "fpx,fpx_b2b1" {
-		t.Fatalf("payment_method_whitelist = %q, want only the FPX identifiers — anything else is a method CHIP can still offer", got)
+	if got := strings.Join(sentWhitelist(t, sent), ","); got != "fpx" {
+		t.Fatalf("payment_method_whitelist = %q, want only `fpx` — anything else is a method CHIP can still offer", got)
 	}
 	want := "https://pay.example.test/pur_fpx_1?lang=ms&preferred=fpx"
 	if got := checkoutURL(t, rec); got != want {

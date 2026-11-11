@@ -180,7 +180,14 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // tool, so the pin moves by one again.
 // 191 → 192: card t_94e5cca3 added `admin_dormancy_report`, the read-only
 // per-account dormancy report behind the /admin dormancy section. One tool again.
-const EXPECTED_TOOL_COUNT = 195;
+// 192 → 195 at origin/main: PR #1703 added `list_connected_apps`,
+// `revoke_connected_app` and `set_connected_app_scope` for the device-authorization
+// onboarding while this branch was open. Merged with this branch's one tool below,
+// the registry holds 196 — neither branch's pin is right for the integrated one.
+// 192 → 193: card t_9efc5ed7 added `test_chip_connection`, the MCP twin of the
+// settings card's "Test connection" action: it runs the same live CHIP check the
+// save path runs and stores nothing. One tool again.
+const EXPECTED_TOOL_COUNT = 196;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

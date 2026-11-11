@@ -87,12 +87,12 @@ var productFacts = []productFact{
 		ID:    "payments.fee-setup",
 		Topic: "Payments and fees",
 		Text: "JomForm can pass the CHIP processing fee to the buyer. It is off until the merchant sets it up in " +
-			"Settings → Payment fees, where every payment method (FPX, Card, e-Wallet, DuitNow QR) has its own rate: " +
-			"a fixed amount in sen, a percentage in basis points (100 = 1%), or both. The merchant types the rate " +
-			"their own acquirer charges; JomForm does not know it and does not fill it in. Payments themselves run on " +
-			"the merchant's own CHIP credentials.",
+			"Settings → Payment fees, where FPX B2C, FPX B2B1, Card, e-Wallet and DuitNow QR each has its own rate: " +
+			"a fixed sen amount, basis points (100 = 1%), or both. FPX's two products are separate methods with " +
+			"different acquirer fees. The merchant types their acquirer's rate; JomForm does not fill it in. " +
+			"Payments run on the merchant's CHIP credentials.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "FPX, Card, e-Wallet and DuitNow QR"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "FPX B2C, FPX B2B1, Card, e-Wallet and DuitNow QR"},
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "100 basis points is 1%"},
 			{File: "web/src/app/docs/page.tsx", Anchor: "CHIP payment credentials"},
 		},

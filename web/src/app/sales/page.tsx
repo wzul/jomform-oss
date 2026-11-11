@@ -20,7 +20,7 @@ import { useI18n, type Key } from "../../components/i18n";
 import { useSession } from "../../components/session";
 import { formatDate, formatDateTime } from "../../lib/formatDate";
 import { Switch } from "../../components/Switch";
-import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind } from "../../lib/salesRows";
+import { answersPreview, answerText, isResponseForm, isMixedList, responsesList, rowKey, rowKind, saleFee, feeLine } from "../../lib/salesRows";
 import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggleBody } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
@@ -60,6 +60,13 @@ type Sale = {
   buyer_phone?: string;
   subtotal_sen?: number;
   shipping_sen?: number;
+  // Card t_4ca2da1f: the processing fee the BUYER bore, and the frozen rate that
+  // was in force when they paid (fee_rate_label is rendered server-side by the
+  // same function that labels the receipt's line). fee_sen is part of total_sen;
+  // the page shows the fee and what the merchant nets (total − fee) instead of
+  // presenting what the buyer paid as income. Absent on a sale with no fee.
+  fee_sen?: number;
+  fee_rate_label?: string;
   // Shipping phase 2: WHERE the shipping fee came from, so a disputed fee is
   // explainable without reading the raw record. `shipping_source` is the source
   // that WON ("courier" | "zones") and `shipping_source_detail` names it (the
@@ -125,6 +132,31 @@ const isPartiallyRefunded = (s: Sale) =>
     s.refunded_sen < s.total_sen);
 
 const money = (sen: number, currency?: string) => formatMoney(sen, currency);
+
+// Card t_4ca2da1f: the buyer-borne processing fee, under the amount on a sales
+// row. The amount column shows what the BUYER paid; this line names the fee and
+// what the merchant actually receives, so RM1,010.10 can never be read as
+// RM1,010.10 of income. The rate label comes from the API (the receipt's own
+// payments.FeeRateLabel over the sale's frozen snapshot), never from arithmetic
+// here. Renders nothing on a sale with no fee, so pre-fee rows are unchanged.
+function SaleFeeNote({ sale }: { sale: Sale }) {
+  const { t } = useI18n();
+  const fee = saleFee(sale);
+  if (!fee) return null;
+  const cur = currencyOf(sale);
+  const label = feeLine(t("sales.fee"), fee.rateLabel);
+  return (
+    <span className="mt-1 block text-jf-3xs font-normal text-[var(--jf-muted)]">
+      <span className="block" title={label}>
+        {t("sales.fee")} −{money(fee.feeSen, cur)}
+      </span>
+      <span className="block">
+        {t("sales.feeNet")}{" "}
+        <span className="font-semibold text-slate-700">{money(fee.netSen, cur)}</span>
+      </span>
+    </span>
+  );
+}
 
 // The currency a row's amounts are denominated in (t_71c67471). Read from the
 // SALE — the API returns the currency each sale was recorded in — never from
@@ -819,6 +851,9 @@ function SalesPageInner() {
   // picks its own layout from rowKind, so no row can be rendered through the
   // wrong branch.
   const mixedView = isMixedList(rows);
+  // Card t_4ca2da1f: the open sale drawer's fee breakdown (null when the buyer
+  // bore none). One read per render, used by the totals block's fee and net rows.
+  const detailFee = detail ? saleFee(detail) : null;
 
   return (
     <Shell active="sales">
@@ -1030,6 +1065,9 @@ function SalesPageInner() {
                   the annotation. */}
               {rows.map((s: Sale) => {
                 const isResponse = rowKind(s) === "response";
+                // Card t_4ca2da1f: the buyer-borne fee, if any, so the phone card
+                // carries the same fee/net lines the desktop row and drawer do.
+                const saleFeeRow = saleFee(s);
                 const itemsText =
                   Array.isArray(s.items) && s.items.length
                     ? s.items
@@ -1113,6 +1151,20 @@ function SalesPageInner() {
                             ]
                           : [
                               { key: "items", label: t("sales.items"), value: itemsText },
+                              ...(saleFeeRow
+                                ? [
+                                    {
+                                      key: "fee",
+                                      label: feeLine(t("sales.fee"), saleFeeRow.rateLabel),
+                                      value: money(saleFeeRow.feeSen, s.currency),
+                                    },
+                                    {
+                                      key: "net",
+                                      label: t("sales.feeNet"),
+                                      value: money(saleFeeRow.netSen, s.currency),
+                                    },
+                                  ]
+                                : []),
                               {
                                 key: "email",
                                 label: t("dash.email"),
@@ -1258,7 +1310,14 @@ function SalesPageInner() {
                           : "—"}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">
-                      {rowKind(s) === "response" ? "—" : money(s.total_sen, s.currency)}
+                      {rowKind(s) === "response" ? (
+                        "—"
+                      ) : (
+                        <>
+                          {money(s.total_sen, s.currency)}
+                          <SaleFeeNote sale={s} />
+                        </>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-2 py-3">
                       <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${saleBadge(s.status)}`}>
@@ -1331,7 +1390,10 @@ function SalesPageInner() {
                       ? s.items.map((i) => `${i.qty}× ${i.name}${i.variation_name ? ` (${i.variation_name})` : ""}`).join(", ")
                       : "—"}
                   </td>
-                  <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">{money(s.total_sen, s.currency)}</td>
+                  <td className="whitespace-nowrap px-2 py-3 text-xs font-semibold">
+                    {money(s.total_sen, s.currency)}
+                    <SaleFeeNote sale={s} />
+                  </td>
                   <td className="whitespace-nowrap px-2 py-3">
                     <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${saleBadge(s.status)}`}>
                       {s.status}
@@ -1599,10 +1661,23 @@ function SalesPageInner() {
 
               {/* Totals */}
               <section className="mt-5 rounded-lg bg-slate-50 p-3 text-sm">
-                <div className="flex justify-between gap-4">
-                  <span className="text-[var(--jf-muted)]">{t("dash.amount")}</span>
-                  <span>{money(detail.total_sen, detail.currency)}</span>
-                </div>
+                {/* Card t_4ca2da1f: the drawer breaks the money down the way the
+                    buyer's checkout does — subtotal, then the processing fee,
+                    then the total — so "what the buyer paid" and "what I
+                    receive" are separate lines instead of one number a treasurer
+                    has to interpret. A row written before the subtotal column
+                    carried anything keeps the old single Amount line. */}
+                {typeof detail.subtotal_sen === "number" && detail.subtotal_sen !== 0 ? (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[var(--jf-muted)]">{t("sales.subtotal")}</span>
+                    <span>{money(detail.subtotal_sen, detail.currency)}</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[var(--jf-muted)]">{t("dash.amount")}</span>
+                    <span>{money(detail.total_sen, detail.currency)}</span>
+                  </div>
+                )}
                 {typeof detail.shipping_sen === "number" && detail.shipping_sen !== 0 && (
                   <div className="mt-1 flex justify-between gap-4 text-[var(--jf-muted)]">
                     <span>{t("sales.shipping")}</span>
@@ -1633,10 +1708,41 @@ function SalesPageInner() {
                     <span>−{money(detail.discount_sen, detail.currency)}</span>
                   </div>
                 )}
+                {/* Card t_4ca2da1f: the buyer-borne fee, between discount and
+                    total — the same order as the buyer's own checkout breakdown.
+                    The rate is the API's frozen label (the receipt's one), so the
+                    drawer and the receipt name the charge identically even after
+                    the merchant changes the rate. */}
+                {detailFee && (
+                  <div className="mt-1 flex items-center justify-between gap-4 text-[var(--jf-muted)]">
+                    <span className="flex items-center gap-1">
+                      {feeLine(t("sales.fee"), detailFee.rateLabel)}
+                      <a
+                        href="/docs/payment-fees#what-lands-on-the-sale"
+                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-slate-50"
+                        aria-label={t("sales.feeDocs")}
+                        title={t("sales.feeDocs")}
+                      >
+                        ?
+                      </a>
+                    </span>
+                    <span>{money(detailFee.feeSen, detail.currency)}</span>
+                  </div>
+                )}
                 <div className="mt-1 flex justify-between gap-4 font-semibold">
                   <span>{t("sales.total")}</span>
                   <span>{money(detail.total_sen, detail.currency)}</span>
                 </div>
+                {/* What the merchant actually receives from this payment. Shown
+                    only when a fee was taken, because without one it would just
+                    repeat the total. Refunds are a separate block below, so this
+                    line stays the payment's own net. */}
+                {detailFee && (
+                  <div className="mt-1 flex justify-between gap-4 border-t border-[var(--jf-border)] pt-1 font-semibold">
+                    <span>{t("sales.feeNet")}</span>
+                    <span>{money(detailFee.netSen, detail.currency)}</span>
+                  </div>
+                )}
                 {/* Issue #518: partial-refund accounting in the detail drawer. */}
                 {(detail.refunded_sen ?? 0) > 0 && (
                   <>

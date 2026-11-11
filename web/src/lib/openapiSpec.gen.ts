@@ -6838,6 +6838,71 @@ export const OPENAPI_SPEC: OpenApiSpec = {
         "x-jomform-access": "admin"
       }
     },
+    "/v1/rest/settings/chip/test": {
+      "post": {
+        "description": "Runs the same live CHIP credential check the save path runs and stores nothing. An empty body tests the stored Secret Key; a secret_key field tests a key the merchant has just pasted. Admin only.",
+        "operationId": "testChipCreds",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The request body or parameters are invalid. Error messages are returned in the API's own words, not a fixed enumeration."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Missing, unknown or revoked credential. Body: {\"error\":\"authentication required\"}."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
+          }
+        },
+        "summary": "Test CHIP credentials without saving",
+        "tags": [
+          "Payments (CHIP)"
+        ],
+        "x-jomform-access": "admin"
+      }
+    },
     "/v1/rest/settings/custom-domain": {
       "delete": {
         "operationId": "deleteCustomDomain",

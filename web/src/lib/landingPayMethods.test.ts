@@ -131,12 +131,13 @@ test("the harness reads the real hero component", () => {
   );
 });
 
-test("the demo's method list is the four groups, in the product's order", () => {
+test("the demo's method list is the product's five groups, in the product's order", () => {
   assert.deepEqual(
     LANDING_PAY_OPTIONS.map((o) => o.id),
-    ["fpx", "duitnow_qr", "card", "ewallet"],
+    ["fpx", "fpx_b2b1", "duitnow_qr", "card", "ewallet"],
     "LANDING_PAY_OPTIONS is the one place the demo's method rows may be written down; it " +
-      "must list the four groups in the order the product's picker uses",
+      "must list the five groups in the order the product's picker uses (FPX B2C and " +
+      "FPX B2B1 are two rows: they carry different fees)",
   );
   assert.equal(
     new Set(LANDING_PAY_OPTIONS.map((o) => o.labelKey)).size,
@@ -284,15 +285,16 @@ test("every row is legible in all five locales", () => {
       }
     }
   }
-  // The two scheme names are the same word in every locale (a brand is not translated),
+  // The scheme names are the same word in every locale (a brand is not translated),
   // so a "translation" that changed one is a bug, not a localisation.
-  for (const key of ["land.payfpx", "land.paydnqr"] as const) {
+  for (const key of ["land.payfpx", "land.payfpxb2b1", "land.paydnqr"] as const) {
     const en = dict[key]!.en;
     for (const lang of LANGS) {
       assert.equal(dict[key]![lang], en, `${key}.${lang} must read "${en}" — a scheme name is not translated`);
     }
   }
   assert.equal(dict["land.payfpx"]!.en, "FPX");
+  assert.equal(dict["land.payfpxb2b1"]!.en, "FPX B2B1");
   assert.equal(dict["land.paydnqr"]!.en, "DuitNow QR");
 });
 

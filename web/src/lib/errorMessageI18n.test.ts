@@ -578,7 +578,6 @@ function textAttrOffenders(fileName: string, text: string): TextAttrFinding[] {
 const KNOWN_TEXT_ATTR: { file: string; lit: string; why: "sample value" | "code sample" }[] = [
   // Sample values: an example of DATA the field accepts, not a sentence anyone
   // wrote for the merchant to read. The same string on every locale is correct.
-  { file: "app/settings/page.tsx", lit: "e.g. 5f2b…-uuid", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "e.g. C1234567890", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "e.g. 62010", why: "sample value" },
   { file: "app/settings/page.tsx", lit: "Acme Sdn Bhd", why: "sample value" },

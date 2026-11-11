@@ -21,6 +21,15 @@
 //	shopee_pay / razer_shopeepay -> preferred=<whichever CHIP resolved>
 //	crypto_coin, mpgs_google_pay, mpgs_apple_pay -> preferred=<the identifier>
 //
+// FPX IS TWO PRODUCTS, NOT ONE GROUP (card t_1d0198e3). CHIP lists `fpx` (FPX
+// B2C, personal retail online banking) and `fpx_b2b1` (FPX B2B1, corporate online
+// banking) as separate methods with separate minimums and — for the merchant —
+// separate fee structures. While both lived under one `fpx` group, the picker
+// offered ONE row and CHIP then asked the buyer the same question again on its
+// own page, and no fee rate could tell the two apart. Each is now its own group
+// key, so the narrowing below holds THAT identifier and CHIP has nothing else to
+// offer.
+//
 // PITFALL 1 — never append ?preferred= to a `direct_post_url`. With a card-only
 // whitelist CHIP answers with one, and it is a POST target for its hosted card
 // fields, not a page: appending a query corrupts it. CheckoutRedirect below
@@ -45,16 +54,27 @@ import (
 // aggregator keys (the ones the processing-fee rates are stored against and the
 // ones the dashboard's whitelist multiselect offers), so one key describes a
 // method on the page, in the sale's fee snapshot and in the CHIP request.
+//
+// PayMethodFPX and PayMethodFPXB2B1 are TWO buyer choices (card t_1d0198e3):
+// personal (B2C) and corporate (B2B1) FPX, each with its own fee rate.
 const (
 	PayMethodFPX       = "fpx"
+	PayMethodFPXB2B1   = "fpx_b2b1"
 	PayMethodDuitNowQR = "duitnow_qr"
 	PayMethodCard      = "card"
 	PayMethodEWallet   = "ewallet"
 )
 
 // PayMethods is every group the picker may render, in the order the approved
-// mockup shows them (FPX, DuitNow QR, card, e-wallet).
-var PayMethods = []string{PayMethodFPX, PayMethodDuitNowQR, PayMethodCard, PayMethodEWallet}
+// mockup shows them (FPX B2C, FPX B2B1, DuitNow QR, card, e-wallet).
+var PayMethods = []string{PayMethodFPX, PayMethodFPXB2B1, PayMethodDuitNowQR, PayMethodCard, PayMethodEWallet}
+
+// IsFPXPayMethod reports whether a group key is one of the two FPX products.
+// Used where a rule is about "the FPX rows" as a set (their availability at
+// CHIP) rather than about one of them.
+func IsFPXPayMethod(group string) bool {
+	return group == PayMethodFPX || group == PayMethodFPXB2B1
+}
 
 // ErrPayMethodUnavailable refuses a choice the checkout cannot honour. It is a
 // BUYER error (400), never a silent fallback: falling back to the merchant's
@@ -65,11 +85,14 @@ var ErrPayMethodUnavailable = errors.New("payments: payment method unavailable")
 // most-preferred first. The first entry that is actually present decides the
 // ?preferred= value (see PreferredParam).
 //
-// `fpx` and `duitnow_qr` are identifiers as well as group keys; `card` and
-// `ewallet` are aggregators that exist only on our side (CHIP knows the
-// networks and the individual wallets).
+// `fpx`, `fpx_b2b1` and `duitnow_qr` are identifiers as well as group keys; `card`
+// and `ewallet` are aggregators that exist only on our side (CHIP knows the
+// networks and the individual wallets). fpx and fpx_b2b1 are DELIBERATELY one
+// identifier each: they are two products, and grouping them is what let CHIP
+// re-ask the buyer B2C-or-B2B1 after the picker had already asked.
 var payMethodIdentifiers = map[string][]string{
-	PayMethodFPX:       {"fpx", "fpx_b2b1"},
+	PayMethodFPX:       {"fpx"},
+	PayMethodFPXB2B1:   {"fpx_b2b1"},
 	PayMethodDuitNowQR: {"dnqr", "duitnow_qr"},
 	PayMethodCard:      {"visa", "mastercard", "maestro"},
 	PayMethodEWallet: {
@@ -134,6 +157,12 @@ type PayOption struct {
 //
 // The list is filtered, never invented: an identifier that maps to no group
 // cannot produce a row.
+//
+// This function is pure. The brand's LIVE listing of the two FPX products is
+// applied on top of it by Service.CheckoutPayOptions, which is what the picker
+// calls (card t_1d0198e3): a whitelist cannot say whether CHIP enabled FPX B2B1
+// for the brand, and an unrestricted workspace would otherwise offer a row CHIP
+// does not have.
 func PayOptions(whitelist []string) []PayOption {
 	ids := make(map[string]bool, len(whitelist))
 	for _, m := range whitelist {
@@ -216,7 +245,11 @@ func PreferredParam(group string, identifiers []string) (value string, ok bool) 
 	}
 	switch group {
 	case PayMethodFPX:
-		return pick("fpx", "fpx_b2b1")
+		return pick("fpx")
+	case PayMethodFPXB2B1:
+		// Its own value, never the FPX group's: `preferred=fpx_b2b1` is what
+		// makes CHIP open on FPX B2B1 instead of falling back to B2C.
+		return pick("fpx_b2b1")
 	case PayMethodDuitNowQR:
 		return pick("dnqr", "duitnow_qr")
 	case PayMethodCard:

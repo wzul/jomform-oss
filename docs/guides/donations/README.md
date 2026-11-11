@@ -9,8 +9,9 @@ fixed tiers, or one *Pay what you want* product the donor prices.
 
 ![Settings with the CHIP tab open and the Brand ID field boxed](01-settings-chip.png)
 
-Settings → **CHIP**: paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal, pick
-the **Mode** the key was created in, and save. Nothing can be charged until this is done.
+Settings → **CHIP**: paste the **Brand ID** and **Secret Key** from the CHIP Merchant Portal, and save.
+There is no **Mode** to pick — the key itself decides whether a payment is a test — and JomForm checks the
+pair with CHIP before storing it. Nothing can be charged until this is done.
 
 ## 2. Add your first donation amount in Products
 

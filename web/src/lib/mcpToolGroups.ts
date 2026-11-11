@@ -93,7 +93,7 @@ export const TOOL_GROUPS: McpToolGroup[] = [
   {
     group: "Payment fees",
     tools: [
-      { name: "get_payment_fees", desc: "Read the processing fee rates per CHIP payment method (fpx, card, ewallet, duitnow_qr): active/not, fixed fee in SEN, percentage fee in BASIS POINTS (100 = 1%), and whether the account owner has given the disclosure acknowledgement. Without that acknowledgement the fee is not charged to the payer even if the rate is stored." },
+      { name: "get_payment_fees", desc: "Read the processing fee rates per CHIP payment method (fpx, fpx_b2b1, card, ewallet, duitnow_qr). fpx is FPX B2C and fpx_b2b1 is FPX B2B1: two products with their own rate. Each row gives active/not, fixed fee in SEN, percentage fee in BASIS POINTS (100 = 1%), and whether the account owner has given the disclosure acknowledgement. Without that acknowledgement the fee is not charged to the payer even if the rate is stored." },
       { name: "set_payment_fees", desc: "Replace ALL processing fee rates for one account/workspace. Methods absent from rates are DELETED. Enabling a fee (fee_enabled + rate > 0) REQUIRES acknowledged=true — the account owner's acknowledgement that the fee is passed to the payer; the tool records who and when. The fee is calculated on the buyer's FINAL amount (gross-up), so the merchant does not bear a fee on the fee." },
     ],
   },
@@ -130,7 +130,8 @@ export const TOOL_GROUPS: McpToolGroup[] = [
     group: "CHIP account",
     tools: [
       { name: "get_chip_settings", desc: "Read the account's CHIP credential status: configured, verified, mode, brand_id, secret_key_masked, email_fallback, whitelist. The full secret is never returned. Read-only." },
-      { name: "set_chip_settings", desc: "Set the account's CHIP credentials (brand_id + secret_key + mode). mode is test or live: the mode you created the key in, in the CHIP portal. Empty mode keeps the stored one (test when none is stored); the key carries no prefix, so the mode is never inferred. Empty secret = keep the existing key. Validated against CHIP before saving. Admin only." },
+      { name: "set_chip_settings", desc: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only. `mode` is accepted for compatibility with older clients and IGNORED: no payment behaviour depends on it." },
+      { name: "test_chip_connection", desc: "Test the account's CHIP credentials against CHIP without saving anything. Empty secret_key tests the stored key; a provided one tests a key you are about to save. Admin only." },
       { name: "clear_chip_settings", desc: "Clear the account's CHIP credentials. Admin only." },
     ],
   },

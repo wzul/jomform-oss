@@ -986,6 +986,17 @@ func (s *Service) CreateChipPurchaseForSaleWithOverride(ctx context.Context, sal
 		if !ok {
 			return ErrPayMethodUnavailable
 		}
+		// Card t_1d0198e3: FPX is two products. The picker only offers the ones
+		// CHIP lists, but this door is reachable without the picker (an older
+		// page, an API client, a page rendered before the brand changed). Ask
+		// CHIP with the REAL amount — the one place the answer is exact — and
+		// refuse a product the brand does not list instead of sending the buyer
+		// to a CHIP page that will fail.
+		if IsFPXPayMethod(group) {
+			if listed, known := s.FPXListed(ctx, sale.AccountID, ov, sale.Currency, sale.TotalSen, group); known && !listed {
+				return ErrPayMethodUnavailable
+			}
+		}
 		narrowed := NarrowWhitelist(group, wl)
 		if len(narrowed) == 0 {
 			return ErrPayMethodUnavailable

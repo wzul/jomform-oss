@@ -519,7 +519,7 @@ func (s *Server) registerTools() {
 	// the pass-on disclosure.
 	addTool(s, &mcp.Tool{
 		Name:        "get_payment_fees",
-		Description: "Read the processing fee rates per CHIP payment method (fpx, card, ewallet, duitnow_qr): active/not, fixed fee in SEN, percentage fee in BASIS POINTS (100 = 1%), and whether the account owner has given the disclosure acknowledgement. Without that acknowledgement the fee is not charged to the payer even if the rate is stored.",
+		Description: "Read the processing fee rates per CHIP payment method (fpx, fpx_b2b1, card, ewallet, duitnow_qr). fpx is FPX B2C and fpx_b2b1 is FPX B2B1: two products with their own rate. Each row gives active/not, fixed fee in SEN, percentage fee in BASIS POINTS (100 = 1%), and whether the account owner has given the disclosure acknowledgement. Without that acknowledgement the fee is not charged to the payer even if the rate is stored.",
 	}, s.getPaymentFees)
 	addTool(s, &mcp.Tool{
 		Name:        "set_payment_fees",
@@ -908,8 +908,12 @@ func (s *Server) registerTools() {
 	}, s.getChipSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_chip_settings",
-		Description: "Set the account's CHIP credentials (brand_id + secret_key + mode). mode is test or live: the mode you created the key in, in the CHIP portal. Empty mode keeps the stored one (test when none is stored); the key carries no prefix, so the mode is never inferred. Empty secret = keep the existing key. Validated against CHIP before saving. Admin only.",
+		Description: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only. `mode` is accepted for compatibility with older clients and IGNORED: no payment behaviour depends on it.",
 	}, s.setChipSettings)
+	addTool(s, &mcp.Tool{
+		Name:        "test_chip_connection",
+		Description: "Test the account's CHIP credentials against CHIP without saving anything. Empty secret_key tests the stored key; a provided one tests a key you are about to save. Admin only.",
+	}, s.testChipConnection)
 	addTool(s, &mcp.Tool{
 		Name:        "clear_chip_settings",
 		Description: "Clear the account's CHIP credentials. Admin only.",

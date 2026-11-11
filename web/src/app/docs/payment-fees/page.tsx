@@ -21,7 +21,7 @@ const SECTIONS: Section[] = [
       {
         steps: [
           "**Decide whether you may pass the fee on**. Card-network, acquirer and consumer-law rules apply, and the price shown must be the price paid. JomForm does not block it.",
-          "**Type your own rate per method** in Settings → Payment fees. FPX, Card, e-Wallet and DuitNow QR each take a fixed sen amount and/or basis points.",
+          "**Type your own rate per method** in Settings → Payment fees: FPX B2C, FPX B2B1, Card, e-Wallet and DuitNow QR. FPX's two products are separate rows.",
           "**Tick the acknowledgement.** It is recorded with your account, the time and who accepted. Until then no fee reaches a buyer, even with rates saved.",
           "**Pick which forms carry it.** A workspace-wide rate applies to every published payment form; a single form can opt out with its fee override.",
           "**Watch what the buyer sees**: the subtotal, a fee row naming the method and its rate, and the final total, all before Proceed to Payment.",
@@ -63,10 +63,10 @@ const SECTIONS: Section[] = [
     title: "Choosing the method (CHIP does not ask again)",
     icon: "🧭",
     body: [
-      "The buyer picks FPX, DuitNow QR, card or e-wallet **on your JomForm page**, above the Pay button. The Pay button then names the choice: “Pay RM186.00 / via FPX”.",
+      "The buyer picks FPX (personal), FPX B2B1 (corporate), DuitNow QR, card or e-wallet **on your JomForm page**. The Pay button then names the pick.",
       "That choice is carried to CHIP. The purchase is created with **only that method enabled**, and the buyer lands on CHIP's page with it pre-selected.",
       "CHIP therefore does not show its own method screen. One question, asked once.",
-      "**Only the methods you enabled appear.** The rows come from Settings → CHIP → payment methods, not from a fixed list, so a workspace without e-wallets never offers one.",
+      "**Only the methods you enabled appear.** Rows come from Settings → CHIP: FPX B2C and FPX B2B1 are separate rows with their own fees.",
       "A method you did not enable is refused with a message. JomForm never falls back to another method on the buyer's behalf, because that would charge the wrong way.",
       "The picker appears on both buyer surfaces: the **menu checkout sheet** and a **payment form's** last block.",
       "A workspace with no method JomForm can label shows no picker, and CHIP's page asks.",

@@ -427,11 +427,15 @@ func (s *Server) getChipSettings(ctx context.Context, _ *mcp.CallToolRequest, _ 
 }
 
 type setChipSettingsIn struct {
-	BrandID         string   `json:"brand_id" jsonschema:"CHIP Brand ID (required)"`
-	SecretKey       string   `json:"secret_key,omitempty" jsonschema:"CHIP Secret Key. Empty = keep the existing key."`
-	Mode            string   `json:"mode,omitempty" jsonschema:"test|live: the mode you created the key in, in the CHIP portal. Empty = keep the stored mode (test when none is stored). The key carries no prefix, so this is never inferred."`
+	BrandID   string `json:"brand_id" jsonschema:"CHIP Brand ID (required)"`
+	SecretKey string `json:"secret_key,omitempty" jsonschema:"CHIP Secret Key. Empty = keep the existing key."`
+	// Mode is accepted for compatibility with clients written against the old
+	// contract, and IGNORED (card t_9efc5ed7): nothing changes a payment based
+	// on it, so there is nothing for the caller to choose. Rejecting it would
+	// break clients that follow the published docs.
+	Mode            string   `json:"mode,omitempty" jsonschema:"Ignored. Accepted for compatibility with older clients; the stored value is kept and no payment behaviour depends on it."`
 	EmailFallback   string   `json:"email_fallback,omitempty" jsonschema:"Fallback email when the buyer does not provide an email"`
-	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of payment methods, empty = all"`
+	MethodWhitelist []string `json:"payment_method_whitelist,omitempty" jsonschema:"List of CHIP payment methods, empty = all. fpx (FPX B2C, personal) and fpx_b2b1 (FPX B2B1, corporate) are two separate methods with their own fees."`
 }
 
 func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in setChipSettingsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -445,8 +449,9 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 	secretEnc := ""
 	existingMode := ""
 	existingVerified := false
-	// Card t_8f38dc34: the stored mode + verified state are read on BOTH
-	// paths, because an omitted mode keeps what the account already says.
+	// Card t_9efc5ed7: the stored mode + verified state are still read, because
+	// the column survives a save (nothing in the request decides it) and a save
+	// that only edits the fallback email must not reset the ✓.
 	if a, aerr := s.deps.Accounts.ByID(ctx, acc); aerr == nil {
 		existingMode = a.ChipMode
 		existingVerified = a.ChipVerified
@@ -464,12 +469,10 @@ func (s *Server) setChipSettings(ctx context.Context, _ *mcp.CallToolRequest, in
 	if secretEnc == "" {
 		return nil, nil, errors.New("secret_key is required")
 	}
-	// The mode is the merchant's choice, exactly as in the REST door: one
-	// shared rule (dbstore.ResolveChipMode), so the two cannot disagree.
-	mode, modeOK := dbstore.ResolveChipMode(in.Mode, existingMode)
-	if !modeOK {
-		return nil, nil, errors.New(`mode must be "test" or "live"`)
-	}
+	// Card t_9efc5ed7: the Test/Live choice is gone from BOTH doors. `mode` is
+	// accepted (an older client may still send it) and ignored; the value
+	// stored is the one the account already holds (dbstore.StoredChipMode).
+	mode := dbstore.StoredChipMode(existingMode)
 	verified := false
 	if s.chip != nil && in.SecretKey != "" {
 		if verr := s.chip.ValidateCredentials(ctx, in.SecretKey); verr != nil {
@@ -494,6 +497,43 @@ func (s *Server) clearChipSettings(ctx context.Context, _ *mcp.CallToolRequest, 
 		return nil, nil, fmt.Errorf("db: %w", err)
 	}
 	return nil, map[string]string{"status": "cleared"}, nil
+}
+
+type testChipConnectionIn struct {
+	SecretKey string `json:"secret_key,omitempty" jsonschema:"Secret Key to test. Empty = test the stored key."`
+}
+
+// testChipConnection runs the same live CHIP credential check the save path
+// runs, without writing anything (card t_9efc5ed7 — the "Test connection" action
+// the settings card carries). It is the MCP twin of POST
+// /v1/rest/settings/chip/test.
+func (s *Server) testChipConnection(ctx context.Context, _ *mcp.CallToolRequest, in testChipConnectionIn) (*mcp.CallToolResult, map[string]any, error) {
+	acc, err := s.requireAdminRole(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.chip == nil {
+		return nil, nil, errors.New("the CHIP connection check is not configured on this server")
+	}
+	secret := in.SecretKey
+	if secret == "" {
+		a, aerr := s.deps.Accounts.ByID(ctx, acc)
+		if aerr != nil {
+			return nil, nil, fmt.Errorf("db: %w", aerr)
+		}
+		if a.ChipSecretKeyEnc == "" {
+			return nil, nil, errors.New("secret_key is required")
+		}
+		plain, derr := cryptoutil.Decrypt(s.decKey, a.ChipSecretKeyEnc)
+		if derr != nil {
+			return nil, nil, derr
+		}
+		secret = string(plain)
+	}
+	if verr := s.chip.ValidateCredentials(ctx, secret); verr != nil {
+		return nil, map[string]any{"ok": false, "verified": false, "error": "invalid credentials — check the Brand ID / Secret Key"}, nil
+	}
+	return nil, map[string]any{"ok": true, "verified": true}, nil
 }
 
 // ─── Profile avatar (issue #396) ──────────────────────────────────────────

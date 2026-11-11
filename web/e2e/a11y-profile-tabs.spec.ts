@@ -86,11 +86,14 @@
 //                               selection and the panel follows it; the strip is
 //                               never left with 0 or 2 selections.
 //   3. THE ENTRY STATES       — no storage at all (the landing is Identity), a
-//                               stored `jf_profile_tab`, `?tab=connected`, and a
-//                               stored value that is NOT a tab (the page's own
-//                               fallback, which is what keeps `aria-selected` at
-//                               exactly one). One arm per test, so each gets its
-//                               own page and no storage can leak between them.
+//                               stored `jf_profile_tab`, `?tab=connected`, the
+//                               device-flow email's `?tab=mcp&user_code=…` with
+//                               nothing stored (plus the same link after the page
+//                               has persisted Identity), and a stored value that
+//                               is NOT a tab (the page's own fallback, which is
+//                               what keeps `aria-selected` at exactly one). One
+//                               arm per test, so each gets its own page and no
+//                               storage can leak between them.
 //   4. THE LOCALE MATRIX      — en/ms/ta/zh/ar @320px, `htmlLang` (and ar `dir`)
 //                               asserted, so a locale that quietly rendered
 //                               English cannot pass as Tamil.
@@ -215,6 +218,19 @@ const TAB_KEY = (id: string): keyof typeof DICT => `prof.${id}` as keyof typeof 
   }
 }
 
+// The consent lookup the device-flow email's link drives (`?user_code=`). The
+// catch-all above would answer `{}`, which leaves the card without a client or
+// an Approve button — so the entry-point arms below stub the real shape.
+const DEVICE_CONSENT = {
+  user_code: "KX9M-X5BS",
+  client_id: "client-1",
+  client: "Claude Desktop",
+  scopes: ["read"],
+  scope_prose: "read-only — read your forms, products and sales",
+  expires_at: "2099-01-01T00:00:00Z",
+  state: "pending",
+};
+
 const ME = {
   id: "u1",
   email: "merchant@example.com",
@@ -264,6 +280,11 @@ async function stubAPI(page: Page) {
     r.fulfill(json([])),
   );
   await page.route(/(.*)\/api\/auth\/trust-status(\?.*)?$/, (r) => r.fulfill(json({ trusted: false })));
+  // Registered last so it wins over the catch-all (Playwright resolves routes in
+  // reverse registration order).
+  await page.route(/(.*)\/api\/auth\/connected-apps\/device\?user_code=.*$/, (r) =>
+    r.fulfill(json(DEVICE_CONSENT)),
+  );
 }
 
 /**
@@ -625,6 +646,58 @@ test("?tab=connected lands on Social accounts, not on the prerendered default (e
     "/profile?tab=connected",
   );
   expectContract(s, "en", "connected", "en ?tab=connected");
+});
+
+// #1703 follow-up: THE EMAIL'S OWN ENTRY POINT. The device-flow consent mail
+// links to `/profile?tab=mcp&user_code=…` (api/internal/httpapi/oauth_device.go).
+// The page honoured `?tab=` for `connected` ONLY and otherwise used the stored
+// tab, so a first-time user (nothing stored) landed on Identity with no code
+// field and no Approve/Deny card — measured on prod v1.37.0 with cleared storage.
+// This arm is that exact URL with NO `jf_profile_tab` stored, which is the state
+// every first-time headless-onboarding user arrives in; the arm below it is the
+// second click, when the page has already persisted the wrong tab.
+test("the device-flow email link ?tab=mcp&user_code= opens the consent card with the code (en)", async ({
+  page,
+}) => {
+  const s = await openProfile(
+    page,
+    "en",
+    { jf_lang: "en", jf_workspace: "demo" },
+    "mcp",
+    "/profile?tab=mcp&user_code=KX9M-X5BS",
+  );
+  expectContract(s, "en", "mcp", "en ?tab=mcp (email entry point)");
+
+  // The code is prefilled and the card is on screen — no further navigation.
+  await expect(
+    page.locator("#prof-device-code"),
+    "the consent code field is not on screen for the email's link",
+  ).toHaveValue(DEVICE_CONSENT.user_code);
+  await expect(
+    page.getByText(DEVICE_CONSENT.client, { exact: false }).first(),
+    "the consent card does not name the client that is asking",
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true }),
+    "the email's link does not put the Approve button on screen",
+  ).toBeVisible();
+});
+
+test("the email link still opens the consent card after the page persisted Identity (en)", async ({
+  page,
+}) => {
+  // The defect's second half: the page persists whatever tab it landed on, so a
+  // user who opened the link once (on Identity) then clicked it again had
+  // `jf_profile_tab=identity` stored. An explicit `?tab=` must beat it.
+  const s = await openProfile(
+    page,
+    "en",
+    { jf_lang: "en", jf_workspace: "demo", jf_profile_tab: "identity" },
+    "mcp",
+    "/profile?tab=mcp&user_code=KX9M-X5BS",
+  );
+  expectContract(s, "en", "mcp", "en ?tab=mcp over stored identity");
+  await expect(page.locator("#prof-device-code")).toHaveValue(DEVICE_CONSENT.user_code);
 });
 
 test("a stored value that is NOT a tab falls back to a rendered tab (en)", async ({ page }) => {

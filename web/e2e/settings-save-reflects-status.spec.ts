@@ -37,8 +37,8 @@
 //   that re-applies a cached payload cannot.
 //
 // THE ARMS (no `page.reload()` anywhere in this file — that is the point)
-//   1. Save CHIP credentials  → the badge reads ACTIVE · TEST.
-//   2. Disconnect (clear)     → the badge reads NOT SET again, and the Clear
+//   1. Save CHIP credentials  → the badge reads Connected.
+//   2. Disconnect (clear)     → the badge reads Not connected again, and the Clear
 //                               button is gone.
 //   3. Add a webhook          → the created URL is in the list.
 //
@@ -50,16 +50,14 @@ import { test, expect, type Page } from "@playwright/test";
 import { DICT } from "../src/components/i18nDict";
 import { signIn } from "./auth";
 
-const NOT_SET = DICT["set.notSet"].en;
+// Card t_9efc5ed7: the badge no longer names a Test/Live mode (that control was
+// removed — nothing read it). It reports the CONNECTION, and after a save that the
+// server confirmed it reads "Connected".
+const NOT_CONNECTED = DICT["set.notConnected"].en;
+const CONNECTED = DICT["set.connected"].en;
 const CLEAR = DICT["set.clear"].en;
 const ADD = DICT["set.add"].en;
 const SAVE = DICT["set.save"].en;
-// Card t_8f38dc34: the key field's placeholder no longer advertises a prefix
-// (`sk_live_… / sk_test_…`) CHIP keys do not carry; it is a dictionary value now.
-const SECRET_PH = DICT["set.secretKeyPh"].en;
-
-/** `set.activeMode` with its `{mode}` filled the way the page fills it. */
-const activeMode = (mode: string) => DICT["set.activeMode"].en.replace("{mode}", mode.toUpperCase());
 
 const ME = { id: "u1", email: "merchant@example.com", name: "Merchant", lang: "", is_super_admin: false };
 const WS = { id: "ws1", name: "Acme Shop", slug: "acme", role: "admin" };
@@ -147,10 +145,11 @@ async function stubSettingsAPI(page: Page): Promise<SettingsStub> {
       chip = {
         configured: true,
         verified: true,
-        // Card t_8f38dc34: the API stores the mode the caller chose; it does not
-        // read one out of the key (CHIP keys have no prefix). The stub mirrors
-        // that contract, so this spec cannot pass on a guess the server dropped.
-        mode: body.mode === "live" ? "live" : "test",
+        // Card t_9efc5ed7: the API no longer takes a mode from the caller — the
+        // control is gone, and `chip_mode` is write-only legacy that a save leaves
+        // alone. The stub mirrors that: whatever the row held survives, and a body
+        // carrying the old field changes nothing.
+        mode: chip.mode || "test",
         brand_id: body.brand_id || "",
         whitelist: body.payment_method_whitelist || [],
         email_fallback: body.email_fallback || "",
@@ -201,18 +200,23 @@ test("Saving CHIP credentials flips the status badge without a page reload", asy
   await page.goto("/settings?tab=chip");
 
   // Precondition: the panel is up and reports the server's "not configured".
-  await expect(badge(page)).toHaveText(NOT_SET);
+  await expect(badge(page)).toHaveText(NOT_CONNECTED);
 
-  await page.getByPlaceholder("e.g. 5f2b…-uuid").fill("brand-123");
-  await page.getByPlaceholder(SECRET_PH).fill("sk_test_abcdefgh1234");
+  await page.getByTestId("chip-brand-id").fill("brand-123");
+  await page.getByTestId("chip-secret-key").fill("sk_test_abcdefgh1234");
   await page.getByRole("button", { name: SAVE }).click();
 
   // THE ASSERTION THAT BITES: the badge, read from the live DOM, with no reload.
-  await expect(badge(page)).toHaveText(activeMode("test"));
+  await expect(badge(page)).toHaveText(CONNECTED);
 
   // …and the page converged on the SERVER's own state, not on guessed fields:
-  // the masked tail the PUT does not echo comes from the refetched bundle.
-  await expect(page.getByText(stub.chip().secret_key_masked, { exact: false })).toBeVisible();
+  // the masked tail the PUT does not echo comes from the refetched bundle. Card
+  // t_9efc5ed7 renders that tail as the "Saved encrypted · ends <tail>" LINE (the
+  // raw `••••4f2a` blob is no longer printed), so the assertion reads that line.
+  const tail = stub.chip().secret_key_masked.replace(/^[•]+/, "").trim();
+  await expect(page.getByTestId("chip-secret-masked")).toHaveText(
+    DICT["set.savedEncryptedEnds"].en.replace("{tail}", tail),
+  );
   expect(stub.bundleCalls()).toBeGreaterThan(2); // mount, mount-after-scope, post-save refresh
 });
 
@@ -221,16 +225,16 @@ test("Disconnecting CHIP credentials clears the badge without a page reload", as
   await signIn(page);
   await page.goto("/settings?tab=chip");
 
-  await page.getByPlaceholder("e.g. 5f2b…-uuid").fill("brand-123");
-  await page.getByPlaceholder(SECRET_PH).fill("sk_test_abcdefgh1234");
+  await page.getByTestId("chip-brand-id").fill("brand-123");
+  await page.getByTestId("chip-secret-key").fill("sk_test_abcdefgh1234");
   await page.getByRole("button", { name: SAVE }).click();
-  await expect(badge(page)).toHaveText(activeMode("test"));
+  await expect(badge(page)).toHaveText(CONNECTED);
 
   // `set.clear` only renders while the page believes credentials are stored —
   // so its presence is itself part of what the save has to publish.
   await page.getByRole("button", { name: CLEAR }).click();
 
-  await expect(badge(page)).toHaveText(NOT_SET);
+  await expect(badge(page)).toHaveText(NOT_CONNECTED);
   expect(stub.chip().configured).toBe(false);
 });
 

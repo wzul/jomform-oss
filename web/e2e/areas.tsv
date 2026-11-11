@@ -109,7 +109,6 @@ settings-*.spec.ts	web/src/app/settings/**
 workspace-*.spec.ts	web/src/app/settings/**	web/src/app/workspace-picker/**
 workspace-set-default.spec.ts	web/src/app/products/**
 cf-status-*.spec.ts	web/src/app/settings/**	web/src/lib/cf*.ts
-chip-mode-choice.spec.ts	web/src/app/settings/**	web/src/lib/chip*.ts
 affiliate-row.spec.ts	web/src/app/settings/**
 email-language-rule.spec.ts	web/src/app/settings/**	web/src/app/form-settings/**
 deliveries-enqueue-failed.spec.ts	web/src/app/deliveries/**

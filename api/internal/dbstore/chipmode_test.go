@@ -1,53 +1,36 @@
 package dbstore
 
-// Card t_8f38dc34 — the CHIP mode is a merchant CHOICE, never a reading of the
-// secret key.
+// Card t_9efc5ed7 — accounts.chip_mode is write-only legacy.
 //
-// The rule both write doors (REST setChipCreds, MCP set_chip_settings) call is
-// pinned here, without a database: an explicit choice wins, an omitted mode
-// keeps the stored one, nothing stored defaults to test, and a value that is
-// not test/live is REJECTED rather than coerced. The bug this replaces read the
-// secret's first characters (`sk_live_…` → live, `sk_test_…` → test), which
-// CHIP keys do not have, so every real workspace was stored as test.
+// The settings page used to ask the merchant to pick Test or Live. That answer
+// changed NOTHING (ChipAPIBaseUrl picks the endpoint, the key decides what CHIP
+// does), so the control is gone and both write doors now carry only the value
+// the account already holds. The rule both doors (REST setChipCreds, MCP
+// set_chip_settings) call is pinned here, without a database: a stored "live"
+// survives every save, and anything else — absent, empty, garbage — is stored as
+// "test", which is what the column's CHECK and the old default allow.
 
 import "testing"
 
-func TestResolveChipMode(t *testing.T) {
+func TestStoredChipMode(t *testing.T) {
 	cases := []struct {
 		name   string
-		choice string
 		stored string
 		want   string
-		wantOK bool
 	}{
-		// The merchant picked a mode and it is stored as chosen.
-		{"explicit live", "live", "", ChipModeLive, true},
-		{"explicit test", "test", "", ChipModeTest, true},
-		{"choice beats a different stored mode", "live", "test", ChipModeLive, true},
-		{"choice beats a different stored mode, the other way", "test", "live", ChipModeTest, true},
-		// A choice is canonicalised, not pattern-matched against a key shape.
-		{"trimmed and case-folded", "  LiVe \n", "", ChipModeLive, true},
-		// An omitted mode keeps what the account already says, so editing the
-		// fallback email or the method whitelist cannot relabel live as test.
-		{"omitted keeps stored live", "", "live", ChipModeLive, true},
-		{"omitted keeps stored test", "", "test", ChipModeTest, true},
-		// Nothing stored and nothing chosen: the safe label is test.
-		{"omitted with nothing stored", "", "", ChipModeTest, true},
-		{"omitted with an unreadable stored value", "   ", "garbage", ChipModeTest, true},
-		// A value that is neither mode is refused. Guessing one is how a live
-		// key ends up labelled test with no error anywhere.
-		{"unknown choice is refused", "production", "", "", false},
-		{"a secret pasted as the mode is refused", "sk_live_abc123", "", "", false},
-		{"a prefix is not a mode", "sk_test", "", "", false},
+		{"nothing stored defaults to test", "", ChipModeTest},
+		{"stored test stays test", ChipModeTest, ChipModeTest},
+		{"stored live survives a save", ChipModeLive, ChipModeLive},
+		// The database holds lower-case values, but a hand-fixed row should not
+		// be relabelled by a save that cannot express a choice any more.
+		{"stored live is case-folded", "  LiVe \n", ChipModeLive},
+		{"an unreadable stored value falls back to test", "production", ChipModeTest},
+		{"a garbage stored value falls back to test", "***", ChipModeTest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, ok := ResolveChipMode(c.choice, c.stored)
-			if ok != c.wantOK {
-				t.Fatalf("ResolveChipMode(%q, %q) ok = %v, want %v", c.choice, c.stored, ok, c.wantOK)
-			}
-			if got != c.want {
-				t.Fatalf("ResolveChipMode(%q, %q) = %q, want %q", c.choice, c.stored, got, c.want)
+			if got := StoredChipMode(c.stored); got != c.want {
+				t.Fatalf("StoredChipMode(%q) = %q, want %q", c.stored, got, c.want)
 			}
 		})
 	}

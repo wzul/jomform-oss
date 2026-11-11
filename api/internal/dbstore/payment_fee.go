@@ -67,8 +67,12 @@ var ErrFeeUnknownMethod = errors.New("invalid payment method")
 // validFeeMethods mirrors the payment_fee_rates_method_chk constraint. Keeping
 // the list here (and the CHECK in the migration) means a bad method is refused
 // with a sentence at the API edge instead of a 500 from the schema.
+//
+// fpx and fpx_b2b1 are separate rows (card t_1d0198e3): FPX B2C and FPX B2B1 carry
+// different acquirer rates, so the merchant stores one rate per product.
 var validFeeMethods = map[string]bool{
 	"fpx":        true,
+	"fpx_b2b1":   true,
 	"card":       true,
 	"ewallet":    true,
 	"duitnow_qr": true,
@@ -81,7 +85,7 @@ func (s *PaymentFeeStore) List(ctx context.Context, workspaceID string) ([]Payme
 	rows, err := s.pool.Query(ctx,
 		`SELECT method, fee_enabled, fee_fixed_sen, fee_percent_bp, updated_by, updated_at
 		 FROM payment_fee_rates WHERE workspace_id=$1
-		 ORDER BY array_position(ARRAY['fpx','card','ewallet','duitnow_qr'], method)`, workspaceID)
+		 ORDER BY array_position(ARRAY['fpx','fpx_b2b1','card','ewallet','duitnow_qr'], method)`, workspaceID)
 	if err != nil {
 		return nil, err
 	}

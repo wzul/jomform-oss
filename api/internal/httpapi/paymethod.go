@@ -12,12 +12,13 @@
 // whitelist (payments.CheckBuyerPayMethod), so the rows a buyer sees, the value
 // the page posts and the whitelist the purchase is created with cannot drift.
 //
-// The rows are DERIVED, never a hardcoded array: payments.PayOptions filters the
-// merchant's effective whitelist (form/chip-feed override wins, then the
-// account's), so a workspace that enabled only FPX shows only FPX. The four
-// names in the mockup are the four GROUPS this product can label — a CHIP method
-// that belongs to none of them (crypto_coin, Google/Apple Pay) gets no row and
-// stays on CHIP's own page rather than being mislabelled into one.
+// The rows are DERIVED, never a hardcoded array: payments.CheckoutPayOptions
+// filters the merchant's effective whitelist (form/chip-feed override wins, then
+// the account's) and then the FPX products CHIP actually lists, so a workspace
+// that enabled only FPX B2C shows only that row. The names in the mockup are the
+// GROUPS this product can label — a CHIP method that belongs to none of them
+// (crypto_coin, Google/Apple Pay) gets no row and stays on CHIP's own page
+// rather than being mislabelled into one.
 package httpapi
 
 import (
@@ -41,8 +42,8 @@ var errPayMethodUnavailable = buyertext.New(buyertext.CodeOrderPayMethodUnavaila
 // same numbers the server will price with (card t_135c3c72). Zero/zero means
 // this method carries no fee.
 type payMethodChoiceView struct {
-	Key       string // fpx | duitnow_qr | card | ewallet — the posted value
-	Label     string // "FPX", "DuitNow QR", "Debit / credit card", "e-Wallet"
+	Key       string // fpx | fpx_b2b1 | duitnow_qr | card | ewallet — the posted value
+	Label     string // "FPX", "FPX B2B1", "DuitNow QR", "Debit / credit card", "e-Wallet"
 	Desc      string // the small second line ("Scan with any bank app")
 	FixedSen  int64
 	PercentBP int64
@@ -78,14 +79,11 @@ func (h *PublicHandlers) payMethodChoices(ctx context.Context, accountID, formID
 			ov = &payments.ChipOverride{BrandID: b, SecretEnc: s, EmailFallback: ef, MethodWhitelist: wl}
 		}
 	}
-	wl, err := h.Pay.EffectivePayWhitelist(ctx, accountID, ov)
-	if err != nil {
-		// A whitelist we cannot read is not a reason to hide the picker behind
-		// an error page: render what an unrestricted checkout shows. The order
-		// route still validates the choice against the live list.
-		wl = nil
-	}
-	opts := payments.PayOptions(wl)
+	// Card t_1d0198e3: CheckoutPayOptions is the whitelist AND the brand's live
+	// FPX listing, so a workspace enabled for FPX B2C only never renders a B2B1
+	// row. An unreadable whitelist renders what an unrestricted checkout shows —
+	// the order route still validates the choice against the live list.
+	opts := h.Pay.CheckoutPayOptions(ctx, accountID, ov)
 	if len(opts) == 0 {
 		return nil
 	}
@@ -111,13 +109,17 @@ func (h *PublicHandlers) payMethodChoices(ctx context.Context, accountID, formID
 
 // payMethodLabel is the row's own name.
 //
-// FPX and DuitNow QR are SCHEME names: they read the same in every locale, so
-// they are one word in the dictionary rather than a translation a translator
-// could "fix". Card and e-Wallet are ordinary nouns and are translated.
+// FPX, FPX B2B1 and DuitNow QR are SCHEME names: they read the same in every
+// locale, so they are one word in the dictionary rather than a translation a
+// translator could "fix". Card and e-Wallet are ordinary nouns and are
+// translated. FPX and FPX B2B1 are two ROWS (card t_1d0198e3): B2C and B2B1 are
+// different products with different fees, and one label cannot say which.
 func payMethodLabel(ls langStrings, method string) string {
 	switch method {
 	case payments.PayMethodFPX:
 		return "FPX"
+	case payments.PayMethodFPXB2B1:
+		return "FPX B2B1"
 	case payments.PayMethodDuitNowQR:
 		return "DuitNow QR"
 	case payments.PayMethodCard:
@@ -137,6 +139,8 @@ func payMethodDesc(ls langStrings, o payments.PayOption) string {
 	switch o.Method {
 	case payments.PayMethodFPX:
 		return ls.PayFpxDesc
+	case payments.PayMethodFPXB2B1:
+		return ls.PayFpxB2B1Desc
 	case payments.PayMethodDuitNowQR:
 		return ls.PayDuitNowDesc
 	case payments.PayMethodCard:

@@ -51,6 +51,13 @@ type Service struct {
 	Notifications FormNotificationLister
 	// OnPaid (optional) fans outbound webhooks after a sale is paid.
 	OnPaid func(ctx context.Context, accountID, event string, payload map[string]any)
+
+	// availMu guards avail, the short-lived cache of CHIP's LIVE payment-method
+	// listing per (brand, currency, amount) — see availability.go. A struct that
+	// is copied (rather than used through its pointer) must not carry this lock:
+	// every caller here holds a *Service.
+	availMu sync.Mutex
+	avail   map[methodAvailabilityKey]methodAvailabilityEntry
 }
 
 // New wires a payments Service.

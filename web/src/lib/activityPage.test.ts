@@ -44,7 +44,7 @@
 //   5. The 14 orphan keys this card measured are GONE, and the MCP keys that are
 //      still live are NOT (a sweep that took a live key with it would break the
 //      Profile → MCP tab, which renders `set.serverUrl`, `set.clientId`,
-//      `set.revoke` and `set.activeMode`).
+//      `set.revoke` and `set.connected`).
 //   6. (card t_07d8f4a4) The event-type dropdown offers EVERY family the API
 //      actually records, and no family it does not: the families are read out of
 //      the recorder call sites under api/internal, so `chat.*` / `admin.*` /
@@ -511,13 +511,16 @@ test("the orphan dictionary keys are gone, and the live MCP keys are not", () =>
   // The keys the app REALLY renders. A sweep that took these would blank the UI,
   // and it would look like a dictionary edit nobody connected. They do not all
   // live in one file: the MCP block is in profile/page.tsx and the Chip status
-  // line that uses set.activeMode is in settings/page.tsx — so a guard that only
+  // line that uses set.connected is in settings/page.tsx — so a guard that only
   // read profile/ would report a live key as dead and get it deleted.
+  // (Card t_9efc5ed7: set.activeMode went with the Test/Live mode control; the
+  // CHIP card's ONE status pill renders set.connected / set.notConnected /
+  // set.notVerified from that same page.)
   const LIVE_KEYS: Array<[string, string]> = [
     ["set.serverUrl", "../app/profile/page.tsx"],
     ["set.clientId", "../app/profile/page.tsx"],
     ["set.revoke", "../app/profile/page.tsx"],
-    ["set.activeMode", "../app/settings/page.tsx"],
+    ["set.connected", "../app/settings/page.tsx"],
   ];
   for (const [k, where] of LIVE_KEYS) {
     assert.ok(k in DICT, `${k} was deleted with the orphans — ${where} renders it`);

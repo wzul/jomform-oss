@@ -301,7 +301,20 @@ export default function Landing() {
 
       {/* hero — the product IS the first screen (variant A) */}
       <section className="mx-auto max-w-6xl px-6 py-12 lg:py-20">
-        <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-14">
+        {/* The demo column is FIXED at 380px from `lg` up (card t_a818aa21).
+            It used to be `lg:grid-cols-2`, i.e. two equal 524px columns, which
+            made the order-form card 2.46x the height of the copy beside it and
+            449k px2 of dark surface in a 1017px-tall hero.
+
+            WHY 380 AND NOT NARROWER — MEASURED at 1440x900 by editing the real
+            DOM, not a mockup: 420 -> card 420x752; 380 -> card 380x783; 360 ->
+            the card stops shrinking (380x783) because its rows wrap TALLER
+            instead, so the hero grows again (943 -> 943 and rising). 380 is the
+            floor where the surface is smallest and the height does not pay for
+            it. `minmax(0,1fr)` (not `1fr`) keeps the copy column from being
+            forced wider than the space left, which is what stops the h1 from
+            overflowing. */}
+        <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-14">
           <div>
             <p className="inline-block rounded-full border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 py-1 text-xs font-medium text-[var(--jf-primary-strong)]">
               {t("land.badge")}

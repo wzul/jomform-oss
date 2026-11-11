@@ -310,6 +310,9 @@ var restRouteDocs = []restRouteDoc{
 		Summary: "Read whether CHIP is configured", Access: AccessRead},
 	{Method: "DELETE", Path: "/v1/rest/settings/chip", Handler: "deleteChipCreds", Tag: "Payments (CHIP)",
 		Summary: "Clear the workspace's CHIP credentials", Access: AccessAdmin},
+	{Method: "POST", Path: "/v1/rest/settings/chip/test", Handler: "testChipCreds", Tag: "Payments (CHIP)",
+		Summary: "Test CHIP credentials without saving", Access: AccessAdmin, Body: true,
+		Desc: "Runs the same live CHIP credential check the save path runs and stores nothing. An empty body tests the stored Secret Key; a secret_key field tests a key the merchant has just pasted. Admin only."},
 
 	// ── API keys ─────────────────────────────────────────────────────────────
 	{Method: "GET", Path: "/v1/rest/keys", Handler: "listKeys", Tag: "API keys",

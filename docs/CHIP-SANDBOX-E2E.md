@@ -14,29 +14,40 @@ API endpoint, and CHIP issues **separate keys for test and for live** in the
 merchant portal. The key itself is an opaque bearer token with no published
 prefix, so JomForm cannot tell which one it is holding.
 
-That is why **the mode is a choice, not a detection**: Settings → CHIP has a
-**Test / Live** control, defaulting to Test, and whatever the merchant picks is
-what `chip_mode` stores. It is a label: the key decides what CHIP actually does,
-so a test key never charges a real card whichever label it carries. If the label
-does not match the key, the badge is wrong but payments still follow the key.
+**There is no Test/Live control, and you do not choose a mode.** Card
+t_9efc5ed7 removed it: the label never chose the endpoint (`ChipAPIBaseUrl`
+does), never blocked anything and never changed a payment, so it asked a
+question no code path acted on. What decides the behaviour is the KEY you
+paste: a CHIP test key moves no real money, whatever any label says.
 
-`chip_mode` is decided by `dbstore.ResolveChipMode`, the one rule both write
-doors use (`api/internal/httpapi/rest_chip.go` for REST,
-`api/internal/mcpsrv/parity_issue396.go` for MCP). An omitted mode keeps the
-stored one, and a value that is neither `test` nor `live` is refused.
+`accounts.chip_mode` is **write-only legacy**. Both write doors
+(`api/internal/httpapi/rest_chip.go` for REST,
+`api/internal/mcpsrv/parity_issue396.go` for MCP) still write it, because the
+column carries a CHECK constraint and a save must not leave it NULL, but the
+value written is the one the account already holds (`dbstore.StoredChipMode`) —
+never a value from the request. An older REST or MCP client that still sends
+`"mode": "test"` is **accepted and ignored** rather than refused, so clients
+written against the previous contract keep working. Nothing reads the column to
+decide anything.
+
+If you need to know whether a given sale was a test, read it from CHIP's own
+purchase response (`is_test`), not from this column. JomForm does not record that
+field yet; adding it (`api/internal/chip/types.go` → the sale row → a badge where
+a sale is inspected) is the follow-up that makes a truthful badge possible.
 
 ### Confirming a test-mode brand/secret exists for automated tests
 
 1. Create a CHIP **test** brand in the CHIP portal (Sandbox / Test mode).
 2. Copy its **Brand ID** and **Secret Key**. The key is an opaque token; there
    is no prefix to recognise it by.
-3. In JomForm, set the account's CHIP credentials to that pair and pick
-   **Test** in the mode control (dashboard Settings → CHIP, or the
-   `set_chip_settings` MCP tool with `"mode": "test"`). The save is
-   **validated against CHIP** (`ValidateCredentials`) before it is stored, so
-   a wrong pair is rejected.
-4. Confirm the account now reports `chip_mode = 'test'` (dashboard Settings →
-   CHIP shows the mode badge; the MCP `get_account` returns `chip_mode`).
+3. In JomForm, save that pair (dashboard Settings → CHIP, or the
+   `set_chip_settings` MCP tool). The save is **validated against CHIP**
+   (`ValidateCredentials`) before it is stored, so a wrong pair is rejected.
+   `test_chip_connection` (MCP) / `POST /v1/rest/settings/chip/test` runs the
+   same check without storing anything.
+4. Confirm the card's status pill reads **Connected** (or that
+   `get_chip_settings` reports `configured: true, verified: true`). That is the
+   only evidence the pair works; `chip_mode` is not.
 
 > **Local/staging:** export the test credentials as env vars
 > `JOMFORM_E2E_CHIP_BRAND_ID` and `JOMFORM_E2E_CHIP_SECRET_KEY` and have the

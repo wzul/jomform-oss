@@ -52,6 +52,7 @@ export const LANDING_PAY_METHODS = ["FPX", "DuitNow QR", "VISA", "GrabPay", "Boo
  */
 export const LANDING_PAY_OPTIONS = [
   { id: "fpx", labelKey: "land.payfpx", descKey: "land.payfpxdesc" },
+  { id: "fpx_b2b1", labelKey: "land.payfpxb2b1", descKey: "land.payfpxb2b1desc" },
   { id: "duitnow_qr", labelKey: "land.paydnqr", descKey: "land.paydnqrdesc" },
   { id: "card", labelKey: "land.paycard", descKey: "land.paycarddesc" },
   { id: "ewallet", labelKey: "land.paywallet", descKey: "land.paywalletdesc" },
@@ -679,18 +680,35 @@ export const DICT = {
   "set.from": { en: "from", ms: "dari", zh: "来自", ta: "இருந்து", ar: "من" },
   "set.chipPortal": { en: "CHIP Merchant Portal → Developers", ms: "Portal Pedagang CHIP → Developers", zh: "CHIP 商户门户 → 开发者", ta: "CHIP வணிகர் தளம் → Developers", ar: "بوابة تجار CHIP → المطورين" },
   "set.keysEncrypted": { en: "Keys are stored encrypted and never shown again.", ms: "Kunci disimpan terenkrip — tidak dipaparkan lagi.", zh: "密钥加密存储 — 不会再次显示。", ta: "விசைகள் என்க்ரிப்ட் செய்யப்பட்டு சேமிக்கப்படும் — மீண்டும் காட்டப்படாது.", ar: "تُخزَّن المفاتيح مشفرة — لا تُعرض مرة أخرى." },
-  "set.secretMasked": { en: "Stored key: {masked} (masked; leave blank to keep)", ms: "Kunci tersimpan: {masked} (disamarkan — biarkan kosong untuk kekal)", zh: "已存密钥：{masked}（已掩码 — 留空以保留）", ta: "சேமித்த விசை: {masked} (மறைக்கப்பட்டது — வைக்க காலியாக விடவும்)", ar: "المفتاح المخزن: {masked} (مخفي — اتركه فارغاً للإبقاء عليه)" },
-  "set.secretMaskedPlaceholder": { en: "•••••• (masked; leave blank to keep)", ms: "•••••• (disamarkan — biarkan kosong untuk kekal)", zh: "••••••（已掩码 — 留空以保留）", ta: "•••••• (மறைக்கப்பட்டது — வைக்க காலியாக விடவும்)", ar: "•••••• (مخفي — اتركه فارغاً للإبقاء عليه)" },
+  // Card t_9efc5ed7: the Test/Live MODE control is gone. `chip_mode` never chose
+  // the API endpoint (ChipAPIBaseUrl does), never blocked anything and never
+  // changed a payment, so the merchant was answering a question nobody read. The
+  // keys that existed only to ask it — set.mode, set.modeHint, set.live, set.test,
+  // set.activeMode, set.apiVerified, set.notSet, set.secretMasked,
+  // set.secretMaskedPlaceholder — are deleted with the control; none of them has
+  // a call site any more (src/lib/chipSettingsRedesign.test.ts pins that).
+  //
+  // What replaces them: ONE connection pill in the card's header, three truthful
+  // states, and the actions the card now carries.
   "set.secretKey": { en: "Secret Key", ms: "Kunci Rahsia", zh: "密钥", ta: "ரகசிய விசை", ar: "المفتاح السري" },
-  "set.apiVerified": { en: "✓ API credentials verified", ms: "✓ Kredensial API disahkan", zh: "✓ API 凭证已验证", ta: "✓ API சான்றுகள் சரிபார்க்கப்பட்டன", ar: "✓ تم التحقق من بيانات API" },
-  "set.mode": { en: "Mode", ms: "Mod", zh: "模式", ta: "முறை", ar: "الوضع" },
-  "set.live": { en: "Live", ms: "Live", zh: "生产", ta: "லைவ்", ar: "مباشر" },
-  "set.test": { en: "Test", ms: "Ujian", zh: "测试", ta: "சோதனை", ar: "اختبار" },
-  // Card t_8f38dc34: CHIP keys are opaque tokens with no prefix (CHIP issues a
-  // separate key per mode in the portal), so the mode is a control, and the
-  // hint says what a wrong choice does instead of pretending one can be read.
-  "set.modeHint": { en: "Pick the mode you created this key in, in the CHIP portal. A test key never charges a real card. If this label does not match the key, the badge is wrong but payments still follow the key.", ms: "Pilih mod anda cipta kunci ini, di portal CHIP. Kunci ujian tidak sekali-kali mengecaj kad sebenar. Jika label ini tidak sepadan dengan kunci, lencana itu salah tetapi pembayaran tetap mengikut kunci.", zh: "请选择您在 CHIP 门户创建此密钥时所用的模式。测试密钥绝不会向真实银行卡收费。如果此标签与密钥不符，徽章会显示错误，但付款仍以密钥为准。", ta: "இந்த விசையை நீங்கள் உருவாக்கிய முறையை CHIP தளத்தில் தேர்ந்தெடுக்கவும். சோதனை விசை உண்மையான அட்டையிலிருந்து ஒருபோதும் வசூலிக்காது. இந்த லேபிள் விசையுடன் பொருந்தவில்லை என்றால் பேட்ஜ் தவறாகும், ஆனால் பணம் செலுத்துதல் விசையையே பின்பற்றும்.", ar: "اختر الوضع الذي أنشأت به هذا المفتاح في بوابة CHIP. مفتاح الاختبار لا يسحب أبداً من بطاقة حقيقية. إذا لم يطابق هذا التصنيف المفتاح، فستكون الشارة خاطئة لكن المدفوعات تتبع المفتاح." },
-  "set.secretKeyPh": { en: "Paste the Secret Key", ms: "Tampal Kunci Rahsia", zh: "粘贴密钥", ta: "ரகசிய விசையை ஒட்டவும்", ar: "الصق المفتاح السري" },
+  "set.connected": { en: "Connected", ms: "Disambung", zh: "已连接", ta: "இணைக்கப்பட்டது", ar: "متصل" },
+  "set.notConnected": { en: "Not connected", ms: "Tidak disambung", zh: "未连接", ta: "இணைக்கப்படவில்லை", ar: "غير متصل" },
+  "set.notVerified": { en: "Not verified", ms: "Tidak disahkan", zh: "未验证", ta: "சரிபார்க்கப்படவில்லை", ar: "غير موثّق" },
+  // The placeholders describe the ACTION. Neither carries an ellipsis character:
+  // the old `e.g. 5f2b…-uuid` shipped a literal "…" in the string and read as a
+  // field that had been truncated before the merchant typed anything.
+  "set.brandIdPh": { en: "Paste the Brand ID from the CHIP portal", ms: "Tampal Brand ID dari portal CHIP", zh: "从 CHIP 门户粘贴 Brand ID", ta: "CHIP தளத்திலிருந்து Brand ID ஐ ஒட்டவும்", ar: "الصق Brand ID من بوابة CHIP" },
+  "set.secretKeyPh": { en: "Paste the Secret Key from the CHIP portal", ms: "Tampal Kunci Rahsia dari portal CHIP", zh: "从 CHIP 门户粘贴密钥", ta: "CHIP தளத்திலிருந்து ரகசிய விசையை ஒட்டவும்", ar: "الصق المفتاح السري من بوابة CHIP" },
+  "set.savedEncryptedEnds": { en: "Saved encrypted · ends {tail}", ms: "Disimpan disulitkan · berakhir {tail}", zh: "已加密保存 · 结尾 {tail}", ta: "என்க்ரிப்ட் செய்து சேமிக்கப்பட்டது · முடிவு {tail}", ar: "محفوظ مشفراً · ينتهي بـ {tail}" },
+  "set.savedEncrypted": { en: "Saved encrypted", ms: "Disimpan disulitkan", zh: "已加密保存", ta: "என்க்ரிப்ட் செய்து சேமிக்கப்பட்டது", ar: "محفوظ مشفراً" },
+  "set.replace": { en: "Replace", ms: "Ganti", zh: "更换", ta: "மாற்று", ar: "استبدال" },
+  "set.keepSaved": { en: "Keep saved key", ms: "Kekalkan kunci tersimpan", zh: "保留已存密钥", ta: "சேமித்த விசையை வைத்திரு", ar: "الاحتفاظ بالمفتاح المحفوظ" },
+  "set.advanced": { en: "Advanced", ms: "Lanjutan", zh: "高级", ta: "மேம்பட்டவை", ar: "متقدم" },
+  "set.testConnection": { en: "Test connection", ms: "Uji sambungan", zh: "测试连接", ta: "இணைப்பைச் சோதி", ar: "اختبار الاتصال" },
+  "set.testing": { en: "Testing", ms: "Menguji", zh: "测试中", ta: "சோதிக்கிறது", ar: "جارٍ الاختبار" },
+  "set.testConnectionOk": { en: "Connection OK. CHIP accepted these credentials.", ms: "Sambungan OK — CHIP menerima kredensial ini.", zh: "连接正常 — CHIP 已接受此凭证。", ta: "இணைப்பு சரி — CHIP இந்தச் சான்றுகளை ஏற்றுக்கொண்டது.", ar: "الاتصال سليم — قبل CHIP هذه البيانات." },
+  "set.testConnectionFailed": { en: "Could not verify with CHIP", ms: "Tidak dapat mengesahkan dengan CHIP", zh: "无法通过 CHIP 验证", ta: "CHIP உடன் சரிபார்க்க முடியவில்லை", ar: "تعذر التحقق مع CHIP" },
+
   "set.emailFallback": { en: "Email fallback", ms: "Emel sandaran", zh: "备用邮箱", ta: "மாற்று மின்னஞ்சல்", ar: "البريد الإلكتروني الاحتياطي" },
   "set.emailFallbackHint": { en: "(optional; used when buyer email is missing; one-time forms only)", ms: "(pilihan — digunakan bila emel pembeli tiada; borang one-time sahaja)", zh: "（可选 — 买家邮箱缺失时使用；仅一次性表单）", ta: "(விருப்பம் — வாங்குபவர் மின்னஞ்சல் இல்லாதபோது பயன்படும்; ஒரு முறை படிவங்களுக்கு மட்டும்)", ar: "(اختياري — يُستخدم عند غياب بريد المشتري؛ النماذج لمرة واحدة فقط)" },
   "set.paymentMethods": { en: "Payment methods", ms: "Kaedah bayaran", zh: "支付方式", ta: "பணம் செலுத்தும் முறைகள்", ar: "طرق الدفع" },
@@ -786,7 +804,6 @@ export const DICT = {
   "set.signingSecret": { en: "Signing secret", ms: "Rahsia penandatanganan", zh: "签名密钥", ta: "கையொப்ப ரகசியம்", ar: "سر التوقيع" },
   "set.clientId": { en: "client id:", ms: "id klien:", zh: "客户端 ID：", ta: "க்ளையன்ட் ஐடி:", ar: "معرف العميل:" },
   "set.revoke": { en: "Revoke", ms: "Tarik balik", zh: "撤销", ta: "ரத்து", ar: "إلغاء" },
-  "set.activeMode": { en: "ACTIVE · {mode}", ms: "AKTIF · {mode}", zh: "已启用 · {mode}", ta: "செயலில் · {mode}", ar: "نشط · {mode}" },
   "set.serverUrl": { en: "Server URL", ms: "URL pelayan", zh: "服务器地址", ta: "சர்வர் URL", ar: "عنوان الخادم" },
   "set.cfTitle": { en: "Cloudflare (auto CNAME)", ms: "Cloudflare (CNAME automatik)", zh: "Cloudflare（自动 CNAME）", ta: "Cloudflare (தானியங்கி CNAME)", ar: "Cloudflare (CNAME تلقائي)" },
   "set.cfConnected": { en: "Cloudflare connected ✓", ms: "Cloudflare bersambung ✓", zh: "Cloudflare 已连接 ✓", ta: "Cloudflare இணைக்கப்பட்டது ✓", ar: "تم الاتصال بـ Cloudflare ✓" },
@@ -1301,7 +1318,6 @@ export const DICT = {
   "set.cfConnect": { en: "Connect", ms: "Sambung", zh: "连接", ta: "இணைக்க", ar: "اتصال" },
   "set.cfConnecting": { en: "Connecting…", ms: "Menyambung…", zh: "连接中…", ta: "இணைக்கிறது…", ar: "جارٍ الاتصال…" },
   "set.cfManualErr": { en: "Could not connect: ", ms: "Gagal menyambung: ", zh: "无法连接：", ta: "இணைக்க முடியவில்லை: ", ar: "تعذر الاتصال: " },
-  "set.notSet": { en: "NOT SET", ms: "BELUM DITETAPKAN", zh: "未设置", ta: "அமைக்கப்படவில்லை", ar: "غير مضبوط" },
   // issue #128: webhook event selection + edit
   "webhook.eventsTitle": { en: "Subscribe to events", ms: "Langgan peristiwa", zh: "订阅事件", ta: "நிகழ்வுகளுக்குப் பதிவுசெய்ய", ar: "الاشتراك في الأحداث" },
   "webhook.event.sale.paid": { en: "Sale paid", ms: "Jualan dibayar", zh: "订单已支付", ta: "விற்பனை செலுத்தப்பட்டது", ar: "دفعت عملية البيع" },
@@ -2095,13 +2111,18 @@ export const DICT = {
   "land.fmpay": { en: "Pay {amount}", ms: "Bayar {amount}", zh: "支付 {amount}", ta: "{amount} செலுத்து", ar: "ادفع {amount}" },
   /* card t_453489b9 — the demo's payment-method picker, mirroring the product's
      own picker (api/internal/httpapi/paymethod.go renders the same rows). The
-     labels are the four GROUPS: FPX and DuitNow QR are scheme names and read the
-     same in every locale; card and e-wallet are ordinary nouns. `land.payvia` is
-     the Pay button's second line. */
+     labels are the GROUPS, in the product's order: FPX, FPX B2B1, DuitNow QR, card
+     and e-wallet. FPX, FPX B2B1 and DuitNow QR are scheme names and read the same
+     in every locale; card and e-wallet are ordinary nouns. Card t_1d0198e3 split
+     FPX into its two products (B2C personal / B2B1 corporate) because each carries
+     its own fee — the demo shows both, exactly as the real picker does.
+     `land.payvia` is the Pay button's second line. */
   "land.paytitle": { en: "Payment method", ms: "Kaedah bayaran", zh: "付款方式", ta: "கட்டண முறை", ar: "طريقة الدفع" },
   "land.paypick": { en: "Choose one", ms: "Pilih satu", zh: "选择一项", ta: "ஒன்றைத் தேர்ந்தெடு", ar: "اختر واحدة" },
   "land.payfpx": { en: "FPX", ms: "FPX", zh: "FPX", ta: "FPX", ar: "FPX" },
-  "land.payfpxdesc": { en: "Online banking: Maybank2u, CIMB Clicks, RHB Now", ms: "Perbankan online: Maybank2u, CIMB Clicks, RHB Now", zh: "网上银行：Maybank2u、CIMB Clicks、RHB Now", ta: "ஆன்லைன் வங்கி: Maybank2u, CIMB Clicks, RHB Now", ar: "الخدمات المصرفية عبر الإنترنت: Maybank2u وCIMB Clicks وRHB Now" },
+  "land.payfpxdesc": { en: "Personal online banking: Maybank2u, CIMB Clicks, RHB Now", ms: "Perbankan online peribadi: Maybank2u, CIMB Clicks, RHB Now", zh: "个人网上银行：Maybank2u、CIMB Clicks、RHB Now", ta: "தனிநபர் ஆன்லைன் வங்கி: Maybank2u, CIMB Clicks, RHB Now", ar: "الخدمات المصرفية الشخصية عبر الإنترنت: Maybank2u وCIMB Clicks وRHB Now" },
+  "land.payfpxb2b1": { en: "FPX B2B1", ms: "FPX B2B1", zh: "FPX B2B1", ta: "FPX B2B1", ar: "FPX B2B1" },
+  "land.payfpxb2b1desc": { en: "Corporate online banking: for business accounts", ms: "Perbankan online korporat: untuk akaun perniagaan", zh: "企业网上银行：供公司账户使用", ta: "கார்ப்பரேட் ஆன்லைன் வங்கி: வணிகக் கணக்குகளுக்கு", ar: "الخدمات المصرفية للشركات: لحسابات الأعمال" },
   "land.paydnqr": { en: "DuitNow QR", ms: "DuitNow QR", zh: "DuitNow QR", ta: "DuitNow QR", ar: "DuitNow QR" },
   "land.paydnqrdesc": { en: "Scan with any bank app", ms: "Imbas dengan mana-mana aplikasi bank", zh: "用任何银行应用扫描", ta: "எந்த வங்கி செயலியிலும் ஸ்கேன் செய்யுங்கள்", ar: "امسح بأي تطبيق مصرفي" },
   "land.paycard": { en: "Debit / credit card", ms: "Kad debit / kredit", zh: "借记卡 / 信用卡", ta: "பற்று / கடன் அட்டை", ar: "بطاقة خصم / ائتمان" },
@@ -2346,6 +2367,16 @@ export const DICT = {
   "sales.shipCourierFellBack": { en: "courier quote did not arrive, zone rate charged instead", ms: "sebut harga kurier tidak masuk, kadar zon dikenakan", zh: "快递未返回报价，改按区域费率收费", ta: "கூரியர் மதிப்பீடு வரவில்லை, மண்டலக் கட்டணம் வசூலிக்கப்பட்டது", ar: "لم يصل عرض سعر الشركة، وتم احتساب سعر المنطقة بدلاً منه" },
   "sales.discount": { en: "Discount", ms: "Diskaun", zh: "折扣", ta: "தள்ளுபடி", ar: "الخصم" },
   "sales.total": { en: "Total", ms: "Jumlah", zh: "合计", ta: "மொத்தம்", ar: "الإجمالي" },
+  // Card t_4ca2da1f: the buyer-borne processing fee and what the merchant nets.
+  // `sales.fee` is worded EXACTLY as the buyer's checkout row and the receipt's
+  // own line in every locale (api/internal/httpapi/formLang.go FeeLine), so the
+  // merchant and the buyer never see one charge called two things; the rate
+  // beside it is the API's frozen fee_rate_label. `sales.feeNet` is the drawer's
+  // net figure — the same words as the /docs/payment-fees gross-up table header.
+  // Pinned together by web/src/lib/salesFee.test.ts.
+  "sales.fee": { en: "Processing fee", ms: "Caj pemprosesan", zh: "手续费", ta: "செயலாக்கக் கட்டணம்", ar: "رسوم المعالجة" },
+  "sales.feeNet": { en: "You receive", ms: "Anda terima", zh: "您收到", ta: "நீங்கள் பெறுவது", ar: "تستلم" },
+  "sales.feeDocs": { en: "What the processing fee is and how the total is calculated", ms: "Apa itu caj pemprosesan dan bagaimana jumlah dikira", zh: "什么是手续费以及总额如何计算", ta: "செயலாக்கக் கட்டணம் என்ன, மொத்தம் எப்படிக் கணக்கிடப்படுகிறது", ar: "ما رسوم المعالجة وكيف يُحتسب الإجمالي" },
   "sales.buyerInfo": { en: "Buyer", ms: "Pembeli", zh: "买家信息", ta: "வாங்குபவர்", ar: "المشتري" },
   "sales.qty": { en: "Qty", ms: "Kuantiti", zh: "数量", ta: "அளவு", ar: "الكمية" },
   "sales.actions": { en: "Actions", ms: "Tindakan", zh: "操作", ta: "செயல்கள்", ar: "الإجراءات" },

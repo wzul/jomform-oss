@@ -2,62 +2,42 @@ package dbstore
 
 import "strings"
 
-// Card t_8f38dc34: the CHIP mode is a merchant CHOICE, never a guess.
+// accounts.chip_mode is WRITE-ONLY LEGACY (card t_9efc5ed7).
 //
-// The two REST/MCP write doors used to infer it from the secret key's prefix
-// (`sk_live_…` → live, `sk_test_…` → test) on the theory that CHIP keys work
-// like Stripe's. They do not, and CHIP's own documentation says so: the
-// merchant portal issues a SEPARATE key for test and for live, and the key
-// itself is an opaque bearer token with no published prefix (docs.chip-in.asia
-// → CHIP Collect → Authentication → "Test vs live keys"). So a real merchant
-// key matched neither prefix, every workspace was stored as chip_mode='test',
-// and the settings page showed "Test" beside a live key.
+// History, kept short so the column is not "cleaned up" by mistake:
 //
-// The mode is now what the merchant picks in the UI. These two functions are
-// the ONE rule both doors share, so REST and MCP cannot drift apart again.
-
-// The only values accounts.chip_mode accepts — see the CHECK constraint in
-// 000001_init.up.sql.
+//   - It once inferred the mode from the secret key's first characters
+//     (`sk_live_…` → live, `sk_test_…` → test). CHIP keys are opaque bearer
+//     tokens with no published prefix, so every real workspace was stored as
+//     `test` while holding live keys (card t_8f38dc34, measured: 24 test rows,
+//     zero live).
+//   - It then asked the merchant to pick Test or Live. That question changes
+//     nothing: the API endpoint is chosen by ChipAPIBaseUrl, nothing blocks on
+//     the label, and the key itself decides what CHIP does — so the merchant was
+//     answering for a badge nobody could act on (card t_9efc5ed7).
+//
+// Both write doors still WRITE it (the CHECK constraint in 000001_init.up.sql
+// accepts only the two values below, and a save must not leave a NULL), and the
+// dashboard/MCP still read it back for older integrations, but NO code path
+// decides anything from it. It is kept rather than dropped because dropping a
+// column is a separate, reviewable migration; see the card's handoff.
+//
+// The only values accounts.chip_mode accepts.
 const (
 	ChipModeTest = "test"
 	ChipModeLive = "live"
 )
 
-// NormaliseChipMode canonicalises a mode the caller stated. ok is false when
-// it is not one of the two stored values, so a caller can REJECT it instead of
-// quietly storing something else.
-func NormaliseChipMode(mode string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case ChipModeTest:
-		return ChipModeTest, true
-	case ChipModeLive:
-		return ChipModeLive, true
+// StoredChipMode is what a credential save writes into chip_mode: whatever the
+// account already holds, canonicalised, and "test" when it holds nothing usable.
+//
+// It deliberately takes NO caller input. An older REST or MCP client that still
+// sends `mode` is accepted and ignored (rejecting it would break clients that
+// follow the published contract), and the value stored is the one the account
+// already had — never the value in the request, because nothing acts on it.
+func StoredChipMode(stored string) string {
+	if strings.EqualFold(strings.TrimSpace(stored), ChipModeLive) {
+		return ChipModeLive
 	}
-	return "", false
-}
-
-// ResolveChipMode returns the mode a credential save should store.
-//
-// choice is what the caller sent (empty when it did not send one); stored is
-// what the account already has ("" when it has none).
-//
-//   - An explicit choice wins. It is never overridden by the shape of the
-//     secret: a merchant who says "test" gets test even when their key happens
-//     to start with sk_live.
-//   - An empty choice KEEPS the stored mode. A save that only edits the
-//     fallback email or the method whitelist must not relabel live
-//     credentials as test.
-//   - With nothing stored, the default is test. That is the safe label for a
-//     merchant who has not said which portal mode their key belongs to.
-//
-// ok is false when choice is non-empty and is neither test nor live; the
-// caller must reject that request rather than guess.
-func ResolveChipMode(choice, stored string) (mode string, ok bool) {
-	if strings.TrimSpace(choice) == "" {
-		if canon, valid := NormaliseChipMode(stored); valid {
-			return canon, true
-		}
-		return ChipModeTest, true
-	}
-	return NormaliseChipMode(choice)
+	return ChipModeTest
 }

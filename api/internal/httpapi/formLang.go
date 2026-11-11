@@ -163,7 +163,7 @@ type langStrings struct {
 	MenuExtraEdit string // link label: edit the attached form
 	// Card t_453489b9: the buyer's payment-method picker. PayMethodTitle is the
 	// group's heading ("Payment method"), PayPickOne the muted hint on the
-	// right of it ("Pilih satu"), the four *Label/*Desc pairs are the rows, and
+	// right of it ("Pilih satu"), the *Label/*Desc pairs are the rows, and
 	// PayVia is the word the Pay button's second line uses ("melalui FPX").
 	// PayChipNote is the lock-icon line under the rows: the buyer is told who
 	// takes the money and that the card number never reaches JomForm.
@@ -174,10 +174,14 @@ type langStrings struct {
 	PayEWalletLabel string // "e-Wallet"
 	PayEWalletDesc  string // fallback when no wallet brand is known
 	PayFpxDesc      string
-	PayDuitNowDesc  string
-	PayVia          string // "via" — the Pay button's second line
-	PayAmount       string // "Pay {amount}" — the button's first line once a method is picked
-	PayChipNote     string
+	// PayFpxB2B1Desc is the SECOND FPX row (card t_1d0198e3): FPX B2B1 is
+	// corporate online banking, a different product from B2C with its own fee,
+	// so the two rows cannot share one description.
+	PayFpxB2B1Desc string
+	PayDuitNowDesc string
+	PayVia         string // "via" — the Pay button's second line
+	PayAmount      string // "Pay {amount}" — the button's first line once a method is picked
+	PayChipNote    string
 }
 
 // formLangs maps every supported language code to its buyer-facing strings.
@@ -236,7 +240,8 @@ var formLangs = map[string]langStrings{
 		PayMethodTitle:   "Payment method", PayPickOne: "Choose one",
 		PayCardLabel: "Debit / credit card", PayCardDesc: "Visa · Mastercard",
 		PayEWalletLabel: "e-Wallet", PayEWalletDesc: "Pay with your wallet app",
-		PayFpxDesc:      "Online banking — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxDesc:      "Personal online banking — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxB2B1Desc:  "Corporate online banking — for business bank accounts",
 		PayDuitNowDesc:  "Scan with any bank app",
 		PayVia:          "via",
 		PayAmount:       "Pay {amount}",
@@ -307,7 +312,8 @@ var formLangs = map[string]langStrings{
 		PayMethodTitle:   "Kaedah bayaran", PayPickOne: "Pilih satu",
 		PayCardLabel: "Kad debit / kredit", PayCardDesc: "Visa · Mastercard",
 		PayEWalletLabel: "E-dompet", PayEWalletDesc: "Bayar dengan aplikasi dompet anda",
-		PayFpxDesc:      "Perbankan online — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxDesc:      "Peribadi online banking — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxB2B1Desc:  "Perbankan online korporat — untuk akaun bank perniagaan",
 		PayDuitNowDesc:  "Imbas dengan mana-mana aplikasi bank",
 		PayVia:          "melalui",
 		PayAmount:       "Bayar {amount}",
@@ -375,7 +381,8 @@ var formLangs = map[string]langStrings{
 		PayMethodTitle:   "付款方式", PayPickOne: "选择一项",
 		PayCardLabel: "借记卡 / 信用卡", PayCardDesc: "Visa · Mastercard",
 		PayEWalletLabel: "电子钱包", PayEWalletDesc: "用钱包应用付款",
-		PayFpxDesc:      "网上银行 — Maybank2u、CIMB Clicks、RHB Now",
+		PayFpxDesc:      "个人网上银行 — Maybank2u、CIMB Clicks、RHB Now",
+		PayFpxB2B1Desc:  "企业网上银行 — 供公司银行账户使用",
 		PayDuitNowDesc:  "用任何银行应用扫描",
 		PayVia:          "通过",
 		PayAmount:       "支付 {amount}",
@@ -443,7 +450,8 @@ var formLangs = map[string]langStrings{
 		PayMethodTitle:   "கட்டண முறை", PayPickOne: "ஒன்றைத் தேர்ந்தெடு",
 		PayCardLabel: "பற்று / கடன் அட்டை", PayCardDesc: "Visa · Mastercard",
 		PayEWalletLabel: "மின் பணப்பை", PayEWalletDesc: "உங்கள் பணப்பை செயலியில் செலுத்துங்கள்",
-		PayFpxDesc:      "ஆன்லைன் வங்கி — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxDesc:      "தனிநபர் ஆன்லைன் வங்கி — Maybank2u, CIMB Clicks, RHB Now",
+		PayFpxB2B1Desc:  "கார்ப்பரேட் ஆன்லைன் வங்கி — வணிக வங்கிக் கணக்குகளுக்கு",
 		PayDuitNowDesc:  "எந்த வங்கி செயலியிலும் ஸ்கேன் செய்யுங்கள்",
 		PayVia:          "வழியாக",
 		PayAmount:       "{amount} செலுத்து",
@@ -511,7 +519,8 @@ var formLangs = map[string]langStrings{
 		PayMethodTitle:   "طريقة الدفع", PayPickOne: "اختر واحدة",
 		PayCardLabel: "بطاقة خصم / ائتمان", PayCardDesc: "Visa · Mastercard",
 		PayEWalletLabel: "محفظة إلكترونية", PayEWalletDesc: "ادفع عبر تطبيق محفظتك",
-		PayFpxDesc:      "الخدمات المصرفية عبر الإنترنت — Maybank2u وCIMB Clicks وRHB Now",
+		PayFpxDesc:      "الخدمات المصرفية الشخصية عبر الإنترنت — Maybank2u وCIMB Clicks وRHB Now",
+		PayFpxB2B1Desc:  "الخدمات المصرفية للشركات عبر الإنترنت — لحسابات الشركات البنكية",
 		PayDuitNowDesc:  "امسح بأي تطبيق مصرفي",
 		PayVia:          "عبر",
 		PayAmount:       "ادفع {amount}",

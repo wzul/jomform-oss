@@ -240,3 +240,41 @@ func TestValidFeeMethod(t *testing.T) {
 }
 
 // msgf is gone: the grid builds its failure strings with fmt.Sprintf directly.
+
+// TestTwoFPXFeeKeysAreDistinct pins the KEY split from card t_1d0198e3: FPX B2C
+// (fpx) and FPX B2B1 (fpx_b2b1) must be separately storable and separately
+// labelled, or a workspace cannot charge RM1 for one and RM2 for the other.
+//
+// BITE PROOF: drop FeeMethodFPXB2B1 from FeeMethods (or fold the key back into
+// FeeMethodFPX) and this test fails on the rate-label equality below, because both
+// products then print the same buyer-facing line.
+func TestTwoFPXFeeKeysAreDistinct(t *testing.T) {
+	if !ValidFeeMethod(FeeMethodFPXB2B1) {
+		t.Fatalf("ValidFeeMethod(%q) = false — the DB CHECK accepts it, so the code must too", FeeMethodFPXB2B1)
+	}
+	if FeeMethodFPX == FeeMethodFPXB2B1 {
+		t.Fatalf("the two FPX products share one fee key (%q)", FeeMethodFPX)
+	}
+	// Both are in the storable list, adjacent and in the picker's order.
+	idx := -1
+	for i, m := range FeeMethods {
+		if m == FeeMethodFPXB2B1 {
+			idx = i
+		}
+	}
+	if idx != 1 || FeeMethods[0] != FeeMethodFPX {
+		t.Fatalf("FeeMethods = %v, want FPX B2C first and FPX B2B1 second", FeeMethods)
+	}
+	// The labels a buyer reads differ, and so do the amounts they can carry.
+	b2c := FeeRateLabel(FeeMethodFPX, 100, 0)
+	b2b1 := FeeRateLabel(FeeMethodFPXB2B1, 200, 0)
+	if b2c != "FPX RM1.00" {
+		t.Fatalf("FPX B2C label = %q, want %q", b2c, "FPX RM1.00")
+	}
+	if b2b1 != "FPX B2B1 RM2.00" {
+		t.Fatalf("FPX B2B1 label = %q, want %q", b2b1, "FPX B2B1 RM2.00")
+	}
+	if b2c == b2b1 {
+		t.Fatalf("the two FPX products print the same fee line (%q)", b2c)
+	}
+}

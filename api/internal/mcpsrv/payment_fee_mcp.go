@@ -33,8 +33,11 @@ var errPaymentFeesUnavailable = errors.New("processing fee settings not availabl
 var errPaymentFeeAckRequired = errors.New("tick the disclosure acknowledgement before enabling the processing fee")
 
 // feeRateIn is one method's rate: basis points (100 = 1%) and integer sen.
+//
+// fpx (FPX B2C, personal) and fpx_b2b1 (FPX B2B1, corporate) are two separate
+// methods (card t_1d0198e3), so a workspace can carry a different rate for each.
 type feeRateIn struct {
-	Method    string `json:"method" jsonschema:"CHIP method: fpx, card, ewallet or duitnow_qr"`
+	Method    string `json:"method" jsonschema:"CHIP method: fpx (FPX B2C), fpx_b2b1 (FPX B2B1), card, ewallet or duitnow_qr"`
 	Enabled   bool   `json:"fee_enabled" jsonschema:"Enable the fee for this method (payer bears the fee)"`
 	FixedSen  int64  `json:"fee_fixed_sen,omitempty" jsonschema:"Fixed fee in SEN (RM1.00 = 100). 0 = no fixed fee"`
 	PercentBP int64  `json:"fee_percent_bp,omitempty" jsonschema:"Percentage fee in BASIS POINTS (100 = 1%). Must be less than 10000 (99.99%)"`

@@ -175,3 +175,68 @@ export function answersPreview(row: RowLike | null | undefined, max = 60): strin
   const joined = parts.join(" · ");
   return joined.length > max ? joined.slice(0, max - 1) + "…" : joined;
 }
+
+// ── The buyer-borne processing fee (card t_4ca2da1f) ─────────────────────────
+//
+// THE DEFECT THIS EXISTS FOR
+//   A workspace that passes the CHIP processing fee on to the buyer records it
+//   on the sale (fee_sen, and the frozen rate in fee_method/fee_fixed_sen/
+//   fee_percent_bp). `/sales` showed only total_sen — what the BUYER paid — in
+//   the row's JUMLAH cell and in the detail drawer, with no fee line and no net
+//   figure, so on a RM1,000 sale at 1% the page read RM1,010.10 and said nothing
+//   about the RM10.10 that is not the merchant's. The buyer's receipt already
+//   printed that line; the merchant's own dashboard did not.
+//
+// WHY THE RATE LABEL COMES FROM THE SERVER
+//   The row carries `fee_rate_label`, rendered server-side by
+//   payments.FeeRateLabel over the sale's FROZEN snapshot — the same function
+//   that produces the receipt's "Processing fee — FPX 1.00%: RM 10.10". This
+//   module never formats basis points itself, so the drawer and the receipt
+//   cannot disagree about a rate (100 → "1.00%", 1 → "0.01%"), and a later rate
+//   change cannot rewrite what a past buyer was charged.
+//
+// MONEY: every amount is integer sen; netSen is total − fee in that same unit,
+// never a re-derived percentage.
+
+export type SaleFeeRow = {
+  fee_sen?: number;
+  total_sen?: number;
+  fee_rate_label?: string;
+};
+
+export type SaleFee = {
+  /** The processing fee the buyer bore, integer sen. */
+  feeSen: number;
+  /** What the buyer was charged, integer sen (includes feeSen). */
+  totalSen: number;
+  /** What the merchant receives: total − fee, integer sen. */
+  netSen: number;
+  /** The receipt's own rate label ("FPX 1.00%"); "" when the sale has none. */
+  rateLabel: string;
+};
+
+// saleFee reads the fee off a sale row, or returns null when the buyer bore
+// none (fee_sen absent or 0 — `omitempty` on the API drops it) so every surface
+// renders a pre-fee sale exactly as before.
+//
+// A row with a fee but no total is a shape this page cannot price, so it is
+// treated as no fee rather than guessing a net; the amount column still shows
+// whatever total the row carries.
+export function saleFee(row: SaleFeeRow | null | undefined): SaleFee | null {
+  const feeSen = row?.fee_sen;
+  const totalSen = row?.total_sen;
+  if (typeof feeSen !== "number" || !Number.isFinite(feeSen) || feeSen <= 0) return null;
+  if (typeof totalSen !== "number" || !Number.isFinite(totalSen)) return null;
+  const rateLabel = typeof row?.fee_rate_label === "string" ? row.fee_rate_label.trim() : "";
+  return { feeSen, totalSen, netSen: totalSen - feeSen, rateLabel };
+}
+
+// feeLine is the labelled fee line: the page's own word for "Processing fee"
+// followed by the server's frozen rate label. With no label (a fee recorded
+// before the rate snapshot existed) it is just the word — never a dangling
+// separator.
+export function feeLine(feeWord: string, rateLabel: string): string {
+  const rate = (rateLabel ?? "").trim();
+  return rate === "" ? feeWord : `${feeWord} · ${rate}`;
+}
+

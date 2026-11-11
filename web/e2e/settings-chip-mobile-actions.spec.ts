@@ -37,7 +37,10 @@ import { signIn } from "./auth";
 const SAVE = DICT["set.save"].en;
 const SELECT_ALL = DICT["set.pmSelectAll"].en;
 const CLEAR_ALL = DICT["set.pmClearAll"].en;
-const activeMode = (mode: string) => DICT["set.activeMode"].en.replace("{mode}", mode.toUpperCase());
+// Card t_9efc5ed7: the bar and the card's pill carry the same CONNECTION state.
+// The mode label (`ACTIVE · TEST`) went with the Test/Live control, which asked a
+// question no payment behaviour depended on.
+const CONNECTED = DICT["set.connected"].en;
 
 // THE PHONE THE CARD WAS MEASURED ON.
 const PHONE = { width: 390, height: 844 } as const;
@@ -229,12 +232,12 @@ test("390px: the CHIP panel's Save sits in the bottom action bar of the first vi
   expect(m.docHeight, "the page is not taller than the viewport, so this arm proves nothing").toBeGreaterThan(m.viewportH);
 
   // The bar carries the CONNECTION STATE, in the same words as the card's badge.
-  await expect(page.locator('[data-testid="chip-sticky-state"]')).toHaveText(activeMode("test"));
+  await expect(page.locator('[data-testid="chip-sticky-state"]')).toHaveText(CONNECTED);
 
   // It is a Save that does nothing until there is something to save…
   await expect(stickySave(page), "Save is enabled before anything changed").toBeDisabled();
   // …and one edit enables it.
-  await page.getByPlaceholder("e.g. 5f2b…-uuid").fill("brand-from-phone");
+  await page.getByTestId("chip-brand-id").fill("brand-from-phone");
   await expect(stickySave(page), "typing a Brand ID did not enable the sticky Save").toBeEnabled();
 
   // Pressing it submits the SAME form (no second write path) — the server sees it…

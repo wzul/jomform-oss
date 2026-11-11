@@ -14,9 +14,22 @@ every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (
 `a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
 gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
 `testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
-**325 tests in 63 files**: sales, chat, forms, form settings, settings/workspaces,
+**324 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
 products, media, templates, deliveries, activity, landing, login, session, profile,
 docs and the cross-page presentation specs.
+
+The 63 → 62 FILE and 325 → 324 test drop is this PR (card `t_9efc5ed7`,
+wzul/jomform #1708): it deletes `web/e2e/chip-mode-choice.spec.ts` — ONE arm, "a
+stored mode renders as the selected choice, and choosing Live saves live" — and that
+spec's `web/e2e/areas.tsv` row, because the Test/Live mode control it drove is gone
+from the settings CHIP card. That is the only spec and the only area mapping the PR
+removes and nothing else moved (the `a11y` family on the same tree reads 217 in 23,
+and `e2e-builder` 56 in 17). Measured on the MERGED tree (`origin/main` `11ce49ab6` +
+this PR, merge commit `2ba0e541a`) with `cd web && ./node_modules/.bin/playwright test
+--project=feature-core --list`. The figure before it was **325 tests in 63 files**
+(that figure, and the paragraph below that counts `panduan-surau-shot-scale.spec.ts`
+as the 63rd file, are the shape of the family BEFORE this deletion — the file it names
+is this family's 62nd now).
 
 The 63rd FILE is `web/e2e/panduan-surau-shot-scale.spec.ts` (card `t_e1ea03a2`): 2 arms on the
 nine figures of `/panduan/surau` — at a 390px phone viewport every figure renders at >= 0.45x

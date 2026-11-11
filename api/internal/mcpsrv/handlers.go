@@ -342,6 +342,15 @@ type saleOut struct {
 	RefundedSen    int64  `json:"refunded_sen"`
 	OutstandingSen int64  `json:"outstanding_sen"`
 	RefundStatus   string `json:"refund_status"`
+	// Card t_4ca2da1f: the buyer-borne processing fee, its frozen rate label and
+	// the merchant's NET, so an agent reading the same sale the dashboard shows
+	// cannot report what the buyer paid (total_sen) as the merchant's income.
+	// FeeRateLabel is payments.FeeRateLabel over the snapshot the receipt prints;
+	// net_sen is total_sen - fee_sen, both integer sen. A sale with no fee emits
+	// no fee fields (omitempty) and net_sen equals total_sen.
+	FeeSen       int64  `json:"fee_sen,omitempty"`
+	FeeRateLabel string `json:"fee_rate_label,omitempty"`
+	NetSen       int64  `json:"net_sen"`
 	// Issue #604: for a response-mode form the row is a SUBMISSION, not a sale
 	// (issue #171) — sale_type is "response", submission_id identifies it and
 	// data carries the recorded answers. Without these an agent following the
@@ -465,6 +474,13 @@ func saleOutFromSale(sl *dbstore.Sale) saleOut {
 		// The server's lifecycle answer travels with the row (card t_52429d6f):
 		// an agent planning an action reads it instead of guessing from status.
 		AvailableEvents: availableEventsOf(sl),
+	}
+	// Card t_4ca2da1f: the fee and the merchant's net travel with the row, the
+	// same numbers the dashboard's Sales page renders. A no-fee sale keeps
+	// net_sen == total_sen, because what the merchant receives IS the total then.
+	if o.NetSen = sl.TotalSen - sl.FeeSen; sl.FeeSen > 0 {
+		o.FeeSen = sl.FeeSen
+		o.FeeRateLabel = payments.FeeRateLabel(sl.FeeMethod, sl.FeeFixedSen, sl.FeePercentBp)
 	}
 	if len(sl.Items) > 0 {
 		o.Items = make([]saleItemOut, 0, len(sl.Items))

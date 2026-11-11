@@ -14,6 +14,7 @@ import { PROFILE_NAME_MAX_CHARS, normalizeProfileName } from "../../lib/profileI
 import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
+import { resolveProfileTab, type ProfileTab } from "../../lib/profileTab";
 import { classifyLoadError, fetchJson } from "../../lib/wsfetch";
 import { b64url, fromB64url } from "../../lib/webauthn";
 
@@ -74,7 +75,10 @@ type DeviceConsent = {
   state: "pending" | "approved" | "denied" | "expired" | "used";
 };
 
-type ProfileTab = "identity" | "security" | "passkeys" | "connected" | "mcp";
+// The tab ids live in lib/profileTab.ts with the arrival rule; this literal is
+// the strip's own order and is pinned equal to PROFILE_TABS by
+// src/lib/profileTab.test.ts (and read from here by
+// e2e/a11y-profile-tabs.spec.ts, which derives the strip's tabs from source).
 const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected", "mcp"];
 
 // Issue #191: common IANA timezones offered in the Profile → Identity tab.
@@ -113,19 +117,20 @@ const COMMON_TIMEZONES = [
 
 function loadStoredTab(): ProfileTab {
   if (typeof window === "undefined") return "identity";
-  // Issue #310: when arriving via a social-connect callback (?linked=) or an
-  // explicit ?tab=connected, open the Social accounts tab so the user sees
-  // their freshly-linked account.
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("linked") !== null) return "connected";
-  if (params.get("tab") === "connected") return "connected";
+  // #1703 follow-up: the arrival rule (?linked= > valid ?tab= > stored tab >
+  // identity) lives in lib/profileTab.ts so it is unit-tested, and an explicit
+  // `?tab=` now WINS over the stored tab. That is what makes the device-flow
+  // email's `/profile?tab=mcp&user_code=…` link open the consent card for a
+  // user who has never visited the MCP tab — the old code honoured only
+  // `?tab=connected`, so every first-time headless-onboarding user landed on
+  // Identity (measured on prod v1.37.0; guard: src/lib/profileTab.test.ts).
+  let stored: string | null = null;
   try {
-    const v = window.localStorage.getItem("jf_profile_tab");
-    if (v === "identity" || v === "security" || v === "passkeys" || v === "connected" || v === "mcp") return v;
+    stored = window.localStorage.getItem("jf_profile_tab");
   } catch {
-    // storage unavailable — fall through
+    // storage unavailable — the query still decides, then identity
   }
-  return "identity";
+  return resolveProfileTab(window.location.search, stored);
 }
 
 export default function ProfilePage() {

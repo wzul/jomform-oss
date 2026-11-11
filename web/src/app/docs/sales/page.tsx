@@ -21,6 +21,7 @@ const SECTIONS: Section[] = [
       "Each row carries the **reference code**, status, buyer, amount, method and date.",
       "A status is **pending**, **confirmed**, **failed** or **refunded**. From here you confirm bank transfers, capture or release skip-capture authorisations, refund in full or in part, and export to CSV.",
       "Amounts stay in the currency the sale was recorded in: **US$24.90** for a USD sale, **RM24.90** for an MYR one.",
+      "With a buyer-borne fee the amount column also shows the fee and **You receive** (total − fee); the drawer breaks it down in that order.",
       "The workspace's current setting never relabels history. `GET /v1/rest/sales` and `list_sales` carry it as **currency**, and a refund is asked for in that same currency.",
       {
         note: "A form's mode names its entries. A payment form offers **Sales**; a response-only form offers **Submission**. Both open the same per-form list. `GET /v1/rest/forms` reports the mode as **mode**.",

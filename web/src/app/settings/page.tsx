@@ -26,10 +26,12 @@ import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist
 import { legalLinkWarningLines, type LegalLinkField, type LegalLinkStatusMap } from "../../lib/legalLinkWarning";
 import { cnameTarget, workspaceAddressLabel } from "../../lib/deployment";
 import { useDeployment } from "../../components/useDeployment";
-// Card t_8f38dc34: the CHIP test/live mode is the merchant's choice. CHIP keys
-// are opaque bearer tokens with no published prefix, so the page no longer
-// reads one out of the secret; the options and the default live here.
-import { CHIP_MODE_OPTIONS, chipModeFromStored, chipModeLabelKey, type ChipMode } from "../../lib/chipMode";
+// Card t_9efc5ed7: the Test/Live mode control is GONE from this page — the
+// label never chose the API endpoint (ChipAPIBaseUrl does) and never changed a
+// payment, so it asked a question nobody could act on. `lib/chipMode.ts` and its
+// options/labels were deleted with it; `accounts.chip_mode` survives as
+// write-only legacy (see api/internal/dbstore/chipmode.go).
+
 
 type ChipStatus = { configured: boolean; verified?: boolean; mode?: string; secret_key_masked?: string };
 
@@ -75,10 +77,12 @@ type FeeRateRow = {
   updated_by?: string;
 };
 
-// FEE_METHOD_NAMES are the buyer-facing names of the four storable methods. The
-// keys are the API's, never displayed raw to a merchant.
+// FEE_METHOD_NAMES are the buyer-facing names of the five storable methods. The
+// keys are the API's, never displayed raw to a merchant. fpx and fpx_b2b1 are two
+// rows (card t_1d0198e3): FPX B2C and FPX B2B1 carry different acquirer rates.
 const FEE_METHOD_NAMES: Record<string, string> = {
-  fpx: "FPX",
+  fpx: "FPX (B2C)",
+  fpx_b2b1: "FPX B2B1",
   card: "Card",
   ewallet: "e-Wallet",
   duitnow_qr: "DuitNow QR",
@@ -123,8 +127,11 @@ function loadStoredTab(): SettingsTab {
 }
 
 const METHODS = [
-  { id: "fpx", label: "FPX" },
-  { id: "fpx_b2b1", label: "FPX B2B1" },
+  // Card t_1d0198e3: FPX is TWO buyer choices at CHIP — B2C (personal) and B2B1
+  // (corporate) — with different fees, so the whitelist ticks them separately and
+  // the labels have to say which is which. An existing ["fpx"] keeps meaning B2C.
+  { id: "fpx", label: "FPX — personal online banking (B2C)" },
+  { id: "fpx_b2b1", label: "FPX B2B1 — corporate online banking" },
   { id: "card", label: "Card (Visa, Mastercard, Maestro)" },
   { id: "mpgs_google_pay", label: "Google Pay" },
   { id: "mpgs_apple_pay", label: "Apple Pay" },
@@ -255,12 +262,17 @@ export default function Settings() {
   const [brandId, setBrandId] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [secretMasked, setSecretMasked] = useState("");
-  // Card t_8f38dc34: which mode the merchant created this key in. It is a
-  // CONTROL now, defaulting to Test, because CHIP keys carry no prefix the page
-  // can read. `touched` stops a background reload from overwriting a choice the
-  // merchant has made but not saved yet.
-  const [chipMode, setChipMode] = useState<ChipMode>("test");
-  const chipModeTouched = useRef(false);
+  // Card t_9efc5ed7: a saved secret is a MASKED LINE with a Replace action, not
+  // a second always-empty field. `replacingSecret` opens the paste field for a
+  // new key; closing it (or a successful save) puts the masked line back.
+  const [replacingSecret, setReplacingSecret] = useState(false);
+  // The email fallback is a rare one-time-form setting, so it folds into an
+  // "Advanced" disclosure. `advancedTouched` stops a background reload from
+  // re-opening a disclosure the merchant has deliberately closed.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedTouched = useRef(false);
+  // "Test connection" runs the live CHIP check without saving.
+  const [testing, setTesting] = useState(false);
   const [emailFallback, setEmailFallback] = useState("");
   const [whitelist, setWhitelist] = useState<string[]>([]);
   // Card t_f11d676f: the CHIP card's SAVED values, so a control can say whether
@@ -269,11 +281,12 @@ export default function Settings() {
   // form holds exactly this, and re-enabled the moment a field or a tick moves.
   // The secret key is deliberately NOT here — it is write-only and its field is
   // empty whenever the stored key is in force, so any typing is a new key.
-  const [chipSaved, setChipSaved] = useState<{ brand: string; email: string; methods: string; mode: ChipMode }>({
+  // Card t_9efc5ed7 dropped `mode`: it is no longer a form field (nothing reads
+  // it), so a control can no longer be dirty because of it.
+  const [chipSaved, setChipSaved] = useState<{ brand: string; email: string; methods: string }>({
     brand: "",
     email: "",
     methods: "",
-    mode: "test",
   });
   // The page's two message states. `msg` holds the banner/toast text and `msgOk`
   // its TONE: several of the writers below are a FAILED save, not a
@@ -550,7 +563,6 @@ export default function Settings() {
           brand: s.brand_id || "",
           email: s.email_fallback || "",
           methods: methodSetKey(Array.isArray(s.whitelist) ? s.whitelist : []),
-          mode: chipModeFromStored(s.mode),
         });
         // Issue #327: the full secret is never returned — only a masked tail.
         // Never populate the editable field with a real secret; the merchant
@@ -560,9 +572,11 @@ export default function Settings() {
         // Issue #325: "verified" is TRUE only after a live CHIP API check
         // passed at save time — never merely because credentials are stored.
         setVerified(!!s.verified);
-        // Card t_8f38dc34: the control reflects what is stored. A merchant
-        // mid-edit keeps their pick until they save it.
-        if (!chipModeTouched.current) setChipMode(chipModeFromStored(s.mode));
+        // Card t_9efc5ed7: a stored fallback email is a fact the merchant should
+        // be able to SEE without hunting for it, so the Advanced disclosure opens
+        // itself when one is stored — until the merchant closes it themselves.
+        if (!advancedTouched.current) setAdvancedOpen(!!s.email_fallback);
+
       }
       setKeys(Array.isArray(k) ? k : []);
     };
@@ -1012,11 +1026,10 @@ export default function Settings() {
       body: JSON.stringify({
         brand_id: brandId,
         secret_key: secretKey,
-        // Card t_8f38dc34: the mode the merchant chose. It used to be omitted
-        // ("Issue #326: no mode field") because the API guessed it from the
-        // key's prefix — a prefix CHIP keys do not have, which is why every
-        // workspace was stored as test.
-        mode: chipMode,
+        // Card t_9efc5ed7: no `mode`. The Test/Live control is gone because the
+        // label changes no payment — ChipAPIBaseUrl picks the endpoint and the
+        // key itself decides what CHIP does. The API still ACCEPTS the field for
+        // older clients and ignores it; this client no longer sends it.
         email_fallback: emailFallback,
         payment_method_whitelist: whitelist,
       }),
@@ -1041,10 +1054,10 @@ export default function Settings() {
         verified: d.verified === true,
         mode: typeof d.mode === "string" ? d.mode : prev?.mode,
       }));
-      // The server echoed the mode it stored, so the pick is no longer an
-      // unsaved edit: a later load (workspace switch) may apply server truth
-      // again. Card t_8f38dc34.
-      chipModeTouched.current = false;
+      // Card t_9efc5ed7: a key that was just stored is now a masked line, so the
+      // paste field closes and the next "Replace" is a deliberate action.
+      setSecretKey("");
+      setReplacingSecret(false);
       // A save that reached the API but whose CHIP check could not be confirmed
       // is NOT a clean success. It is shown on the failure tone so the merchant
       // reads the caveat on the same chrome as its meaning (the sentence itself
@@ -1058,6 +1071,31 @@ export default function Settings() {
       const d = await r.json().catch(() => ({}));
       setVerified(false);
       setErr(apiErr(d, t("set.failedSave"), t));
+    }
+  }
+
+  // Card t_9efc5ed7 — the card's "Test connection" action: run the SAME live
+  // CHIP credential check the save path runs, without storing anything. A key the
+  // merchant has just pasted is the one tested; with the field closed the stored
+  // key is tested (empty body). The API answers 400 with `verified:false` when
+  // CHIP refuses the pair, so the failure tone is the API's, not a guess.
+  async function testConnection() {
+    setMsg("");
+    setErr("");
+    setTesting(true);
+    try {
+      const r = await fetch(`/api/rest/settings/chip/test${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret_key: secretKey.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) showMsgOk(t("set.testConnectionOk"));
+      else showMsgFail(apiErr(d, t("set.testConnectionFailed"), t));
+    } catch {
+      showMsgFail(t("set.testConnectionFailed"));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -1079,10 +1117,10 @@ export default function Settings() {
     setStatus((prev) => ({ ...(prev || { configured: false }), configured: false, verified: false, mode: "" }));
     setVerified(false);
     setSecretMasked("");
-    // Clearing resets the stored mode to test (ClearChipCredentials), so the
-    // control goes back to its default and stops holding an unsaved pick.
-    chipModeTouched.current = false;
-    setChipMode("test");
+    // Clearing removes the stored key, so the masked line goes with it and the
+    // paste field is the next thing the merchant needs (card t_9efc5ed7).
+    setSecretKey("");
+    setReplacingSecret(false);
     reload();
   }
 
@@ -1685,17 +1723,31 @@ export default function Settings() {
   const chipDirty =
     brandId !== chipSaved.brand ||
     emailFallback !== chipSaved.email ||
-    chipMode !== chipSaved.mode ||
     secretKey.trim() !== "" ||
     methodSetKey(whitelist) !== chipSaved.methods;
   const allMethodsSelected = METHODS.length > 0 && METHODS.every((m) => whitelist.includes(m.id));
-  // The connection state the bar carries beside the button, in the same words
-  // the card's own badge uses.
-  const chipStateLabel = status
-    ? status.configured
-      ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() })
-      : t("set.notSet")
-    : "";
+  // Card t_9efc5ed7: ONE connection state, read from the server's own row, and
+  // used by BOTH the card's pill and the sticky bar's label — the two cannot
+  // disagree, and neither claims a "mode" any more. "Unverified" is a real third
+  // state: credentials stored but the live CHIP check did not pass at save time,
+  // so calling it "Connected" would be a lie.
+  const chipConnection: "off" | "unverified" | "on" = !status?.configured
+    ? "off"
+    : verified
+      ? "on"
+      : "unverified";
+  const chipStateLabel = !status
+    ? ""
+    : chipConnection === "on"
+      ? t("set.connected")
+      : chipConnection === "unverified"
+        ? t("set.notVerified")
+        : t("set.notConnected");
+  // The masked tail alone, without the leading bullets: the API masks with
+  // cryptoutil.MaskSecret ("••••4f2a"), and the card's line reads
+  // "Saved encrypted · ends 4f2a" (card t_9efc5ed7). When the mask carries no
+  // tail at all the line drops the "ends …" clause rather than printing one.
+  const secretTail = secretMasked.replace(/^[•]+/, "").trim();
 
   // Stable identity: the toast's dismiss timer is keyed on this callback, and a
   // new function on every render would restart (or drop) the timer. It must live
@@ -1841,24 +1893,34 @@ export default function Settings() {
             id={panelDomId("set", "chip")}
             aria-labelledby={tabDomId("set", "chip")}
           >
-            <div className="flex items-center justify-between">
+            {/* Card t_9efc5ed7: the card's header carries ONE status pill. The
+                two "✓ API credentials verified" chips that used to sit on the
+                Brand ID and Secret Key labels repeated the same fact twice and
+                said the same thing in two places; the connection state belongs
+                in the header, said once. It has three truthful states, not two:
+                credentials stored but the live CHIP check unconfirmed is neither
+                "Connected" nor "Not connected". */}
+            <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">{t("set.chipTitle")}</h2>
               {status && (
                 <span
                   data-testid="chip-status-badge"
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                    status.configured
-                      ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border border-slate-200 bg-slate-50 text-slate-500"
+                  data-state={chipConnection}
+                  className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${
+                    chipConnection === "on"
+                      ? "border-[var(--jf-success)] bg-[var(--jf-success-bg)] text-[var(--jf-text-secondary)]"
+                      : chipConnection === "unverified"
+                        ? "border-[var(--jf-warning)] bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)]"
+                        : "border-[var(--jf-border)] bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)]"
                   }`}
                 >
-                  {status.configured ? t("set.activeMode", { mode: (status.mode || "test").toUpperCase() }) : t("set.notSet")}
+                  {chipStateLabel}
                 </span>
               )}
             </div>
-            <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
-              {t("set.getYour")} <code className="rounded bg-slate-100 px-1">Brand ID</code> {t("set.and")}{" "}
-              <code className="rounded bg-slate-100 px-1">{t("set.secretKey")}</code> {t("set.from")}{" "}
+            <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted)]">
+              {t("set.getYour")} <code className="rounded bg-[var(--jf-surface-2)] px-1 text-[var(--jf-text-secondary)]">Brand ID</code> {t("set.and")}{" "}
+              <code className="rounded bg-[var(--jf-surface-2)] px-1 text-[var(--jf-text-secondary)]">{t("set.secretKey")}</code> {t("set.from")}{" "}
               <a
                 href="https://portal.chip-in.asia/collect/developers/brands"
                 className="text-[var(--jf-primary)] underline"
@@ -1871,84 +1933,121 @@ export default function Settings() {
             {/* `id` so the sticky Save bar at the bottom of the view can submit
                 this form from outside it (`form="chip-creds-form"`) without a
                 second copy of the write path (card t_f11d676f). */}
-            <form id="chip-creds-form" onSubmit={save} className="mt-4 space-y-3">
+            <form id="chip-creds-form" onSubmit={save} className="mt-4 space-y-4">
+              {/* Credentials FIRST (card t_9efc5ed7): Brand ID, then the Secret
+                  Key. The placeholders describe the ACTION and the portal the
+                  value comes from. The old placeholder was the literal string
+                  "e.g. 5f2b…-uuid" — a "…" CHARACTER inside the string, not CSS
+                  truncation — so the field looked clipped before it held
+                  anything (Wan: "brand id tu ada truncate .... uuid"). No
+                  placeholder in this card carries an ellipsis of either kind. */}
               <div>
-                <label className="flex items-center gap-2 text-xs text-slate-500">
+                <label htmlFor="chip-brand-id" className="text-xs font-semibold text-[var(--jf-text-secondary)]">
                   Brand ID
-                  {verified && (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-jf-3xs font-semibold text-emerald-700">
-                      {t("set.apiVerified")}
-                    </span>
-                  )}
                 </label>
                 <input
+                  id="chip-brand-id"
+                  data-testid="chip-brand-id"
                   value={brandId}
                   onChange={(e) => setBrandId(e.target.value)}
                   required
-                  className="jf-input mt-1 max-w-xl"
-                  placeholder="e.g. 5f2b…-uuid"
+                  className="jf-input mt-1.5 max-w-xl"
+                  placeholder={t("set.brandIdPh")}
                 />
               </div>
               <div>
-                <label className="flex items-center gap-2 text-xs text-slate-500">
-                  {t("set.secretKey")}
-                  {verified && (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-jf-3xs font-semibold text-emerald-700">
-                      {t("set.apiVerified")}
+                {secretMasked && !replacingSecret ? (
+                  <>
+                    {/* A saved secret is a MASKED LINE plus a Replace ACTION — not
+                        a second field that sits there empty and reads as "the key
+                        is gone". The button is described by the masked line so a
+                        screen reader hears WHICH key it replaces. */}
+                    <span className="block text-xs font-semibold text-[var(--jf-text-secondary)]">
+                      {t("set.secretKey")}
                     </span>
-                  )}
-                </label>
-                <input
-                  value={secretKey}
-                  onChange={(e) => setSecretKey(e.target.value)}
-                  type="text"
-                  className="jf-input mt-1 max-w-xl font-mono"
-                  placeholder={verified && secretMasked ? t("set.secretMaskedPlaceholder") : t("set.secretKeyPh")}
-                />
-                {verified && secretMasked && (
-                  <p className="mt-1 text-xs text-[var(--jf-muted)]">
-                    {t("set.secretMasked", { masked: secretMasked })}
-                  </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <p id="chip-secret-masked" data-testid="chip-secret-masked" className="text-sm text-[var(--jf-text-secondary)]">
+                        {secretTail
+                          ? t("set.savedEncryptedEnds", { tail: secretTail })
+                          : t("set.savedEncrypted")}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setReplacingSecret(true)}
+                        aria-describedby="chip-secret-masked"
+                        data-testid="chip-secret-replace"
+                        className="text-xs font-semibold text-[var(--jf-primary-strong)] underline"
+                      >
+                        {t("set.replace")}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label htmlFor="chip-secret-key" className="text-xs font-semibold text-[var(--jf-text-secondary)]">
+                      {t("set.secretKey")}
+                    </label>
+                    <input
+                      id="chip-secret-key"
+                      data-testid="chip-secret-key"
+                      value={secretKey}
+                      onChange={(e) => setSecretKey(e.target.value)}
+                      type="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="jf-input mt-1.5 max-w-xl font-mono"
+                      placeholder={t("set.secretKeyPh")}
+                    />
+                    {secretMasked && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplacingSecret(false);
+                          setSecretKey("");
+                        }}
+                        data-testid="chip-secret-keep"
+                        className="mt-1 text-xs font-semibold text-[var(--jf-primary-strong)] underline"
+                      >
+                        {t("set.keepSaved")}
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
-              <div>
-                {/* A mode group is not a form field a <label> can point at, so the
-                    caption is a span and the radiogroup carries the accessible
-                    name (card t_8f38dc34). */}
-                <span className="text-xs text-slate-500">{t("set.mode")}</span>
-                <div className="mt-1.5 flex flex-wrap gap-4" role="radiogroup" aria-label={t("set.mode")}>
-                  {CHIP_MODE_OPTIONS.map((m) => (
-                    <label key={m} className="flex items-center gap-1.5 text-sm text-slate-700">
-                      <input
-                        type="radio"
-                        name="chip-mode"
-                        value={m}
-                        data-testid={`chip-mode-${m}`}
-                        checked={chipMode === m}
-                        onChange={() => {
-                          chipModeTouched.current = true;
-                          setChipMode(m);
-                        }}
-                      />
-                      {t(chipModeLabelKey(m))}
-                    </label>
-                  ))}
-                </div>
-                <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("set.modeHint")}</p>
-              </div>
 
-              <div>
-                <label className="text-xs text-slate-500">
-                  {t("set.emailFallback")} <span className="text-[var(--jf-muted)]">{t("set.emailFallbackHint")}</span>
-                </label>
-                <input
-                  value={emailFallback}
-                  onChange={(e) => setEmailFallback(e.target.value)}
-                  type="email"
-                  className="jf-input mt-1 max-w-xl"
-                  placeholder="store@yourshop.my"
-                />
-              </div>
+              {/* Card t_9efc5ed7: the fallback email is a RARE one-time-form
+                  setting, so it folds into an Advanced disclosure instead of
+                  taking a primary row beside the credentials. It opens itself when
+                  one is stored, so a value the merchant set is never hidden from
+                  them (see the bundle applier). */}
+              <details
+                className="rounded-[var(--jf-radius-md)] border border-[var(--jf-border)] px-3 py-2"
+                data-testid="chip-advanced"
+                open={advancedOpen}
+                onToggle={(e) => {
+                  advancedTouched.current = true;
+                  setAdvancedOpen(e.currentTarget.open);
+                }}
+              >
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--jf-text-secondary)]">
+                  {t("set.advanced")}
+                </summary>
+                <div className="mt-2">
+                  <label htmlFor="chip-email-fallback" className="text-xs font-semibold text-[var(--jf-text-secondary)]">
+                    {t("set.emailFallback")}
+                  </label>
+                  <input
+                    id="chip-email-fallback"
+                    data-testid="chip-email-fallback"
+                    value={emailFallback}
+                    onChange={(e) => setEmailFallback(e.target.value)}
+                    type="email"
+                    className="jf-input mt-1.5 max-w-xl"
+                    placeholder="store@yourshop.my"
+                  />
+                  <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("set.emailFallbackHint")}</p>
+                </div>
+              </details>
 
               {/* Payment methods — CHECKBOXES, not filter pills (card
                   t_f11d676f).
@@ -1969,22 +2068,25 @@ export default function Settings() {
                   everything (one is "let CHIP decide", the other is the list). */}
               <div>
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                  <span id="chip-pm-label" className="text-xs text-slate-500">
-                    {t("set.paymentMethods")} <span className="text-[var(--jf-muted)]">{t("set.allMethods")}</span>
+                  <span id="chip-pm-label" className="text-xs font-semibold text-[var(--jf-text-secondary)]">
+                    {t("set.paymentMethods")} <span className="font-normal text-[var(--jf-muted)]">{t("set.allMethods")}</span>
                   </span>
                   <button
                     type="button"
                     onClick={() => setWhitelist(allMethodsSelected ? [] : METHODS.map((m) => m.id))}
                     data-testid="chip-pm-toggle-all"
-                    className="min-h-8 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-[var(--jf-primary)] hover:border-slate-300"
+                    className="min-h-8 rounded-[var(--jf-radius-md)] border border-[var(--jf-border)] px-2.5 py-1 text-xs font-semibold text-[var(--jf-primary)] hover:border-[var(--jf-muted)]"
                   >
                     {allMethodsSelected ? t("set.pmClearAll") : t("set.pmSelectAll")}
                   </button>
                 </div>
+                {/* Card t_9efc5ed7: a TWO-COLUMN grid at every width (the
+                    mockup's 390px phone included), not one column that only
+                    becomes two on a desktop. */}
                 <div
                   role="group"
                   aria-labelledby="chip-pm-label"
-                  className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2"
+                  className="mt-2 grid grid-cols-2 gap-1.5"
                 >
                   {METHODS.map((m) => {
                     const checked = whitelist.includes(m.id);
@@ -1993,19 +2095,25 @@ export default function Settings() {
                         key={m.id}
                         data-testid={`chip-pm-row-${m.id}`}
                         data-checked={checked ? "true" : "false"}
-                        className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs ${
+                        className={`flex min-h-9 cursor-pointer items-center gap-2 rounded-[var(--jf-radius-md)] border px-2.5 py-2 text-xs ${
                           checked
-                            ? "border-[var(--jf-primary)] bg-indigo-50 font-medium text-[var(--jf-primary-on-tint)]"
-                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                            ? "border-[var(--jf-primary)] bg-[var(--jf-primary-tint)] font-medium text-[var(--jf-primary-on-tint)]"
+                            : "border-[var(--jf-border)] bg-[var(--jf-surface)] text-[var(--jf-text-secondary)] hover:border-[var(--jf-muted)]"
                         }`}
                       >
                         {/* A native checkbox, visually replaced by the box below
                             so the tick is a real glyph at every zoom level and
                             in every browser. It stays in the DOM (sr-only) so
                             the row is one keyboard stop with its label, and the
-                            focus ring is drawn on the visible box. */}
+                            focus ring is drawn on the visible box. `role` and
+                            `aria-checked` are set explicitly (card t_9efc5ed7):
+                            they are the same state the native control exposes,
+                            and the card asks for the announced checkbox state by
+                            name — the grid must read as checkboxes, not filters. */}
                         <input
                           type="checkbox"
+                          role="checkbox"
+                          aria-checked={checked}
                           className="peer sr-only"
                           checked={checked}
                           onChange={() => toggleMethod(m.id)}
@@ -2031,7 +2139,7 @@ export default function Settings() {
                             `--jf-primary` (4.70:1). */}
                         <span
                           aria-hidden="true"
-                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-slate-300 bg-white peer-checked:border-[var(--jf-primary)] peer-checked:bg-[var(--jf-primary)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--jf-primary)]"
+                          className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[var(--jf-border)] bg-[var(--jf-surface)] peer-checked:border-[var(--jf-primary)] peer-checked:bg-[var(--jf-primary)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--jf-primary)]"
                         >
                           {checked && (
                             <span className="text-jf-4xs font-bold leading-none text-white">✓</span>
@@ -2044,10 +2152,31 @@ export default function Settings() {
                 </div>
               </div>
 
-              <div className="flex gap-2 pt-1">
-                <button className="jf-btn-primary">{t("set.save")}</button>
+              {/* Card t_9efc5ed7: the action bar sits at the BOTTOM of the card —
+                  "Test connection" (secondary) then "Save" (primary), the two
+                  things a merchant wants after pasting a key. Disconnect is a
+                  destructive exception, so it is a quiet text action pushed to the
+                  end rather than a third equal-weight button. */}
+              <div className="flex flex-wrap items-center gap-2 border-t border-[var(--jf-border)] pt-4">
+                <button
+                  type="button"
+                  onClick={testConnection}
+                  disabled={testing || (!status?.configured && !secretKey.trim())}
+                  data-testid="chip-test-connection"
+                  className="jf-btn-ghost"
+                >
+                  {testing ? t("set.testing") : t("set.testConnection")}
+                </button>
+                <button className="jf-btn-primary" data-testid="chip-save">
+                  {t("set.save")}
+                </button>
                 {status?.configured && (
-                  <button type="button" onClick={clearCreds} className="jf-btn-ghost text-slate-600">
+                  <button
+                    type="button"
+                    onClick={clearCreds}
+                    data-testid="chip-clear"
+                    className="ml-auto text-xs font-semibold text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
+                  >
                     {t("set.clear")}
                   </button>
                 )}
@@ -3582,8 +3711,8 @@ export default function Settings() {
         )}
         {/* ── THE STICKY SAVE BAR (card t_f11d676f) ──────────────────────────
             Measured on the 390px screenshot of this tab: the first viewport
-            ended inside the CHIP Collect card — Brand ID, Secret Key, Mode and
-            the payment-method row all on screen, and NO Save/Connect control
+            ended inside the CHIP Collect card — Brand ID, Secret Key and the
+            payment-method row all on screen, and NO Save/Connect control
             anywhere in it. The action existed, several screens down, so a
             merchant who had just pasted a key and looked for the next step saw
             nothing to press.
@@ -3606,7 +3735,7 @@ export default function Settings() {
         {activeTab === "chip" && (
           <div
             data-testid="chip-sticky-save"
-            className="sticky bottom-0 z-20 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-6 py-3 sm:hidden"
+            className="sticky bottom-0 z-20 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-[var(--jf-border)] bg-[var(--jf-surface)] px-6 py-3 sm:hidden"
           >
             <span
               data-testid="chip-sticky-state"

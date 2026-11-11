@@ -195,8 +195,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 14,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "903902c1041ce3c3",
+    "updated": "2026-11-11",
+    "digest": "55443df89ab45fea",
     "guides": [
       "/docs/guides/qr-table-ordering",
       "/docs/guides/donations",
@@ -236,8 +236,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 17,
     "kind": "product",
-    "updated": "2026-11-10",
-    "digest": "a57029553825c960",
+    "updated": "2026-11-11",
+    "digest": "8379bddf273233a2",
     "guides": [
       "/docs/guides/payment-fees"
     ]
