@@ -552,14 +552,44 @@ fi
 #
 # Fail safe, not fail fast: an unmappable api/ change is FULL, never a narrowed run
 # with a hole in it.
-ESCALATE_RE='^(api/|deploy/|Dockerfile)|migrat|payment|chip|billing|settle|refund|auth|session|oauth|passkey|totp|2fa|credential'
+#
+# TWO PATTERNS, NOT ONE, AND THE SPLIT IS THE FIX (PR #1701 measured 13 min).
+# The structural half is about WHERE a path lives: api/, deploy/, a Dockerfile —
+# code that owns the gate. The keyword half is about WHAT a path IS: a payment,
+# auth or session surface whose blast radius the package graph cannot express.
+# Applying the keyword half to the whole path made a documentation screenshot
+# escalate: `docs/guides/surau-donation/04-chip-kunci.png` contains "chip", so a
+# batch that touched NO Go, deploy or auth file paid the 27-gate FULL inventory
+# (632 s of Go gates + both e2e halves) instead of the 15 gates its diff maps to.
+# A documentation or binary-asset path cannot change what runs — it is DATA, and
+# data inputs are the dependency table's job: `--for-diff` claims a path only when
+# a gate really reads it, and an UNCLAIMED path already widens to the full run by
+# the fail-closed rule in scripts/preflight.sh. So no coverage is lost by keeping
+# the keyword test out of documentation and out of non-code file types.
+ESCALATE_STRUCT_RE='^(api/|deploy/|Dockerfile)'
+ESCALATE_KEY_RE='migrat|payment|chip|billing|settle|refund|auth|session|oauth|passkey|totp|2fa|credential'
+# An INERT path: documentation prose, or a binary/static asset. Never code — and the
+# test is a FILE EXTENSION, never a directory name. A `(^|/)docs/` arm made "inert"
+# mean "anywhere under a directory called docs", and `web/src/app/docs/**` is 50
+# `.ts/.tsx` SOURCE files, four of them carrying a keyword
+# (`web/src/app/docs/mcp/oauth/page.tsx`, `.../docs/api/authentication/page.tsx`,
+# `.../docs/guides/payment-fees/page.tsx`, `.../docs/payment-fees/page.tsx`): a page
+# whose blast radius the Go package graph cannot express was gated diff-mapped on the
+# strength of its directory. Measured on a one-commit candidate touching
+# `web/src/app/docs/mcp/oauth/page.tsx`: `escalated` with the directory arm,
+# `diff-mapped` without it. Directory inertness also bought nothing — 0 tracked files
+# under the repo-root `docs/` lack an inert extension — so
+# `docs/guides/surau-donation/04-chip-kunci.png` stays diff-mapped on `.png` alone.
+ESCALATE_INERT_RE='\.(md|mdx|markdown|png|jpe?g|gif|webp|svg|ico|pdf|txt)$'
 MODE=full
 WHY="--full (forced)"
 if [ -n "$ONLY" ]; then
   MODE=narrowed; WHY="[$ONLY] (selftest)"
 elif [ "$FULL" = 0 ]; then
   DIFF_ALL=$(git -C "$CAND" diff --name-only "$BASE_SHA" HEAD)
-  ESC_ALL=$(printf '%s\n' "$DIFF_ALL" | grep -Ei "$ESCALATE_RE" || true)
+  ESC_STRUCT=$(printf '%s\n' "$DIFF_ALL" | grep -E "$ESCALATE_STRUCT_RE" || true)
+  ESC_KEY=$(printf '%s\n' "$DIFF_ALL" | grep -Ev "$ESCALATE_INERT_RE" | grep -Ei "$ESCALATE_KEY_RE" || true)
+  ESC_ALL="$(printf '%s\n%s\n' "$ESC_STRUCT" "$ESC_KEY" | grep -v '^$' | sort -u || true)"
   ESC_OTHER=$(printf '%s\n' "$ESC_ALL" | grep -v -E '^api/' || true)
   if [ -z "$ESC_ALL" ]; then
     MODE=scoped; WHY="diff-mapped vs $BASE_SHA"

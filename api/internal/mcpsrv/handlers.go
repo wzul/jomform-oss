@@ -489,8 +489,16 @@ type summaryOut struct {
 	// sales, and revenue_sen the NET paid/confirmed value (total - refunded),
 	// so a partial refund is visible in the summary instead of the sale
 	// silently reading as fully paid.
-	RefundedSen int64 `json:"refunded_sen"`
-	RevenueSen  int64 `json:"revenue_sen"`
+	//
+	// Card t_8064a965: revenue_sen includes the buyer-borne processing fee, so
+	// it is money BUYERS PAID, not money the merchant keeps. fees_sen is the fee
+	// inside it and net_revenue_sen is revenue_sen − fees_sen — the figure a
+	// merchant or an agent should quote as income. Same rule and same names as
+	// GET /v1/rest/summary and the dashboard.
+	RefundedSen   int64 `json:"refunded_sen"`
+	RevenueSen    int64 `json:"revenue_sen"`
+	FeesSen       int64 `json:"fees_sen"`
+	NetRevenueSen int64 `json:"net_revenue_sen"`
 }
 
 func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, summaryOut, error) {
@@ -522,8 +530,13 @@ func (s *Server) salesSummary(ctx context.Context, _ *mcp.CallToolRequest, _ emp
 		sum.RefundedSen += sl.RefundedSen
 		if sl.Status == dbstore.SalePaid || sl.Status == dbstore.SaleConfirmed {
 			sum.RevenueSen += sl.TotalSen - sl.RefundedSen
+			// Card t_8064a965: the buyer-borne fee is inside the total, so it
+			// is not income. Read it from the same rows as the revenue and
+			// derive what the merchant keeps, in integer sen.
+			sum.FeesSen += sl.FeeSen
 		}
 	}
+	sum.NetRevenueSen = sum.RevenueSen - sum.FeesSen
 	return nil, sum, nil
 }
 

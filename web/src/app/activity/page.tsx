@@ -78,6 +78,7 @@ const EVENT_CLASSES = [
   "auth.*",
   "mcp.*",
   "chat.*",
+  "oauth.*",
   "admin.*",
   "feedback.*",
 ] as const;

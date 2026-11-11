@@ -37,7 +37,7 @@ const SECTIONS: Section[] = [
         list: [
           "Filter by a form to see that form's own entries. A response form switches the table to the answer columns.",
           "**Export CSV** writes the same rows with the same filters. A combined export adds a **record_type** column (sale or submission).",
-          "Money columns are **total**, **refunded** and **outstanding**, in the sale's own currency.",
+          "Money columns are **total**, **fee**, **net**, **refunded** and **outstanding**, in the sale's own currency. **net** is total − fee: what you keep.",
         ],
       },
       {

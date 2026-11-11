@@ -14,11 +14,17 @@ every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (
 `a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
 gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
 `testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
-**323 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
+**325 tests in 63 files**: sales, chat, forms, form settings, settings/workspaces,
 products, media, templates, deliveries, activity, landing, login, session, profile,
 docs and the cross-page presentation specs.
 
-The figure before that was **317 tests in 61 files**, which card `t_516bab9d` grew with
+The 63rd FILE is `web/e2e/panduan-surau-shot-scale.spec.ts` (card `t_e1ea03a2`): 2 arms on the
+nine figures of `/panduan/surau` — at a 390px phone viewport every figure renders at >= 0.45x
+its own natural width, edge to edge, and links to the full 1900px capture, which answers 2xx;
+at 1280px the figures stay in the article column. Read with `playwright test
+--project=feature-core --list` on the tree that merges that card.
+
+The figure before that was **323 tests in 62 files**; before it, **317 tests in 61 files**, which card `t_516bab9d` grew with
 `web/e2e/landing-usecases-mobile.spec.ts` — the 62nd FILE, 6 arms on the seven use-case
 cards of `/landing` at a real 390px viewport (isMobile/hasTouch/dpr 2): one arm per locale
 (en/ms/zh/ta/ar) asserting per card that it renders <= 55 words, a lead <= 20 words, four
@@ -92,6 +98,16 @@ therefore runs this gate SCOPED to the diff since the previous release tag:
   POSITIVE attribution. A changed path the map does not claim, a spec with no row, a
   change to `playwright.config.ts` / `web/e2e/*` helpers / the map itself, an empty
   diff, or a decision that selects ZERO specs all widen the run to the WHOLE family.
+  The ONE positively-attributed zero is a path the TREE derives to a route no feature
+  spec names (rule 6a, card `t_902bd1f7`): a new page, a screenshot under
+  `web/public/`, a module only such a page imports, or a `web/scripts/` file no npm
+  script in the build/start chain runs. The chain is `asset -> the page that names
+  its URL -> that page's route -> the specs whose own text names the route`, and
+  none means NOT RUN. It widens whenever the route is named by code serving a
+  DIFFERENT route, by an e2e helper, or cannot be spelled statically. `--check-map`
+  and `--self-test` (both run by the `speccounts` gate) re-read those rules against
+  the tree, including the bite arm that removes a spec's route literal and watches
+  that spec leave the selection.
 - the gate PRINTS its decision (`e2e-core: subset — 4/76 specs (matched
   web/src/app/sales/**)`, or `full — 76/76 specs (...)`), so a narrowed run can
   never be read as a full sweep. That is the same discipline as the

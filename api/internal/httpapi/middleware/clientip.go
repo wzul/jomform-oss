@@ -188,11 +188,57 @@ func (t *TrustedProxy) RealIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := t.resolveClientIP(r)
 		if ip != "" {
-			r = r.WithContext(context.WithValue(r.Context(), clientIPKey{}, ip))
+			ctx := context.WithValue(r.Context(), clientIPKey{}, ip)
+			// The city hint is edge-written text and is believed ONLY when the
+			// same chain walk that trusted CF-Connecting-IP found a Cloudflare
+			// hop: Cloudflare overwrites CF-IPCity at the edge, and a caller
+			// reaching the origin directly can type anything into it. A consent
+			// email that says "Kuala Lumpur" because the attacker wrote that
+			// header is worse than one that says it does not know.
+			if t.sawCloudflareEdge(r) {
+				if city := strings.TrimSpace(r.Header.Get("CF-IPCity")); city != "" {
+					ctx = context.WithValue(ctx, cloudflareCityKey{}, city)
+				}
+			}
+			r = r.WithContext(ctx)
 			r.RemoteAddr = ip
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// cloudflareCityKey carries the edge-supplied city, when there was one.
+type cloudflareCityKey struct{}
+
+// CloudflareCity returns the city Cloudflare reported for this request, or ""
+// when the request did not demonstrably arrive through the Cloudflare edge (or
+// the edge supplied no city). Display-only: it is used to make a consent email
+// say where a device authorisation came from, and it is NEVER an authorization
+// input.
+func CloudflareCity(r *http.Request) string {
+	if city, ok := r.Context().Value(cloudflareCityKey{}).(string); ok {
+		return city
+	}
+	return ""
+}
+
+// sawCloudflareEdge reports whether every visible hop in front of this request
+// is a proxy AND at least one of them is a Cloudflare edge address — the same
+// condition resolveClientIP uses before it believes CF-Connecting-IP.
+func (t *TrustedProxy) sawCloudflareEdge(r *http.Request) bool {
+	hops := forwardedHops(r)
+	if len(hops) == 0 {
+		return false
+	}
+	for _, hop := range hops {
+		if !t.proxyHop(hop) {
+			return false
+		}
+		if t.cloudflareEdge(hop) {
+			return true
+		}
+	}
+	return false
 }
 
 // proxyHop reports whether ip is an address the request can arrive THROUGH: the

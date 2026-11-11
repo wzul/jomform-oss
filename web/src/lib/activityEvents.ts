@@ -79,6 +79,15 @@ export const EVENT_LABEL_KEYS: Record<string, Key> = {
   "form.status_unlisted": "act.event.form.status_unlisted",
   "form.status_private": "act.event.form.status_private",
 
+  // oauth — the scope ladder and the Connected apps surface (card t_9a6cc85f).
+  // Each one names WHICH route moved the credential, because that is the
+  // difference between "you approved an email", "you confirmed on the dashboard"
+  // and "an agent lowered its own grant".
+  "oauth.device_approved": "act.event.oauth.device_approved",
+  "oauth.scope_changed": "act.event.oauth.scope_changed",
+  "oauth.scope_upgraded": "act.event.oauth.scope_upgraded",
+  "oauth.token_revoked": "act.event.oauth.token_revoked",
+
   // mcp
   "mcp.agent_disconnected": "act.event.mcp.agent_disconnected",
   "mcp.tool_call": "act.event.mcp.tool_call",

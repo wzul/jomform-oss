@@ -58,6 +58,65 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "headless",
+    title: "Headless onboarding (no browser)",
+    icon: "🖥️",
+    body: [
+      "An AI harness with no browser can connect without one. JomForm implements the **device authorization grant**, RFC 8628, and advertises it in the authorization-server metadata.",
+      {
+        steps: [
+          "The harness posts `client_id`, plus optional `scope` and `login_hint` (your account email), to `/oauth/device_authorization`.",
+          "It receives a `device_code`, a short `user_code`, a `verification_uri`, `expires_in` of 600 seconds and `interval` of 5 seconds.",
+          "JomForm emails the `user_code` to the address on the account. That email is the consent screen.",
+          "The email names the client, the access in plain words, the address and city, the time and the code.",
+          "You approve or deny from the link, or by entering the code on Profile → MCP → Connected apps.",
+          "The next poll returns an access token and a refresh token.",
+        ],
+      },
+      "The device grant starts at `read`. Write access is granted only when you approve an email that names it.",
+      "Both secrets are stored hashed. The email goes only to the account's registered address.",
+      "The response is identical whether or not an address has an account, so it cannot be used to discover who is registered.",
+    ],
+  },
+  {
+    id: "device-polling",
+    title: "Polling and limits",
+    icon: "⏱️",
+    body: [
+      "The harness polls `/oauth/token` with the **device grant type** until you decide.",
+      {
+        list: [
+          "`authorization_pending`: you have not approved or denied yet.",
+          "`slow_down`: the harness polled faster than `interval`. The interval grows by five seconds.",
+          "`access_denied`: you refused. The harness must stop.",
+          "`expired_token`: ten minutes passed. Start again.",
+        ],
+      },
+      "An approved `device_code` is single-use. A second exchange is refused.",
+      "Three authorisations an hour are allowed per account and per address. Beyond that the request is refused rather than mailed.",
+      "Platform-admin accounts cannot use this flow. An emailed code must not be the only thing before a platform-admin token.",
+    ],
+  },
+  {
+    id: "scope-changes",
+    title: "Changing a scope",
+    icon: "🔁",
+    body: [
+      "A grant never widens on refresh. Refreshing returns the same scope, and a `scope` parameter on a refresh request is ignored.",
+      "A wider grant is always a **new grant**. The old credential stops working in the same action.",
+      {
+        list: [
+          "**Profile → MCP → Connected apps**. You are already signed in, so one confirmation is enough. Copy the new credential from the page.",
+          "A new device authorisation from the harness. The email is the consent screen again.",
+          "The browser authorize flow with the higher scope.",
+        ],
+      },
+      "Narrowing a grant needs no confirmation, takes effect immediately, and also rotates the credential.",
+      "Every change records an audit event with both scopes and the route used.",
+      "Over MCP, `list_connected_apps`, `revoke_connected_app` and `set_connected_app_scope` expose the same surface. The last one can only lower a grant.",
+    ],
+  },
+  {
     id: "api-key-scopes",
     title: "API-key scopes",
     icon: "🔑",

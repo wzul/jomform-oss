@@ -95,10 +95,12 @@ test("the dashboard no longer formats money with a literal RM", () => {
 test("every aggregate is formatted from a per-currency map", () => {
   // Each of the four aggregate call sites (revenue stat, per-form revenue,
   // per-product paid revenue, per-product gross) must read the map, not the
-  // cross-currency scalar.
+  // cross-currency scalar. Card t_8064a965 moved the first two onto the NET
+  // map (what the merchant keeps) with the collected map as the fallback for an
+  // older API that does not send one; the money is still labelled per currency.
   const sites = [
-    "formatCurrencyTotals(summary.revenue_by_currency, summary.currency)",
-    "formatCurrencyTotals(f.revenue_by_currency, summary?.currency)",
+    "formatCurrencyTotals(summary.net_revenue_by_currency ?? summary.revenue_by_currency, summary.currency)",
+    "formatCurrencyTotals(f.net_revenue_by_currency ?? f.revenue_by_currency, summary?.currency)",
     "formatCurrencyTotals(pr.paid_revenue_by_currency, summary?.currency)",
     "formatCurrencyTotals(pr.revenue_by_currency, summary?.currency)",
   ];
@@ -144,7 +146,12 @@ test("the API splits the aggregate money by the sale's currency", () => {
   assert.match(analyticsStore, /NormaliseCurrency\(/, "the analytics split no longer normalises the currency code");
   assert.match(
     dashboardGo,
-    /revenueByCurrency\[s\.CurrencyOrMYR\(\)\]/,
+    /cur := s\.CurrencyOrMYR\(\)/,
+    "summaryData no longer reads the sale's own currency for the split",
+  );
+  assert.match(
+    dashboardGo,
+    /revenueByCurrency\[cur\]/,
     "summaryData no longer groups revenue by the sale's currency",
   );
 });
@@ -167,8 +174,12 @@ test("both CSV writers name the currency and drop the _rm headers", () => {
       `the ${name} export still heads a money column with _rm`,
     );
     assert.ok(
-      go.includes('"currency", "total"'),
-      `the ${name} export has no currency/total header pair`,
+      go.includes('"currency", "total", "fee", "net"'),
+      `the ${name} export has no currency/total/fee/net header block`,
+    );
+    assert.ok(
+      /TotalSen-sl\.FeeSen|TotalSen-s\.FeeSen|TotalSen - s\.FeeSen/.test(go),
+      `the ${name} export does not write net = total - fee`,
     );
     assert.ok(
       /CurrencyOrMYR\(\)/.test(go),

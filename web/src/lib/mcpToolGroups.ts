@@ -73,11 +73,11 @@ export const TOOL_GROUPS: McpToolGroup[] = [
     group: "Sales",
     tools: [
       { name: "list_sales", desc: "List recent records (newest first). Without form_id this is the ENTIRE account record set: sales AND form responses for mode 'response' (sale_type 'response', submission_id + data) — the same as the Sales page, not an empty or partial list. With form_id, the form's mode decides: payment form → sales, response form → responses. Each sale: refunded_sen (already refunded), outstanding_sen (remaining refundable), refund_status (none|partial|full) — issue #518. Status is a payment question, so setting status excludes the response side." },
-      { name: "get_sales_summary", desc: "Sales summary: counts by status (including refunded), refunded_sen (total refunded) and revenue_sen (net value after refunds) — issue #518." },
+      { name: "get_sales_summary", desc: "Sales summary: counts by status (including refunded), refunded_sen (total refunded), revenue_sen (what buyers paid, net of refunds) and net_revenue_sen (revenue_sen minus the buyer-borne processing fees in fees_sen — the money you keep). Quote net_revenue_sen as income; revenue_sen includes a fee you never receive. Issue #518, card t_8064a965." },
       { name: "confirm_sale", desc: "Confirm a sale (example: after checking bank transfer proof)." },
       { name: "describe_lifecycle", desc: "Describe an aggregate's declarative lifecycle table: every state, the events it accepts, the state each event lands in, whether a guard can refuse it, and the dashboard label key of a person's action. With id (a sale ref_code) the answer is that sale's current state plus available_events — the events it accepts right now, each with enabled and, when a guard refuses it, the English reason; an entry with an empty label_key is a gateway callback (pay, fail), not an action a caller can invoke. Use this BEFORE proposing or attempting a state change: the same table decides what the write endpoints accept, so an enabled=false event WILL be refused." },
       { name: "get_sale_email_status", desc: "Receipt email status for one sale: Sent → Delivered → Opened → (Clicked) with timestamps. Use ref_code from list_sales." },
-      { name: "export_sales_csv", desc: "Export a set of account records as CSV. Without form_id it contains both sales AND responses (a record_type column marks each row, plus the recorded answer columns), matching the list that is shown. Filterable by form_id/status/date_from/date_to/q — the same filters as the list. The refund column exposes partial refunds (issue #518). Returns the csv content." },
+      { name: "export_sales_csv", desc: "Export a set of account records as CSV. Without form_id it contains both sales AND responses (a record_type column marks each row, plus the recorded answer columns), matching the list that is shown. Filterable by form_id/status/date_from/date_to/q — the same filters as the list. The refund column exposes partial refunds (issue #518); total is what the buyer paid, fee is the buyer-borne processing fee inside it, and net is total − fee — the money you keep (card t_8064a965). Returns the csv content." },
     ],
   },
   {
@@ -180,6 +180,15 @@ export const TOOL_GROUPS: McpToolGroup[] = [
       { name: "list_api_keys", desc: "List all of the account's API keys (id, name, scopes, created_at, last_used). Key material is never returned." },
       { name: "create_api_key", desc: "Create a new API key (name, scopes? readonly|readwrite, default readonly). The full key is shown ONCE only — save it immediately; the store keeps only the hash. SCOPES: read for readonly, read+write for readwrite." },
       { name: "revoke_api_key", desc: "PERMANENTLY delete an API key (id from list_api_keys; there is no disable/re-enable — create a new key). WARNING: if the id is the key authenticating this session, it will cut off its own access immediately — set confirm=true to confirm; otherwise the call is rejected." },
+    ],
+  },
+  {
+    group: "Connected apps",
+    note: "The OAuth credentials an AI agent holds, one row per live token pair — the MCP mirror of Profile → MCP → Connected apps. These tools need an OAuth connection (a person), not an API key.",
+    tools: [
+      { name: "list_connected_apps", desc: "List the live OAuth connections (AI agents) the signed-in person has authorised, one row per credential: id, client name, scopes, created and last used. Needs an OAuth connection, not an API key." },
+      { name: "revoke_connected_app", desc: "Revoke ONE connected app: its access token and its refresh token die together. Takes the id from list_connected_apps. Revoking the connection this call is using ends the session." },
+      { name: "set_connected_app_scope", desc: "Lower a connected app to read-only by rotating its credential (the old token pair stops working). Widening to readwrite is REFUSED here — it needs a human consent on the Connected apps page or a new device authorisation." },
     ],
   },
   {
@@ -332,7 +341,7 @@ export const TOOL_GROUPS: McpToolGroup[] = [
   {
     group: "Analytics",
     tools: [
-      { name: "get_form_analytics", desc: "Per-form analytics: number of entries (submissions), paid/confirmed/failed/pending, and NET revenue after refunds. submissions = entries recorded for that form, read from the table the form writes: mode=response → submissions table; payment form → sales (all statuses). mode is included so the label is correct. Money in minor units: revenue_sen and refunded_sen are totals across currencies (do not label with a single symbol), broken down by the currency of each sale in revenue_by_currency and refunded_by_currency (keys are ISO codes, values in minor units). Across all your workspaces. Read-only." },
+      { name: "get_form_analytics", desc: "Per-form analytics: number of entries (submissions), paid/confirmed/failed/pending, and NET revenue after refunds. submissions = entries recorded for that form, read from the table the form writes: mode=response → submissions table; payment form → sales (all statuses). mode is included so the label is correct. Money in minor units: revenue_sen is what buyers paid (includes the buyer-borne fee in fees_sen) and net_revenue_sen is what you keep; both are totals across currencies (do not label with a single symbol), broken down by the currency of each sale in revenue_by_currency / fees_by_currency / net_revenue_by_currency and refunded_by_currency (keys are ISO codes, values in minor units). Across all your workspaces. Read-only." },
       { name: "get_product_analytics", desc: "Per-product analytics: units sold (paid), revenue. Money in minor units: revenue_sen (gross value of all sales) and paid_revenue_sen (paid, NET after refunds) are totals across currencies (do not label with a single symbol), broken down by the currency of each sale in revenue_by_currency and paid_revenue_by_currency (keys are ISO codes, values in minor units). Across all your workspaces. Read-only." },
     ],
   },

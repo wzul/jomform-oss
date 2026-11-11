@@ -1821,6 +1821,55 @@ else
   bad "--gate-deps drift — in --list but NOT in the table: [$(comm -13 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')] / in the table but not in --list: [$(comm -23 <(printf '%s\n' "$deps_gates") <(printf '%s\n' $GATES | sort -u) | tr '\n' ' ')]"
 fi
 
+# 15a-i. THE FIVE GO GATES MUST DECLARE A REAL AREA, NOT FALL THROUGH TO `*`.
+#      A gate with no row in `pw_declared` hits the `*)` arm, which means "cannot
+#      narrow — always run": every `--for-diff` run then pays it whatever the diff
+#      touches. Measured on PR #1701 (20 PNGs + one docs page, no Go file): `build`
+#      + `vet` + `gofmt` + `test` + `govuln` ran and cost 632 s, because `gofmt` had
+#      NO row at all — the other four had one, but a `*` would have been just as
+#      invisible. This arm is the thing that cannot be forgotten: it reads the
+#      PUBLIC table, so a gate that loses its row (or gains the `*` default) is RED
+#      here instead of merely expensive on every future card.
+go_unmapped=""
+for g in build vet gofmt test govuln; do
+  go_row="$(printf '%s\n' "$deps" | sed -n "s/^$g:[[:space:]]*//p" | sed -n '1p')"
+  if [ -z "$go_row" ]; then
+    go_unmapped="${go_unmapped}${g}=MISSING "
+  elif [ "$go_row" = "*" ]; then
+    go_unmapped="${go_unmapped}${g}=STAR "
+  fi
+done
+if [ -z "$go_unmapped" ]; then
+  ok "the five Go gates each declare a REAL path area in --gate-deps (none falls through to '*')"
+else
+  bad "a Go gate falls through to the '*' default in --gate-deps: [${go_unmapped% }] — --for-diff can then never narrow it, so a docs-only diff pays its entire run (PR #1701: 632 s)"
+fi
+
+# 15a-ii. THE MAPPING MUST BITE — and, just as important, it must NOT bite away a
+#      dependency that is real. Both halves are one property, so they are one arm:
+#        * a page under `web/src` must NOT drag build/vet/gofmt/govuln. Those gates
+#          compile, format or scan Go; none of them opens a .tsx. Before the
+#          `_test.go` rule in pw_build_table they were selected through a Go TEST's
+#          walk of web/src, which is an input to `test` and to nothing else
+#          (measured on PR #1701: build 30 s + vet 34 s + govuln 15 s + gofmt 2 s).
+#        * the SAME page MUST select `test`, because api/internal/httpapi's
+#          passkey seam resolves `../../../web/src` and api/internal/mcpsrv walks
+#          web/src/** and reads every .ts/.tsx/.js it finds. Dropping `test` here
+#          would be a real hole (a new page may contain a scanned claim), so this
+#          half pins the dependency the card's "no Go gate at all" would remove.
+page_sel="$(sel_classify 'web/src/app/panduan/surau/page.tsx')"
+page_stale=""
+for g in build vet gofmt govuln; do
+  grep -qx "$g" <<<"$page_sel" && page_stale="${page_stale}${g} "
+done
+if [ -n "$page_stale" ]; then
+  bad "a web/src page drags [${page_stale% }] — no Go source reads it, so those gates cannot narrow and every docs/web diff pays them"
+elif ! grep -qx 'test' <<<"$page_sel"; then
+  bad "web/src/app/panduan/surau/page.tsx must still select \`test\` (api/internal/httpapi's passkey seam and api/internal/mcpsrv's walk read web/src/**) — got: [$(printf '%s' "$page_sel" | tr '\n' ' ')]"
+else
+  ok "a web/src page selects \`test\` (a real reader) and SKIPS build/vet/gofmt/govuln (no Go gate can open a .tsx)"
+fi
+
 # The gates that CANNOT narrow: their inputs are the whole checkout / the whole
 # git history, so no path list can express them and they appear in EVERY
 # selection (see pw_gate_blocked). Derived ONCE here, from the same table 15a
@@ -2111,7 +2160,7 @@ fi
 #      self-hit is caught here even when every build agrees with itself.
 pw_src_of() {  # mirrors pw_sources in the runner under test
   case "$1" in
-    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    build|vet|gofmt|test|govuln) printf '%s\n' 'api/*' ;;
     web)      printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
     lint)     printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)     printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
@@ -2142,9 +2191,14 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
 # an arm-less gate is cannot-narrow there, so it runs unconditionally. Declaring it
 # here is what makes "no arm" a decision instead of an omission.
 #
-#   gofmt    — reads EVERY tracked Go file (`gofmt -l .` over api/); it cannot narrow,
-#              so it is in the '*' class.
 #   webimage — the shipping image is a function of the whole tree, so it cannot narrow.
+#
+# `gofmt` USED to be here, on the claim that `gofmt -l .` "reads EVERY tracked Go
+# file; it cannot narrow". It reads every Go file under api/ and nothing else — the
+# repo has no root go.mod — so it is arm-carrying now, with the same `api/*` arm the
+# other Go gates use. It had no row in the runner's `pw_declared` either, which is
+# what actually made it un-narrowable: a gate with no row falls through to `*` and
+# runs on every scoped run whatever the diff (PR #1701 paid it for a docs page).
 #
 # Adding a gate to GATE_NAMES without an arm and without a line here now FAILS the
 # check: the mirror and the probe are kept in step by assertion, not by whoever
@@ -2154,7 +2208,7 @@ pw_src_of() {  # mirrors pw_sources in the runner under test
 # mirror is deliberately INDEPENDENT of the runner (that independence is why a runner
 # derivation that goes blind cannot satisfy this check), so it must be COMPLETE here
 # rather than derived.
-PW_SRC_NONE="gofmt webimage"
+PW_SRC_NONE="webimage"
 # The independent probe's pattern. It is deliberately a DIFFERENT literal from the
 # runner's (`REPOWIDE_RE` there), and it runs as its own code path: the verdict
 # comes from an independent reading, so a derivation that goes BLIND cannot satisfy
@@ -2233,6 +2287,13 @@ for g in $GATES; do
     [ -n "$glob" ] || continue
     for f in $(cd "$LIVE_ROOT" && git ls-files -- "$glob" 2>/dev/null); do
       [ -f "$LIVE_ROOT/$f" ] || continue
+      # A BINARY file cannot carry a shell/Go read STATEMENT, and `git grep` — which
+      # is how the runner FINDS these reads — skips binary content by default. The
+      # probe must skip it too: capturing the bytes into a command substitution makes
+      # bash print "ignored null byte in input" for every file, and reads noise as
+      # code. Surfaced when `gofmt` gained an `api/*` arm (it used to be exempt), so
+      # this scan now reaches api/internal/httpapi/favicon/icon-192.png.
+      grep -qI . "$LIVE_ROOT/$f" 2>/dev/null || continue
       if grep -qE "$REPOWIDE_ANY_RE" <<<"$(probe_code_lines "$LIVE_ROOT/$f")"; then
         rw_any="${rw_any}${g} "
       fi

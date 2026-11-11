@@ -41,10 +41,19 @@
 //     less than the API does (card t_b870d44b). That writer is DERIVED from the
 //     API's own source too, so the guarded set cannot quietly outlive it.
 //
+//     It covers `content-disposition` the same way. The API's CSV routes name
+//     their download in that header — the admin dormancy report
+//     (internal/httpapi/rest_admin_dormancy.go) and the merchant's sales +
+//     responses exports (internal/httpapi/rest_export.go). Measured on prod
+//     v1.35.0 @ 9c53ad2e8: `GET https://jomform.com/api/admin/dormancy?format=csv`
+//     answered 200 + `text/csv; charset=utf-8` and NO content-disposition, while
+//     the same request direct to https://api.jomform.com/v1/admin/dormancy?format=csv
+//     kept `attachment; filename="jomform-dormancy.csv"` (card t_569121de).
+//
 //  3. Requires the declared set to be EXACTLY what this proxy owes the browser:
 //     the three transport headers it has always relayed (content-type, location,
 //     set-cookie — the reasons are recorded at each entry of the web list and
-//     restated in transportResponseHeaders below) plus the two derived headers.
+//     restated in transportResponseHeaders below) plus the three derived headers.
 //     An entry the API does not owe a browser fails too: a response
 //     header relayed on nobody's decision is how a second, weaker promise about
 //     this hop appears (the same "a trust input nobody decided on" arm the
@@ -71,6 +80,10 @@ var retryAfterWrite = regexp.MustCompile(`Header\(\)\.Set\(\s*"Retry-After"`)
 // cacheControlWrite matches a Cache-Control the API sets on its own response:
 // w.Header().Set("Cache-Control", "private, no-store").
 var cacheControlWrite = regexp.MustCompile(`Header\(\)\.Set\(\s*"Cache-Control"`)
+
+// contentDispositionWrite matches a Content-Disposition the API sets on its own
+// response: w.Header().Set("Content-Disposition", `attachment; filename="…"`).
+var contentDispositionWrite = regexp.MustCompile(`Header\(\)\.Set\(\s*"Content-Disposition"`)
 
 // The one declaration the hop's relayed response-header set is read from
 // (web/src/lib/proxyResponseHeaders.ts). Requiring the exact shape is
@@ -121,9 +134,24 @@ func TestDashboardProxyRelaysTheAPIsRetryAfterHeader(t *testing.T) {
 			"browser. Either the writer moved (re-point this guard) or the header is gone, and the "+
 			"relayed set below would then be promising something no route states", cacheWriters)
 	}
+	dispositionWriters := apiHeaderWriters(t, contentDispositionWrite)
+	t.Logf("the API sets Content-Disposition in: %v", dispositionWriters)
+	if len(dispositionWriters) == 0 {
+		t.Fatal("derived ZERO files that set Content-Disposition — the scan found no writer at all, so the " +
+			"comparison below would pass by measuring nothing")
+	}
+	if !contains(dispositionWriters, "internal/httpapi/rest_admin_dormancy.go") {
+		t.Fatalf("derived %v as the files that set Content-Disposition — expected "+
+			"internal/httpapi/rest_admin_dormancy.go among them: that is the admin dormancy CSV "+
+			"(`GET /v1/admin/dormancy?format=csv`) whose filename this hop was dropping. Either that "+
+			"writer moved (re-point this guard, and the card's measurement with it) or the header is "+
+			"gone, and the relayed set below would then be promising something no route states",
+			dispositionWriters)
+	}
 	owed := map[string]string{
-		"retry-after":   "the API's own backoff for a 429 — the login lockout and the per-IP throttle both state it, and a dashboard client can only obey the value the server chose if it receives the header",
-		"cache-control": "the API's own storage directive for the response — the merchant's authed stand (internal/httpapi/rest_qr_stand.go) is `private, no-store` because it names an unpublished form, and the dashboard's \"Print stand\" anchor opens that route THROUGH this hop; dropping it made the browser path promise less than the API does (measured on prod: `private, no-store` from the API host, no cache-control at all from https://jomform.com/api/rest/forms/{id}/qr-stand)",
+		"retry-after":         "the API's own backoff for a 429 — the login lockout and the per-IP throttle both state it, and a dashboard client can only obey the value the server chose if it receives the header",
+		"cache-control":       "the API's own storage directive for the response — the merchant's authed stand (internal/httpapi/rest_qr_stand.go) is `private, no-store` because it names an unpublished form, and the dashboard's \"Print stand\" anchor opens that route THROUGH this hop; dropping it made the browser path promise less than the API does (measured on prod: `private, no-store` from the API host, no cache-control at all from https://jomform.com/api/rest/forms/{id}/qr-stand)",
+		"content-disposition": "the API's own name for a downloaded body — the admin dormancy CSV (internal/httpapi/rest_admin_dormancy.go) and the merchant's sales + responses exports (internal/httpapi/rest_export.go) all answer `attachment; filename=\"…csv\"`; dropping it through this hop delivered the bytes and the `text/csv` type with no filename (measured on prod v1.35.0: `attachment; filename=\"jomform-dormancy.csv\"` direct to https://api.jomform.com/v1/admin/dormancy?format=csv, no content-disposition at all from https://jomform.com/api/admin/dormancy?format=csv)",
 	}
 	for header, reason := range transportResponseHeaders {
 		owed[header] = reason

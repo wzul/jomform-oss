@@ -205,6 +205,12 @@ func TestAdminDormancyCSVExportIsOneLinePerAccount(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/csv") {
 		t.Errorf("content-type = %q, want text/csv", ct)
 	}
+	// The filename the dashboard hop must carry (card t_569121de): the hop relays
+	// content-disposition verbatim, so this literal is the value a super-admin
+	// sees when the export is opened from the product's own origin.
+	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="jomform-dormancy.csv"` {
+		t.Errorf("content-disposition = %q, want `attachment; filename=\"jomform-dormancy.csv\"`", cd)
+	}
 	lines := strings.Split(strings.TrimRight(rec.Body.String(), "\n"), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("CSV has %d line(s), want a header plus at least one account:\n%s", len(lines), rec.Body.String())

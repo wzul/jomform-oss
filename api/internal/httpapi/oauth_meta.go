@@ -52,16 +52,25 @@ func protectedResourceDocument(host string) map[string]any {
 }
 
 // authorizationServerDocument builds the RFC 8414 metadata document.
+//
+// RFC 8628 §4 requires a device-grant server to advertise
+// `device_authorization_endpoint` and to list the device grant type, so an MCP
+// client (Claude Desktop, Cursor, any harness) can DISCOVER headless onboarding
+// with no client-side change: it fetches this document, sees the endpoint, and
+// falls back to the device flow when it has no browser.
 func authorizationServerDocument(host string) map[string]any {
 	base := oauthmeta.Base()
 	return map[string]any{
-		"issuer":                                base,
-		"authorization_endpoint":                base + "/oauth/authorize",
-		"token_endpoint":                        base + "/oauth/token",
-		"revocation_endpoint":                   base + "/oauth/revoke",
-		"registration_endpoint":                 base + "/oauth/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"issuer":                        base,
+		"authorization_endpoint":        base + "/oauth/authorize",
+		"token_endpoint":                base + "/oauth/token",
+		"device_authorization_endpoint": base + "/oauth/device_authorization",
+		"revocation_endpoint":           base + "/oauth/revoke",
+		"registration_endpoint":         base + "/oauth/register",
+		"response_types_supported":      []string{"code"},
+		"grant_types_supported": []string{
+			"authorization_code", "refresh_token", oauthmeta.DeviceGrantType,
+		},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
 		"scopes_supported":                      oauthmeta.ScopesSupported(),

@@ -71,6 +71,22 @@ export const RELAYED_RESPONSE_HEADERS = [
   // the public artefacts the API caches for five minutes (`/og`, `/qr`, `/media`,
   // its own HTML) are served on their own hosts and do not cross it.
   "cache-control",
+  // WHAT THE BODY IS CALLED AND WHETHER TO SAVE IT — widened deliberately
+  // (card t_569121de). The API's CSV routes name their file in this header:
+  // the admin dormancy report
+  // (`GET /v1/admin/dormancy?format=csv`, api/internal/httpapi/rest_admin_dormancy.go)
+  // and the merchant's own sales + responses exports
+  // (api/internal/httpapi/rest_export.go) all answer
+  // `attachment; filename="…csv"`. Dropping it through this hop still delivered
+  // the bytes and the `text/csv` type, but with no filename the browser saves the
+  // response under the URL's last path segment instead of the name the API chose:
+  // measured on prod v1.35.0 @ 9c53ad2e8, `GET https://jomform.com/api/admin/dormancy?format=csv`
+  // returned 200 + `text/csv; charset=utf-8` and no content-disposition, while the
+  // same request directly to https://api.jomform.com/v1/admin/dormancy?format=csv
+  // kept `attachment; filename="jomform-dormancy.csv"`. Relayed verbatim, and
+  // still never invented: a response the API left without the header stays
+  // without one.
+  "content-disposition",
 ] as const;
 
 /**

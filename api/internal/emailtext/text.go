@@ -101,9 +101,13 @@ const (
 	Email2FACode    Kind = "email_2fa_code"
 	TwoFAActivated  Kind = "two_fa_activated"
 	SocialConnect   Kind = "social_connect"
-	WorkspaceInvite Kind = "workspace_invite"
-	FeedbackNew     Kind = "feedback_new_thread"
-	FeedbackReply   Kind = "feedback_reply"
+	// DeviceAuthorization is the RFC 8628 consent email (card t_9a6cc85f): the
+	// user_code a headless MCP client is waiting for, plus everything the reader
+	// needs to decide whether they started it.
+	DeviceAuthorization Kind = "device_authorization"
+	WorkspaceInvite     Kind = "workspace_invite"
+	FeedbackNew         Kind = "feedback_new_thread"
+	FeedbackReply       Kind = "feedback_reply"
 	// DormancyNudge is the phase-1 "your form is still live" reminder (card
 	// t_94e5cca3). It is platform-user mail.
 	DormancyNudge Kind = "dormancy_nudge"
@@ -137,6 +141,19 @@ const (
 	// reader's language: an English sentence under `<html lang="ms">` contradicts
 	// the language the message declares, exactly as a Malay subject would.
 	PhraseMadeIn PhraseKey = "branded_made_in"
+	// PhraseUnnamedClient stands in for an OAuth client that registered through
+	// Dynamic Client Registration without a client_name — the consent email has
+	// to name who is asking, and "an unregistered client" is the honest answer.
+	PhraseUnnamedClient PhraseKey = "oauth_unnamed_client"
+	// PhraseScopeRead / PhraseScopeReadWrite are the PLAIN-WORDS descriptions of
+	// the two OAuth scopes, used by the device-authorisation consent email. A
+	// consent screen that says "scope: readwrite" asks the reader to know what
+	// that means; these say what the credential can do.
+	PhraseScopeRead      PhraseKey = "oauth_scope_read"
+	PhraseScopeReadWrite PhraseKey = "oauth_scope_readwrite"
+	// PhraseUnknownLocation stands in for the city in the device-authorisation
+	// email when the request did not arrive through an edge that reports one.
+	PhraseUnknownLocation PhraseKey = "oauth_unknown_location"
 )
 
 // Message is one rendered email: the language it was rendered in, plus its

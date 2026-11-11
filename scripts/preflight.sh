@@ -706,7 +706,7 @@ pw_pathspec_v() {
 # or has no pattern at all.
 pw_declared() {
   case "$1" in
-    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    build|vet|gofmt|test|govuln) printf '%s\n' 'api/*' ;;
     web|a11y|e2e-builder|e2e-core|lint)    printf '%s\n' 'web/*' ;;
     # `menufixture` is the layout half of the menu checkout, so BOTH halves of the
     # stack are its area: the page it measures is served by api/internal/httpapi
@@ -749,7 +749,7 @@ pw_declared() {
 # for a read nothing performs.
 pw_sources() {
   case "$1" in
-    build|vet|test|govuln) printf '%s\n' 'api/*' ;;
+    build|vet|gofmt|test|govuln) printf '%s\n' 'api/*' ;;
     web)                   printf '%s\n' 'web/package.json' 'web/src/*' 'web/next.config.mjs' 'web/tsconfig.json' 'web/scripts/web-deps-check.mjs' ;;
     lint)                  printf '%s\n' 'web/eslint.config.mjs' 'web/package.json' ;;
     a11y)                  printf '%s\n' 'web/e2e/a11y*.spec.ts' 'web/playwright.config.ts' ;;
@@ -1223,6 +1223,12 @@ pw_build_table() {
         *) continue ;;
       esac
       pw_matches_gate "$gate" "$file" || continue
+      # A read that lives in a `_test.go` is executed by `go test` alone — see
+      # pw_runs_tests. Skipping it here narrows the COMPILE/FORMAT/VULN gates
+      # without dropping any input of the gate that really runs the test.
+      case "$file" in
+        *_test.go) pw_runs_tests "$gate" || continue ;;
+      esac
       [ -n "${PW_DERIVED[$file]:-}" ] || continue
       while IFS= read -r cand; do
         [ -n "$cand" ] || continue
@@ -1274,6 +1280,24 @@ pw_build_table() {
 "
   done <<<"$PW_SEL"
   return 0
+}
+
+# pw_runs_tests <gate> — does this gate ever EXECUTE Go test code?
+#
+# A read found in a `_test.go` file is performed by `go test` and by nothing else.
+# `go build ./...` never compiles a _test.go (the go command ignores test files for
+# build), `gofmt -l .` only parses syntax, `go vet ./...` type-checks test files but
+# never runs them, and govulncheck answers over the package/import graph. So a DATA
+# file that a test reads is an input to `test` alone, and attributing it to the
+# compile/format gates is what made a documentation page pay `build` (30 s) + `vet`
+# (34 s) + `govuln` (15 s) for files none of the three can open — measured on PR
+# #1701, whose only Go dependency is a test that walks web/src.
+#
+# This answers for EVERY gate, not just the five Go ones. `menufixture` is the only
+# other gate with api/ sources today and its fixture_test.go has no read shapes, so the
+# rule is a no-op there — re-check that assumption when a gate grows a test-file read.
+pw_runs_tests() {
+  case "$1" in test) return 0 ;; *) return 1 ;; esac
 }
 
 # pw_matches_gate <gate> <file> — does this gate's source set include this file?
@@ -3355,7 +3379,13 @@ speccounts_run() {
   # NARROW by it on a `--for-diff` run, so a spec with no row (or a row whose glob
   # matches nothing in this tree) would either drop coverage or widen every run
   # forever with nobody able to see why. `--check-map` asserts both against the tree.
-  node "$REPO_ROOT/web/scripts/e2e-scope.mjs" --check-map --root "$REPO_ROOT"
+  node "$REPO_ROOT/web/scripts/e2e-scope.mjs" --check-map --root "$REPO_ROOT" || return 1
+  # And the matcher's own RULES, not just its data: `--self-test` is where the
+  # narrowing and every fallback to the whole family are asserted (including the
+  # derivation that reads a new page and its screenshots as "no spec names that
+  # route"), so a rule that stops biting is RED here instead of silently costing or
+  # over-running coverage. It reads nothing but this tree, so it is ~1s.
+  node "$REPO_ROOT/web/scripts/e2e-scope.mjs" --self-test
 }
 run speccounts "cd web && playwright test --project={a11y,feature-builder,feature-core} --list vs the counts GATE-INVENTORY.md quotes" speccounts_run
 

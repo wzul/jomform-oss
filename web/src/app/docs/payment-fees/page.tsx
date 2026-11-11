@@ -89,6 +89,20 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "reporting",
+    title: "What the dashboard counts",
+    icon: "📊",
+    body: [
+      "Your buyer pays the fee, so it is not your income. The dashboard's revenue stat, its 14-day chart, the per-form totals and the CSV all count **what you keep**.",
+      "`revenue_sen` is what buyers paid, `fees_sen` is the fee inside it, and `net_revenue_sen` is what you keep. Integer sen, on REST and on the MCP tools.",
+      "The CSV writes **total**, **fee** and **net** side by side. A refund keeps its own column, so `net` is the payment's net, not a post-refund balance.",
+      "Product revenue is the sum of item prices, so the fee was never part of it and needs no subtraction.",
+      {
+        note: "A workspace whose buyers never bore a fee sees exactly the numbers it saw before.",
+      },
+    ],
+  },
+  {
     id: "einvoice",
     title: "e-Invoice",
     icon: "📄",

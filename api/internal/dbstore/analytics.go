@@ -57,6 +57,21 @@ type FormStats struct {
 	RevenueByCurrency map[string]int64 `json:"revenue_by_currency,omitempty"`
 	// RefundedSen is the total refunded across the form's sales.
 	RefundedSen int64 `json:"refunded_sen"`
+	// FeesSen is the buyer-borne processing fee contained in RevenueSen, summed
+	// across currencies (card t_8064a965), in integer minor units. It is the
+	// money the acquirer took on top of the merchant's price — RevenueSen
+	// includes it because the buyer paid it, and the merchant never receives it.
+	FeesSen int64 `json:"fees_sen"`
+	// NetRevenueSen is what the merchant actually keeps: RevenueSen − FeesSen.
+	// The two figures are named together everywhere so no surface has to choose
+	// between "what buyers paid" and "what I earned" — see /docs/payment-fees.
+	NetRevenueSen int64 `json:"net_revenue_sen"`
+	// FeesByCurrency / NetRevenueByCurrency are the two figures above grouped by
+	// the currency each sale was recorded in, for the same reason as
+	// RevenueByCurrency: a reader that labels the amount must not put one symbol
+	// over a sum of different monies.
+	FeesByCurrency       map[string]int64 `json:"fees_by_currency,omitempty"`
+	NetRevenueByCurrency map[string]int64 `json:"net_revenue_by_currency,omitempty"`
 	// RefundedByCurrency is RefundedSen grouped by the currency each sale was
 	// recorded in (issue #185), in integer minor units — the same reason as
 	// RevenueByCurrency above: a reader that labels the figure must not put one
@@ -140,6 +155,10 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 		       -- keeps its paid/confirmed status, so summing total_sen would
 		       -- report money that has already gone back to the buyer.
 		       COALESCE(SUM(s.total_sen - s.refunded_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS revenue,
+		       -- Card t_8064a965: the buyer-borne processing fee is INSIDE total_sen,
+		       -- so the revenue above counts money the merchant never receives. Read
+		       -- it on the same rows, so a reader can always name both figures.
+		       COALESCE(SUM(s.fee_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS fees,
 		       COALESCE(SUM(s.refunded_sen), 0) AS refunded
 		FROM forms f
 		LEFT JOIN sales s ON s.form_id = f.id
@@ -156,9 +175,13 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 		if err := rows.Scan(&fs.FormID, &fs.Slug, &fs.Title, &fs.Mode,
 			&fs.Submissions, &fs.PaidCount, &fs.ConfirmedCnt,
 			&fs.FailedCount, &fs.PendingCount, &fs.RefundedCount,
-			&fs.RevenueSen, &fs.RefundedSen); err != nil {
+			&fs.RevenueSen, &fs.FeesSen, &fs.RefundedSen); err != nil {
 			return nil, err
 		}
+		// Card t_8064a965: what the merchant keeps is the collected revenue
+		// minus the buyer-borne fee, in integer sen. Computed here, once, so
+		// every consumer of the rollup divides it the same way.
+		fs.NetRevenueSen = fs.RevenueSen - fs.FeesSen
 		out = append(out, fs)
 	}
 	if err := rows.Err(); err != nil {
@@ -167,8 +190,8 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	// Issue #185: the money above is one number because the payload's
 	// consumers used to read it that way, but a form's sales can be recorded in
 	// more than one currency (a workspace that switched). The label needs the
-	// split, so read both money figures (NET revenue and refunds) grouped by
-	// the sale's own currency.
+	// split, so read every money figure (NET revenue, the buyer-borne fee inside
+	// it, and refunds) grouped by the sale's own currency.
 	// A second query rather than a GROUP BY on the rollup: the `submissions`
 	// subquery is per-form, so grouping the join by currency would repeat it
 	// once per currency and summing would over-count it.
@@ -179,30 +202,39 @@ func (s *SaleStore) FormAnalyticsAccounts(ctx context.Context, accountIDs []stri
 	for i := range out {
 		if t, ok := byCurrency[out[i].FormID]; ok {
 			out[i].RevenueByCurrency = t.revenue
+			out[i].FeesByCurrency = t.fees
+			out[i].NetRevenueByCurrency = t.net
 			out[i].RefundedByCurrency = t.refunded
 		}
 	}
 	return out, nil
 }
 
-// formCurrencyTotals is form id → currency → the two money figures FormStats
-// reports, in integer minor units. Kept as one struct so the revenue and the
-// refunds of a form are read in the SAME query: they come off the same sale
-// rows, and two queries could disagree if a sale changed between them.
+// formCurrencyTotals is form id → currency → the money figures FormStats
+// reports, in integer minor units. Kept as one struct so the revenue, the fee
+// inside it and the refunds of a form are read in the SAME query: they come off
+// the same sale rows, and two queries could disagree if a sale changed between
+// them.
 type formCurrencyTotals struct {
 	revenue  map[string]int64
 	refunded map[string]int64
+	// fees and net are card t_8064a965: the buyer-borne processing fee inside
+	// this currency's revenue, and revenue − fees (what the merchant keeps).
+	fees map[string]int64
+	net  map[string]int64
 }
 
-// formCurrencyTotals returns form id → currency → NET paid+confirmed revenue
-// and refunded total (minor units), reading the currency off each SALE. Forms
-// with no sales are absent; a currency that only holds unpaid sales is present
-// with 0 revenue, so the caller can still label a zero in the form's own money.
+// formCurrencyTotals returns form id → currency → NET paid+confirmed revenue,
+// the buyer-borne fee inside it, and the refunded total (minor units), reading
+// the currency off each SALE. Forms with no sales are absent; a currency that
+// only holds unpaid sales is present with 0 revenue, so the caller can still
+// label a zero in the form's own money.
 func (s *SaleStore) formCurrencyTotals(ctx context.Context, accountIDs []string) (map[string]formCurrencyTotals, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT f.id,
 		       COALESCE(NULLIF(upper(btrim(s.currency)), ''), 'MYR') AS currency,
 		       COALESCE(SUM(s.total_sen - s.refunded_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS revenue,
+		       COALESCE(SUM(s.fee_sen) FILTER (WHERE s.status IN `+paidSet+`), 0) AS fees,
 		       COALESCE(SUM(s.refunded_sen), 0) AS refunded
 		FROM forms f
 		JOIN sales s ON s.form_id = f.id
@@ -215,15 +247,22 @@ func (s *SaleStore) formCurrencyTotals(ctx context.Context, accountIDs []string)
 	out := map[string]formCurrencyTotals{}
 	for rows.Next() {
 		var formID, cur string
-		var revenue, refunded int64
-		if err := rows.Scan(&formID, &cur, &revenue, &refunded); err != nil {
+		var revenue, fees, refunded int64
+		if err := rows.Scan(&formID, &cur, &revenue, &fees, &refunded); err != nil {
 			return nil, err
 		}
 		t, ok := out[formID]
 		if !ok {
-			t = formCurrencyTotals{revenue: map[string]int64{}, refunded: map[string]int64{}}
+			t = formCurrencyTotals{
+				revenue: map[string]int64{}, fees: map[string]int64{},
+				net: map[string]int64{}, refunded: map[string]int64{},
+			}
 		}
 		t.revenue[cur] = revenue
+		t.fees[cur] = fees
+		// Card t_8064a965: the same subtraction as the scalar above, in the
+		// sale's own money, so a per-currency label can name both figures.
+		t.net[cur] = revenue - fees
 		t.refunded[cur] = refunded
 		out[formID] = t
 	}
@@ -241,6 +280,13 @@ func (s *SaleStore) ProductAnalytics(ctx context.Context, accountID string) ([]P
 // (issue #185), then merged here: the scalar totals stay the same numbers
 // they always were, and the per-currency maps give a reader the split it needs
 // to label the amount in the sale's own money instead of a hardcoded symbol.
+//
+// Card t_8064a965: the buyer-borne processing fee is NOT part of these figures
+// and must not be subtracted from them. The money here is `price_sen * qty`
+// from the sale's ITEMS — the merchant's own listed price — while the fee is a
+// separate component of sale.total_sen (see /docs/payment-fees). Product
+// revenue was already what the merchant keeps; only the sale-total aggregates
+// (form revenue, the summary and the CSV) had the fee folded in.
 func (s *SaleStore) ProductAnalyticsAccounts(ctx context.Context, accountIDs []string) ([]ProductStats, error) {
 	if len(accountIDs) == 0 {
 		return []ProductStats{}, nil

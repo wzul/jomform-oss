@@ -79,10 +79,13 @@ func TestDashboardProxyRelaysEveryHeaderTheAPITrusts(t *testing.T) {
 
 	// The derivation must be non-vacuous before it is used to judge anything: a
 	// regexp that stopped matching would otherwise make every comparison below
-	// trivially true.
-	if len(apiHeaders) != 3 || !contains(apiHeaders, "cf-connecting-ip") {
+	// trivially true. Four headers: the three the CLIENT ADDRESS is resolved from,
+	// plus CF-IPCity — the same file reads it for display only (the device-flow
+	// consent email says where the request came from), and the dashboard hop has
+	// to relay it for the same reason it relays the others.
+	if len(apiHeaders) != 4 || !contains(apiHeaders, "cf-connecting-ip") || !contains(apiHeaders, "cf-ipcity") {
 		t.Fatalf("derived %v from clientip.go as the headers it resolves the client from — expected the three the rule reads "+
-			"(CF-Connecting-IP, X-Real-IP, X-Forwarded-For). Either the rule moved or this scan is broken, and an empty or "+
+			"(CF-Connecting-IP, X-Real-IP, X-Forwarded-For) plus CF-IPCity. Either the rule moved or this scan is broken, and an empty or "+
 			"partial set would make the comparison below pass by measuring nothing", apiHeaders)
 	}
 

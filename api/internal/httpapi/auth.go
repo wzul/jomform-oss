@@ -98,6 +98,13 @@ type AuthHandlers struct {
 	// Issue #307: OAuth store for listing/revoking the user's connected MCP
 	// agents (user-level, in Profile). Nil in bare-mode tests.
 	OAuth *dbstore.OAuthStore
+	// Card t_9a6cc85f: "Connected apps" — the per-token inventory, the scope
+	// ladder's dashboard route, and the RFC 8628 consent card. OAuthAccessTTL /
+	// OAuthRefreshTTL are the lifetimes a rotation issues (mirroring the OAuth
+	// handler set); SuperAdmin refuses device onboarding for platform admins.
+	OAuthAccessTTL  time.Duration
+	OAuthRefreshTTL time.Duration
+	SuperAdmin      func(email string) bool
 
 	// QASignupToken, when non-empty, enables the QA test-account marking channel
 	// (card t_6ae7f586): a POST /v1/auth/register carrying this exact value in
@@ -193,6 +200,15 @@ func (a *AuthHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// Issue #307: user-level connected MCP agents (Profile → MCP tab).
 	mux.HandleFunc("GET /v1/auth/mcp-agents", a.listMCPAgents)
 	mux.HandleFunc("DELETE /v1/auth/mcp-agents/{client_id}", a.revokeMCPAgent)
+	// Card t_9a6cc85f: "Connected apps" — one row per live OAuth token pair,
+	// with revoke and the scope ladder (upgrade needs confirm=true; downgrade is
+	// immediate; every change ROTATES the pair). The device consent card is the
+	// RFC 8628 verification URI the email links to.
+	mux.HandleFunc("GET /v1/auth/connected-apps", a.listConnectedApps)
+	mux.HandleFunc("POST /v1/auth/connected-apps/{id}/revoke", a.revokeConnectedApp)
+	mux.HandleFunc("POST /v1/auth/connected-apps/{id}/scope", a.setConnectedAppScope)
+	mux.HandleFunc("GET /v1/auth/connected-apps/device", a.getDeviceConsent)
+	mux.HandleFunc("POST /v1/auth/connected-apps/device", a.postDeviceConsent)
 	// Issue #302: explicit social account connect — a first social login whose
 	// email matches an existing account is NOT auto-linked; the user proves
 	// ownership of the email via a signed connect link, then socialConnect

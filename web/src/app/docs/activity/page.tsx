@@ -61,7 +61,7 @@ const SECTIONS: Section[] = [
       {
         note: "The event-type filter is a **server-side prefix match**, so choosing `sale.*` asks the server for the sale rows rather than downloading everything.",
       },
-      "Every family the API records has an option: form.*, product.*, sale.*, settings.*, workspace.*, template.*, media.*, upload.*, profile.*, auth.*, mcp.*, chat.*, admin.* and feedback.*",
+      "Every family the API records has an option: form.*, product.*, sale.*, settings.*, workspace.*, template.*, media.*, upload.*, profile.*, auth.*, mcp.*, chat.*, oauth.*, admin.* and feedback.*",
       "**Twenty rows** are shown per page, with the page number, the total and a Previous/Next pair underneath.",
       {
         list: [

@@ -67,7 +67,20 @@ export type MarkdownVariant = "assistant" | "user" | "plain";
 export type MarkdownMode = "chat" | "docs";
 
 /** A resolved <img>: the URL plus the intrinsic size, so the tag cannot shift layout. */
-export type MarkdownImage = { src: string; width?: number; height?: number };
+export type MarkdownImage = {
+  src: string;
+  width?: number;
+  height?: number;
+  /**
+   * The FULL-SIZE image this figure links to (card t_e1ea03a2). When set, the block figure
+   * becomes a tappable link that opens `href` in a new tab, and it is also drawn full-bleed
+   * below `sm` — the article column on a 390 px phone is 358 px, and a figure whose whole point
+   * is that a 60-year-old can read a screenshot label cannot spend 32 of them on page padding.
+   *
+   * `/docs/guides` never sets it: those figures are not links, so their layout is unchanged.
+   */
+  href?: string;
+};
 
 /**
  * Turns one image reference in the markdown into a renderable <img>, or returns null to fall
@@ -708,11 +721,28 @@ const lineBreakClass = (mode: MarkdownMode) => (mode === "docs" ? "" : "whitespa
  * screenshot manifest, so the only sources it can return are the files the generator copied
  * into public/guides. A guide image that the manifest does not know falls back to its alt
  * text — the same honest failure chat mode uses, instead of a broken <img>.
+ *
+ * A resolver MAY return `href` (card t_e1ea03a2): the full-size capture, when the figure it
+ * resolves is a CROP of it. That turns the figure into a link (open the full image in a new
+ * tab, where a phone can pinch-zoom) and, because the whole point is legibility on a small
+ * screen, draws it full-bleed below `sm` instead of inside the article's padding. `step` is the
+ * heading the figure sits under, so the link's accessible name names the step ("Langkah 5: …")
+ * rather than only describing the picture.
  */
-function renderImage(n: { v: string; src: string }, ctx: RenderCtx, key: string, block: boolean): ReactNode {
+function renderImage(
+  n: { v: string; src: string },
+  ctx: RenderCtx,
+  key: string,
+  block: boolean,
+  step?: string | null,
+): ReactNode {
   const resolved =
     ctx.mode === "docs" && ctx.resolveImage && IMAGE_FILE.test(n.src) ? ctx.resolveImage(n.src) : null;
   if (!resolved) return n.v;
+  // A figure that links to its full capture is drawn edge to edge on a phone: below `sm` the
+  // article's 16 px side padding is 32 of the 390 px the reader has, and a screenshot whose job
+  // is legibility cannot spend them on whitespace. Above `sm` it is back in the column.
+  const linked = Boolean(block && resolved.href);
   const img = createElement("img", {
     key: `${key}-img`,
     src: resolved.src,
@@ -724,19 +754,56 @@ function renderImage(n: { v: string; src: string }, ctx: RenderCtx, key: string,
     height: resolved.height,
     loading: "lazy",
     decoding: "async",
-    className: block ? "w-full rounded-lg border border-slate-200" : "inline-block max-w-full align-middle",
+    className: block
+      ? linked
+        ? "w-full rounded-none border-y border-slate-200 sm:rounded-lg sm:border"
+        : "w-full rounded-lg border border-slate-200"
+      : "inline-block max-w-full align-middle",
   });
   if (!block) return img;
+  if (!resolved.href) {
+    return createElement(
+      "figure",
+      { key, className: "mt-4" },
+      img,
+      // The caption repeats the alt text for SIGHTED readers; aria-hidden keeps a screen
+      // reader from announcing the same sentence twice (the <img alt> already carries it).
+      createElement(
+        "figcaption",
+        { "aria-hidden": "true", className: "mt-1 text-xs text-slate-500" },
+        n.v,
+      ),
+    );
+  }
+  // "Langkah 5: Tetapkan caj CHIP pada pembayar" — the step's own heading, so a screen reader
+  // hears which step the link belongs to (the alt describes the picture, not the step).
+  const named = step ? /^(\d{1,2})\.\s+(.+)$/.exec(step) : null;
+  const label = `${named ? `Langkah ${named[1]}: ${named[2]}` : (step ?? n.v)} — ketik untuk lihat penuh`;
   return createElement(
     "figure",
-    { key, className: "mt-4" },
-    img,
-    // The caption repeats the alt text for SIGHTED readers; aria-hidden keeps a screen
-    // reader from announcing the same sentence twice (the <img alt> already carries it).
+    { key, className: "mt-4 -mx-4 sm:mx-0" },
+    createElement(
+      "a",
+      {
+        key: `${key}-link`,
+        href: resolved.href,
+        target: "_blank",
+        // noreferrer: the full capture is a static PNG on this origin, and a guide handed to a
+        // surau committee has no business telling that URL where the click came from.
+        rel: "noreferrer",
+        className: "block",
+        "aria-label": label,
+      },
+      img,
+    ),
     createElement(
       "figcaption",
-      { "aria-hidden": "true", className: "mt-1 text-xs text-slate-500" },
-      n.v,
+      { className: "mt-1 px-4 text-xs text-slate-500 sm:px-0" },
+      // The card's caption, in Malay. It does NOT repeat the alt text the way the unlinked
+      // figure's caption does: the picture sits directly under its step heading, the alt text
+      // already describes it for assistive tech, and repeating nine descriptions here put the
+      // guide 23 words over its 700-word budget for no reader's benefit.
+      "Ketik untuk lihat penuh",
     ),
   );
 }
@@ -784,7 +851,7 @@ const HEADING_CLASS: Record<number, string> = {
   3: "mt-6 text-lg font-semibold text-slate-900",
 };
 
-function renderBlock(b: Block, ctx: RenderCtx, key: string): ReactNode {
+function renderBlock(b: Block, ctx: RenderCtx, key: string, step: string | null): ReactNode {
   const t = tone(ctx.variant);
   if (b.kind === "code") {
     return createElement(
@@ -859,7 +926,7 @@ function renderBlock(b: Block, ctx: RenderCtx, key: string): ReactNode {
     );
   }
   if (b.kind === "image") {
-    const rendered = renderImage({ v: b.alt, src: b.src }, ctx, key, true);
+    const rendered = renderImage({ v: b.alt, src: b.src }, ctx, key, true, step);
     // The resolver returned nothing (an unknown filename): keep the alt text visible as a
     // paragraph rather than emitting a broken image.
     if (typeof rendered === "string") {
@@ -904,12 +971,19 @@ export function Markdown({
   const blocks = parseMarkdown(text, mode);
   if (blocks.length === 0) return null;
   const ctx: RenderCtx = { variant, mode, resolveImage };
+  // The heading each block sits under, so a figure can name its step in the link it becomes
+  // (renderImage's `step`). Precomputed once: renderBlock stays a pure function of its block.
+  let heading: string | null = null;
+  const steps = blocks.map((b) => {
+    if (b.kind === "heading") heading = b.text;
+    return heading;
+  });
   return createElement(
     "div",
     // min-w-0 lets the block shrink inside a flex bubble (a flex item will not
     // go below its content width otherwise), which is what stops a wide code
     // block from widening the whole card at 412px.
     { className: `min-w-0 space-y-2 break-words ${className}`.trim() },
-    ...blocks.map((b, i) => renderBlock(b, ctx, `b${i}`)),
+    ...blocks.map((b, i) => renderBlock(b, ctx, `b${i}`, steps[i])),
   );
 }

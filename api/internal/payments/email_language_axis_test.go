@@ -271,6 +271,10 @@ var transactionals = []kindAxis{
 	// about their own workspace, so it follows users.lang like the rest of the
 	// profile axis.
 	{emailtext.DormancyNudge, "profile"},
+	// The RFC 8628 device-consent mail goes to the account's own registered
+	// address and resolves users.lang (oauth_device.go deliverDeviceCode), so it
+	// is platform-user mail, not buyer mail.
+	{emailtext.DeviceAuthorization, "profile"},
 	// Buyer-facing mail: resolved from form.config.lang ?? workspace default.
 	{emailtext.Receipt, "buyer"},
 	{emailtext.NotificationSale, "buyer"},

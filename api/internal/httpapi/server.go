@@ -159,13 +159,19 @@ func NewServer(cfg *config.Config, log *slog.Logger, deps *Deps) *Server {
 			Events: deps.Events,
 			// Issue #307: the user-level connected-agents (MCP) store.
 			OAuth: deps.OAuth,
+			// Card t_9a6cc85f: "Connected apps" rotations live as long as a
+			// pair minted by the token endpoint, and an emailed code must never
+			// be the only step before a platform-admin token.
+			OAuthAccessTTL:  cfg.OAuthAccessTokenTTLSeconds,
+			OAuthRefreshTTL: cfg.OAuthRefreshTokenTTLSeconds,
+			SuperAdmin:      cfg.IsSuperAdmin,
 			// Card t_6ae7f586: server-held token that marks a QA test account at
 			// signup (empty = channel closed, the prod default).
 			QASignupToken: cfg.QASignupToken,
 		}
 		// Issue #121: OAuth 2.1 flow needs the same session + user identity for
 		// the human authorize step, plus the store. Wired alongside auth.
-		s.oauth = newOAuthHandlers(deps.OAuth, deps.Sessions, deps.Users, deps.Accounts, cfg.AppBaseURL, cfg)
+		s.oauth = newOAuthHandlers(deps.OAuth, deps.Sessions, deps.Users, deps.Accounts, cfg.AppBaseURL, cfg, deps.VerifyMailer)
 		s.proxy = middleware.NewTrustedProxy()
 		_ = s.proxy.FetchCloudflare(context.Background())
 	}

@@ -58,6 +58,14 @@ export const CLIENT_ADDRESS_HEADERS = [
   // The visitor, set by Cloudflare. clientip.go honours it only when the chain
   // shows a Cloudflare edge, which is the only thing that can put one there.
   "cf-connecting-ip",
+  // The edge's city for that visitor (card t_9a6cc85f). DISPLAY ONLY: the API
+  // reads it for the device-authorisation consent email ("this came from Kuala
+  // Lumpur, is that you?"), under the same Cloudflare-edge condition, and never
+  // as an authorization input. Relayed because the Go-side guard
+  // (dashboard_proxy_clientaddr_test.go) requires every header clientip.go reads
+  // to survive this hop — an API input the dashboard silently drops is a rule
+  // that only holds on one of the two call paths.
+  "cf-ipcity",
 ] as const;
 
 /**

@@ -128,12 +128,17 @@ test("nothing but the client address is copied", () => {
   assert.deepEqual(got, { "x-forwarded-for": "173.245.48.9" });
 });
 
-test("the forwarded set is exactly the headers the API resolves the client from", () => {
-  // Named, not counted: the API's rule reads these three and nothing else
-  // (middleware/clientip.go). Dropping one — or adding a fourth — silently
-  // changes what the API is told about the connection.
+test("the forwarded set is exactly the headers the API reads from this hop", () => {
+  // Named, not counted: the API reads these four and nothing else
+  // (middleware/clientip.go). Three resolve the CLIENT ADDRESS; CF-IPCity is
+  // display-only — the device-authorisation consent email says where the request
+  // came from — and it is listed here because the Go-side guard
+  // (dashboard_proxy_clientaddr_test.go) derives the same set from clientip.go
+  // and fails if this hop drops one of them. Dropping one — or adding a fifth —
+  // silently changes what the API is told about the connection.
   assert.deepEqual([...CLIENT_ADDRESS_HEADERS].sort(), [
     "cf-connecting-ip",
+    "cf-ipcity",
     "x-forwarded-for",
     "x-real-ip",
   ]);

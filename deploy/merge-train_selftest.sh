@@ -17,6 +17,14 @@
 #      the rest was NEVER run. N/N package count is asserted too.
 #   H2. an api/ change that cannot be mapped to packages (a non-Go file) escalates to
 #      the FULL inventory instead of a narrowed run with a hole in it.
+#   H3. a documentation asset whose NAME carries a payment keyword is NOT an
+#      escalation — PR #1701's `04-chip-kunci.png` turned an 11-gate diff-mapped run
+#      into the 27-gate inventory (13 min) on that alone.
+#   H4. the CONTROL: the same keyword on a CODE path still escalates.
+#   H5. the OTHER CONTROL: the same keyword on a CODE path that happens to live
+#      under a `docs/` DIRECTORY still escalates — the inert class is a file
+#      extension, never a directory name (`web/src/app/docs/**` is 50 `.ts/.tsx`
+#      source files, and H4's path has no `docs/` component to catch this).
 #   I. --full still forces the inventory.
 #   N. --select-test-packages prints that set for <base>..HEAD (the same code path,
 #      no worktree, no gate).
@@ -126,6 +134,32 @@ mk train-api-notes
 printf 'selftest notes, not a Go source file\n' > api/internal/payments/zz_train_notes.md
 git add -A && git commit -q -m "selftest: a non-Go change under api/"
 
+# A DOCUMENTATION/ASSET path whose NAME carries a payment keyword. The keyword arm
+# of the escalation exists to catch CODE with that blast radius; a screenshot named
+# after the rail is DATA. Escalating on it made a docs-only batch pay the whole
+# 27-gate inventory — PR #1701 (20 PNGs + one docs page, no Go file) took 13 min
+# because `04-chip-kunci.png` matched "chip".
+mk train-docs-chip
+mkdir -p docs/guides/surau-donation
+printf 'not a real png\n' > docs/guides/surau-donation/04-chip-kunci.png
+git add -A && git commit -q -m "selftest: a documentation screenshot named after the payment rail"
+
+# The CONTROL for that split: the same keyword on a CODE path must still escalate.
+# The fix is "tell documentation from code", never "switch the valve off".
+mk train-session-page
+mkdir -p web/src/app/session
+printf 'export default function Page() { return null }\n' > web/src/app/session/page.tsx
+git add -A && git commit -q -m "selftest: a session page in the web app"
+
+# The OTHER control: a CODE path that carries a `docs/` DIRECTORY component. The inert
+# class used to be "anything under a directory called docs", so the 50 `.tsx` files
+# under `web/src/app/docs/` were marked inert — and this page's name carries "oauth".
+# H4 cannot catch that shape: `web/src/app/session/page.tsx` has no `docs/` component.
+mk train-web-docs-page
+mkdir -p web/src/app/docs/mcp/oauth
+printf 'export default function Page() { return null }\n' > web/src/app/docs/mcp/oauth/page.tsx
+git add -A && git commit -q -m "selftest: an oauth page under the web app's docs directory"
+
 run() { local t rc; t=$(mktemp); "$HERE/merge-train.sh" "$@" >"$t" 2>&1; rc=$?; cat "$t"; return $rc; }
 
 echo "== A. clean batch (one ref)"
@@ -227,6 +261,43 @@ grep -q -- '--for-diff' <<<"$OUT" && bad "unmappable api change still passed --f
 grep -q 'STUB-PKGS: <unset>' <<<"$OUT" && ok "no package list was handed to preflight" \
   || bad "a package list was passed for a change with no package to map"
 grep -q 'full inventory' <<<"$OUT" && ok "verdict says full inventory" || bad "verdict did not say full inventory"
+
+echo "== H3. a documentation asset named after a payment rail is NOT an escalation"
+# PR #1701 measured this: `docs/guides/surau-donation/04-chip-kunci.png` matched the
+# "chip" keyword, so a batch that touched no Go, deploy or auth file paid the whole
+# 27-gate inventory (632 s of Go gates, both e2e halves) instead of the 11 gates its
+# diff maps to. A docs or binary asset is DATA, and `--for-diff` already widens on a
+# path no gate claims, so keeping the keyword arm out of those paths loses nothing.
+OUT=$(TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" train-docs-chip); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 0 ] && ok "exit 0 when the doc-asset run is green" || bad "expected exit 0, got $RC"
+grep -q "diff-mapped vs $(git rev-parse "$BASE")" <<<"$OUT" \
+  && ok "a docs PNG whose NAME contains 'chip' is gated DIFF-MAPPED, not escalated" \
+  || bad "a documentation asset still escalated the whole inventory on a keyword in its filename"
+grep -q -- "--for-diff $(git rev-parse "$BASE")" <<<"$OUT" && ok "preflight was handed --for-diff" || bad "preflight did not get --for-diff"
+
+echo "== H4. the SAME keyword on a CODE path still escalates to the FULL inventory"
+# The control for H3: the fix separates documentation from code, it does not switch
+# the valve off. `web/src/app/session/page.tsx` is a real auth surface, and the Go
+# package graph says nothing about it.
+OUT=$(TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" train-session-page); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 0 ] && ok "exit 0 when the escalated run is green" || bad "expected exit 0, got $RC"
+grep -q 'escalated' <<<"$OUT" && ok "a session path under web/src still escalates (the valve still fires)" || bad "a sensitive CODE path stopped escalating — the split went too far"
+grep -q -- '--for-diff' <<<"$OUT" && bad "an escalated path still passed --for-diff" || ok "no --for-diff on the escalated run"
+
+echo "== H5. a CODE path under a docs/ DIRECTORY still escalates (inert is an EXTENSION, not a directory)"
+# The shape H4 could not reach: `web/src/app/docs/**` is 50 `.ts/.tsx` SOURCE files, and
+# the old `(^|/)docs/` arm marked every one of them inert. `.../docs/mcp/oauth/page.tsx`
+# carries "oauth", so a directory name must not buy it an escalation waiver.
+OUT=$(TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" train-web-docs-page); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 0 ] && ok "exit 0 when the escalated run is green" || bad "expected exit 0, got $RC"
+grep -q 'escalated (web/src/app/docs/mcp/oauth/page.tsx' <<<"$OUT" \
+  && ok "a code path under web/src/app/docs escalates again, and the verdict NAMES that path" \
+  || bad "a docs/ DIRECTORY component marked CODE inert — the keyword arm was waived by the path"
+grep -q -- '--for-diff' <<<"$OUT" && bad "an escalated docs-directory code path still passed --for-diff" \
+  || ok "no --for-diff on the escalated run (the full inventory runs)"
 
 echo "== I. --full forces the inventory even when the diff would allow a mapped run"
 OUT=$(TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" --full train-good1); RC=$?

@@ -172,11 +172,36 @@ test("a response the API marked cacheable keeps exactly its own directive", () =
   assert.equal(out.get("cache-control"), "public, max-age=300");
 });
 
-test("the relayed set is exactly these five, named", () => {
+test("the dormancy CSV's filename survives the dashboard hop", () => {
+  // GET /v1/admin/dormancy?format=csv names its download in content-disposition
+  // (api/internal/httpapi/rest_admin_dormancy.go). Measured on prod v1.35.0: the
+  // direct API call kept `attachment; filename="jomform-dormancy.csv"` and the
+  // same call through https://jomform.com/api/admin/dormancy?format=csv carried
+  // no content-disposition at all, so the browser had the bytes and no filename.
+  const out = relay(
+    new Headers({
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": 'attachment; filename="jomform-dormancy.csv"',
+    }),
+  );
+
+  assert.equal(out.get("content-disposition"), 'attachment; filename="jomform-dormancy.csv"');
+  assert.equal(out.get("content-type"), "text/csv; charset=utf-8");
+});
+
+test("a response the API left without a disposition does not get one invented", () => {
+  // The rule copies. A JSON report or an inline document must not be turned into
+  // a download by this hop.
+  const out = relay(new Headers({ "content-type": "application/json" }));
+  assert.equal(out.get("content-disposition"), null);
+});
+
+test("the relayed set is exactly these six, named", () => {
   // Named, not counted: dropping one (the defect) or adding one (a promise nobody
   // decided on) is a change to what every dashboard caller is told.
   assert.deepEqual([...RELAYED_RESPONSE_HEADERS].sort(), [
     "cache-control",
+    "content-disposition",
     "content-type",
     "location",
     "retry-after",

@@ -180,7 +180,7 @@ const MCP_SOURCES = readdirSync(MCP_DIR)
 // tool, so the pin moves by one again.
 // 191 → 192: card t_94e5cca3 added `admin_dormancy_report`, the read-only
 // per-account dormancy report behind the /admin dormancy section. One tool again.
-const EXPECTED_TOOL_COUNT = 192;
+const EXPECTED_TOOL_COUNT = 195;
 
 const REGISTRY_SRC = MCP_SOURCES.join("\n");
 

@@ -50,6 +50,30 @@ type TrustDeviceRow = {
   current?: boolean;
 };
 
+// Card t_9a6cc85f: one LIVE OAuth credential (token pair), not one client — a
+// scope change rotates the pair, so a client can hold a dead row that this list
+// deliberately does not show.
+type ConnectedAppRow = {
+  id: string;
+  client_id: string;
+  name: string;
+  scopes: string[];
+  created_at?: string;
+  last_used_at?: string;
+  access_expires_at?: string;
+};
+
+// The RFC 8628 consent card the device-flow email links to.
+type DeviceConsent = {
+  user_code: string;
+  client_id: string;
+  client: string;
+  scopes: string[];
+  scope_prose: string;
+  expires_at: string;
+  state: "pending" | "approved" | "denied" | "expired" | "used";
+};
+
 type ProfileTab = "identity" | "security" | "passkeys" | "connected" | "mcp";
 const TAB_IDS: ProfileTab[] = ["identity", "security", "passkeys", "connected", "mcp"];
 
@@ -149,6 +173,13 @@ export default function ProfilePage() {
   const [agents, setAgents] = useState<MCPAgentRow[]>([]);
   // Issue #426: copy feedback for the server URL box.
   const [copied, setCopied] = useState(false);
+  // Card t_9a6cc85f: Connected apps (one row per live credential), the
+  // freshly-rotated credential shown once, and the device consent card.
+  const [apps, setApps] = useState<ConnectedAppRow[]>([]);
+  const [newGrant, setNewGrant] = useState<{ scope: string; access: string; refresh: string } | null>(null);
+  const [deviceCode, setDeviceCode] = useState("");
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const [deviceConsent, setDeviceConsent] = useState<DeviceConsent | null>(null);
 
   // Persist active tab.
   useEffect(() => {
@@ -228,6 +259,12 @@ export default function ProfilePage() {
     loadAuthed<MCPAgentRow[]>("/api/auth/mcp-agents", [], (s) =>
       setAgents(Array.isArray(s) ? s : []),
     );
+    // Card t_9a6cc85f: Connected apps — one row per LIVE OAuth credential, so a
+    // person can see which of several credentials a client holds and what each
+    // one may do.
+    loadAuthed<ConnectedAppRow[]>("/api/auth/connected-apps", [], (s) =>
+      setApps(Array.isArray(s) ? s : []),
+    );
   }, [sessionUser, loadAuthed]);
 
   useEffect(() => { load(); }, [load]);
@@ -257,6 +294,100 @@ export default function ProfilePage() {
     const d = await r.json().catch(() => ({}));
     setErr(apiErr(d, t("prof.failed"), t));
     return false;
+  }
+
+  // ── card t_9a6cc85f: Connected apps + the device consent card ─────────────
+  //
+  // A scope change ROTATES the credential: the backend revokes the old pair and
+  // returns the new one once. Widening needs an explicit confirm (that IS the
+  // dashboard's consent step); narrowing needs none.
+  async function changeAppScope(app: ConnectedAppRow, scope: string) {
+    setMsg(""); setErr(""); setNewGrant(null);
+    if (scope === "readwrite" && !window.confirm(t("prof.appsUpgradeConfirm"))) return;
+    const r = await fetch(`/api/auth/connected-apps/${encodeURIComponent(app.id)}/scope`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, confirm: scope === "readwrite" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      setErr(apiErr(d, t("prof.failed"), t));
+      return;
+    }
+    if (d && typeof d.access_token === "string") {
+      setNewGrant({ scope: String(d.scope || scope), access: d.access_token, refresh: String(d.refresh_token || "") });
+    }
+    load();
+  }
+
+  async function revokeApp(app: ConnectedAppRow) {
+    setMsg(""); setErr("");
+    if (!window.confirm(t("prof.appsRevokeConfirm"))) return;
+    const r = await fetch(`/api/auth/connected-apps/${encodeURIComponent(app.id)}/revoke`, {
+      method: "POST",
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      setErr(apiErr(d, t("prof.failed"), t));
+      return;
+    }
+    setMsg(t("prof.saved"));
+    load();
+  }
+
+  // The device-flow email links here with ?user_code=…, so the card opens already
+  // filled in. A code typed by hand follows the same path.
+  const checkDevice = useCallback(
+    async (raw: string) => {
+      const code = raw.trim();
+      if (!code) return;
+      try {
+        const r = await fetch(
+          `/api/auth/connected-apps/device?user_code=${encodeURIComponent(code)}`,
+        );
+        if (!r.ok) throw new Error(String(r.status));
+        const d = (await r.json()) as DeviceConsent;
+        setDeviceConsent(d);
+        setErr("");
+      } catch {
+        setDeviceConsent(null);
+        setErr(t("prof.deviceNotFound"));
+      }
+    },
+    [t],
+  );
+
+  useEffect(() => {
+    try {
+      const uc = new URLSearchParams(window.location.search).get("user_code");
+      if (uc) setDeviceCode(uc);
+    } catch {
+      // no window (SSR) — nothing to prefill
+    }
+  }, []);
+
+  useEffect(() => {
+    if (deviceCode) void checkDevice(deviceCode);
+  }, [deviceCode, checkDevice]);
+
+  async function decideDevice(decision: "approve" | "deny") {
+    setDeviceBusy(true); setMsg(""); setErr("");
+    try {
+      const r = await fetch("/api/auth/connected-apps/device", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_code: deviceCode, decision }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        setErr(apiErr(d, t("prof.deviceNotFound"), t));
+        return;
+      }
+      setMsg(t(decision === "approve" ? "prof.deviceApproved" : "prof.deviceDenied"));
+      load();
+    } finally {
+      setDeviceBusy(false);
+    }
   }
 
   // Issue #458: a magic-link session belonging to a 2FA-enabled user must
@@ -982,6 +1113,81 @@ export default function ProfilePage() {
               </a>
             </h2>
 
+            {/* Card t_9a6cc85f: the RFC 8628 consent card. The device-flow email
+                links here with ?user_code=…, so a person who just asked an AI
+                harness to connect lands on a page that names the client, what it
+                will be allowed to do, and when the code expires — then approves
+                or denies. */}
+            {(deviceCode || deviceConsent) && (
+              <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
+                <h3 className="text-sm font-semibold">{t("prof.deviceTitle")}</h3>
+                <p className="mt-1 text-xs text-slate-500">{t("prof.deviceHelp")}</p>
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                  <label htmlFor="prof-device-code" className="text-xs font-medium text-slate-500">
+                    {t("prof.deviceEnterCode")}
+                  </label>
+                  <input
+                    id="prof-device-code"
+                    value={deviceCode}
+                    onChange={(e) => setDeviceCode(e.target.value)}
+                    autoComplete="one-time-code"
+                    spellCheck={false}
+                    className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 font-mono text-sm tracking-widest"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void checkDevice(deviceCode)}
+                    className="jf-btn-ghost"
+                  >
+                    {t("prof.deviceCheck")}
+                  </button>
+                </div>
+                {deviceConsent && deviceConsent.state === "pending" && (
+                  <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+                    <p className="text-sm">
+                      <span className="text-[var(--jf-muted)]">{t("prof.deviceClient")}: </span>
+                      {deviceConsent.client}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      <span className="text-[var(--jf-muted)]">{t("prof.appsScope")}: </span>
+                      {deviceConsent.scope_prose}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      <span className="text-[var(--jf-muted)]">{t("prof.deviceExpires")}: </span>
+                      {formatDate(deviceConsent.expires_at)}
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        disabled={deviceBusy}
+                        onClick={() => void decideDevice("approve")}
+                        className="jf-btn-primary text-xs disabled:opacity-60"
+                      >
+                        {t("prof.deviceApprove")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deviceBusy}
+                        onClick={() => void decideDevice("deny")}
+                        className="jf-btn-ghost"
+                      >
+                        {t("prof.deviceDeny")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {deviceConsent && deviceConsent.state !== "pending" && (
+                  <p className="mt-2 text-xs text-slate-600">
+                    {deviceConsent.state === "approved"
+                      ? t("prof.deviceApproved")
+                      : deviceConsent.state === "denied"
+                        ? t("prof.deviceDenied")
+                        : t("prof.deviceNotFound")}
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Issue #426: server URL in a dedicated, copyable code box
                 (full-width, wraps cleanly) instead of inline in a paragraph. */}
             <div className="mt-4">
@@ -1058,6 +1264,86 @@ export default function ProfilePage() {
                 </li>
               )}
             </ul>
+
+            {/* Card t_9a6cc85f: Connected apps — one row per LIVE credential
+                (token pair), not per client. A scope change rotates the pair, so
+                several dead rows can hide behind one client; this list shows the
+                credential that actually exists, with what it may do, and lets the
+                person revoke or re-scope it. */}
+            <div className="mt-6">
+              <h3 className="flex items-center gap-2 text-sm font-semibold">
+                {t("prof.appsTitle")}
+                <a
+                  href="/docs/mcp/oauth#scope-changes"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("prof.appsDocs")}
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">{t("prof.appsHelp")}</p>
+              {newGrant && (
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                  <p className="text-xs font-semibold text-amber-900">{t("prof.appsRotatedTitle")}</p>
+                  <p className="mt-1 text-xs text-amber-900">{t("prof.appsRotatedHelp")}</p>
+                  <code className="mt-2 block break-all rounded bg-white px-2 py-1.5 text-jf-2xs text-slate-700">
+                    {newGrant.access}
+                  </code>
+                  <code className="mt-1 block break-all rounded bg-white px-2 py-1.5 text-jf-2xs text-slate-700">
+                    {newGrant.refresh}
+                  </code>
+                </div>
+              )}
+              <ul className="mt-3 space-y-2">
+                {apps.map((app) => {
+                  const isWrite = app.scopes.includes("readwrite");
+                  return (
+                    <li
+                      key={app.id}
+                      className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div>
+                        <p className="text-sm">{app.name || app.client_id}</p>
+                        <p className="text-jf-2xs text-[var(--jf-muted)]">
+                          {t("prof.appsCreated")} {app.created_at ? formatDate(app.created_at) : "—"}
+                          {" · "}
+                          {t("prof.appsLastUsed")}{" "}
+                          {app.last_used_at ? formatDate(app.last_used_at) : t("prof.appsNever")}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label htmlFor={`app-scope-${app.id}`} className="sr-only">
+                          {t("prof.appsScope")}
+                        </label>
+                        <select
+                          id={`app-scope-${app.id}`}
+                          value={isWrite ? "readwrite" : "read"}
+                          onChange={(e) => void changeAppScope(app, e.target.value)}
+                          className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
+                        >
+                          <option value="read">{t("prof.appsScopeRead")}</option>
+                          <option value="readwrite">{t("prof.appsScopeReadWrite")}</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => void revokeApp(app)}
+                          className="text-xs text-slate-500 hover:text-red-700"
+                        >
+                          {t("prof.appsRevoke")}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+                {apps.length === 0 && (
+                  <li className="rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-4 text-center text-xs text-[var(--jf-muted)]">
+                    {t("prof.appsEmpty")}
+                  </li>
+                )}
+              </ul>
+            </div>
 
             {/* Issue #426: scope presented as a small info card with a clear
                 heading, not plain text. */}

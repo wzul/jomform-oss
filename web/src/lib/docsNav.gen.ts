@@ -174,7 +174,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 12,
     "kind": "product",
     "updated": "2026-11-10",
-    "digest": "83cf7254c194a95c",
+    "digest": "01829bd2b6e56063",
     "guides": []
   },
   {
@@ -196,7 +196,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 14,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "5b981f115469b397",
+    "digest": "903902c1041ce3c3",
     "guides": [
       "/docs/guides/qr-table-ordering",
       "/docs/guides/donations",
@@ -236,8 +236,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Sales & payments",
     "order": 17,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "79c75ea15fef92cf",
+    "updated": "2026-11-10",
+    "digest": "a57029553825c960",
     "guides": [
       "/docs/guides/payment-fees"
     ]
@@ -449,8 +449,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Reference",
     "order": 35,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "9659eb47f6c835ea",
+    "updated": "2026-11-10",
+    "digest": "f9d886078486822f",
     "guides": []
   },
   {
@@ -471,8 +471,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Reference",
     "order": 37,
     "kind": "product",
-    "updated": "2026-11-09",
-    "digest": "ef07db2f11bfa02b",
+    "updated": "2026-11-10",
+    "digest": "d6e28ba30060b7de",
     "guides": []
   },
   {

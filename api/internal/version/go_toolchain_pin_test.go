@@ -12,6 +12,16 @@ package version
 // Inbound TLS is not the exposure: Traefik terminates it and the api is not the
 // TLS server.
 //
+// FLOOR 1.27.4. Go 1.27.4 is also the first release that fixes
+// GO-2026-6859 / CVE-2026-97054 (published 2026-11-11): the HTTP/1 MaxBytesReader
+// path sets `Connection: close` unsynchronised, so a handler that reads the
+// request body while writing a response header can panic. govulncheck reds this
+// module on a 1.27.3 toolchain — "Found in: net/http@go1.27.3 / Fixed in:
+// net/http@go1.27.4", 87 affected net/http symbols, i.e. the whole server surface
+// this api is — so the 1.27.3 floor no longer clears the gate. The floor moves
+// with the pins: go.mod's `toolchain` line, api/Dockerfile's base image and this
+// constant are raised in one commit.
+//
 // WHY A TEST AND NOT JUST THE `govuln` GATE. Measured 2026-10-21 with 1.27.2
 // pinned: govulncheck printed "No vulnerabilities found" — the advisory DB had
 // not caught up with the fix — so the gate whose job is to force a stdlib bump
@@ -50,10 +60,12 @@ import (
 )
 
 const (
-	// minPatchedGo is the first Go release whose crypto/x509 refuses chains
-	// through the eight distrusted eMudhra intermediates (CVE-2026-111943).
-	// Raise it in the same commit that raises the pins.
-	minPatchedGo = "1.27.3"
+	// minPatchedGo is the first Go release that carries BOTH fixes this repo
+	// depends on: crypto/x509 refusing chains through the eight distrusted
+	// eMudhra intermediates (CVE-2026-111943) and the net/http MaxBytesReader
+	// panic fix (GO-2026-6859 / CVE-2026-97054). Raise it in the same commit
+	// that raises the pins.
+	minPatchedGo = "1.27.4"
 
 	// Relative to this directory (api/internal/version).
 	goModPath = "../../go.mod"
@@ -177,7 +189,8 @@ func TestApiImageToolchainIsPatched(t *testing.T) {
 			t.Errorf("api/Dockerfile builds from `golang:%s` (go%s), below the patched floor go%s. A binary built with an "+
 				"older toolchain still ACCEPTS certificate chains through the eight eMudhra intermediates revoked for "+
 				"cACompromise (CVE-2026-111943, go.dev/issue/82345) on every outbound TLS call — CHIP, SES, S3/MinIO, "+
-				"Cloudflare, MCP OAuth and merchant-configured webhook URLs. Bump the tag to golang:%s-alpine.",
+				"Cloudflare, MCP OAuth and merchant-configured webhook URLs — and still carries the unsynchronised "+
+				"HTTP/1 MaxBytesReader `Connection: close` panic (GO-2026-6859 / CVE-2026-97054). Bump the tag to golang:%s-alpine.",
 				tag, rel, minPatchedGo, minPatchedGo)
 		}
 	}
@@ -205,7 +218,8 @@ func TestHostToolchainIsPatched(t *testing.T) {
 		if !rel.atLeast(floor) {
 			t.Errorf("api/go.mod declares `toolchain go%s`, below the patched floor go%s: the api's `build`/`vet`/`test`/"+
 				"`govuln` gates compile and run on that stdlib, so anything depending on the 1.27.3 crypto/x509 fix "+
-				"(CVE-2026-111943) is exercised on the unpatched one. Raise it to `toolchain go%s` — and keep the "+
+				"(CVE-2026-111943) or the 1.27.4 net/http MaxBytesReader fix (GO-2026-6859 / CVE-2026-97054) is "+
+				"exercised on the unpatched one. Raise it to `toolchain go%s` — and keep the "+
 				"golang image tag in api/Dockerfile in step, which is what ships.", rel, minPatchedGo, minPatchedGo)
 		}
 		return
@@ -238,7 +252,7 @@ func TestHostToolchainIsPatched(t *testing.T) {
 func TestGoReleaseComparisonBites(t *testing.T) {
 	floor, _ := parsePinnedRelease(minPatchedGo)
 
-	accepted := []string{"1.27.3", "1.27.4", "1.27.10", "1.28.0", "1.30.1", "2.0.0"}
+	accepted := []string{"1.27.4", "1.27.10", "1.28.0", "1.30.1", "2.0.0"}
 	for _, s := range accepted {
 		rel, ok := parsePinnedRelease(s)
 		if !ok {
@@ -250,7 +264,7 @@ func TestGoReleaseComparisonBites(t *testing.T) {
 		}
 	}
 
-	rejected := []string{"1.27.2", "1.27.0", "1.26.10", "1.26.99", "1.9.0", "0.27.3"}
+	rejected := []string{"1.27.3", "1.27.2", "1.27.0", "1.26.10", "1.26.99", "1.9.0", "0.27.3"}
 	for _, s := range rejected {
 		rel, ok := parsePinnedRelease(s)
 		if !ok {
@@ -258,8 +272,9 @@ func TestGoReleaseComparisonBites(t *testing.T) {
 			continue
 		}
 		if rel.atLeast(floor) {
-			t.Errorf("go%s is BELOW the go%s floor but atLeast() said yes — a binary built with it still trusts the "+
-				"revoked eMudhra intermediates", s, minPatchedGo)
+			t.Errorf("go%s is BELOW the go%s floor but atLeast() said yes — a binary built with it still carries the "+
+				"stdlib defects the floor clears (the revoked eMudhra intermediates, CVE-2026-111943, and the net/http "+
+				"MaxBytesReader panic, GO-2026-6859)", s, minPatchedGo)
 		}
 	}
 

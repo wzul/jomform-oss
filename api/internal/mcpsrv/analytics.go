@@ -33,11 +33,19 @@ type formStatsOut struct {
 	// figures keyed by ISO code (e.g. {"USD": 2490}). A workspace that switched
 	// currency keeps each sale in the money it was paid in, which is why one
 	// form can hold more than one entry.
-	RefundedCount      int64            `json:"refunded_count"`
-	RevenueSen         int64            `json:"revenue_sen"`
-	RefundedSen        int64            `json:"refunded_sen"`
-	RevenueByCurrency  map[string]int64 `json:"revenue_by_currency,omitempty"`
-	RefundedByCurrency map[string]int64 `json:"refunded_by_currency,omitempty"`
+	RefundedCount int64 `json:"refunded_count"`
+	RevenueSen    int64 `json:"revenue_sen"`
+	RefundedSen   int64 `json:"refunded_sen"`
+	// Card t_8064a965: the fee inside revenue_sen and what the merchant keeps
+	// (revenue_sen − fees_sen), so an agent reading the same rollup the
+	// dashboard shows cannot quote the buyer-paid total as income. Both are
+	// integer minor units and split per currency like revenue_sen.
+	FeesSen              int64            `json:"fees_sen"`
+	NetRevenueSen        int64            `json:"net_revenue_sen"`
+	RevenueByCurrency    map[string]int64 `json:"revenue_by_currency,omitempty"`
+	FeesByCurrency       map[string]int64 `json:"fees_by_currency,omitempty"`
+	NetRevenueByCurrency map[string]int64 `json:"net_revenue_by_currency,omitempty"`
+	RefundedByCurrency   map[string]int64 `json:"refunded_by_currency,omitempty"`
 }
 
 type productStatsOut struct {
@@ -64,8 +72,11 @@ func formStatsOutFrom(f dbstore.FormStats) formStatsOut {
 		ConfirmedCount: f.ConfirmedCnt, FailedCount: f.FailedCount,
 		PendingCount: f.PendingCount, RefundedCount: f.RefundedCount,
 		RevenueSen: f.RevenueSen, RefundedSen: f.RefundedSen,
-		RevenueByCurrency:  f.RevenueByCurrency,
-		RefundedByCurrency: f.RefundedByCurrency,
+		FeesSen: f.FeesSen, NetRevenueSen: f.NetRevenueSen,
+		RevenueByCurrency:    f.RevenueByCurrency,
+		FeesByCurrency:       f.FeesByCurrency,
+		NetRevenueByCurrency: f.NetRevenueByCurrency,
+		RefundedByCurrency:   f.RefundedByCurrency,
 	}
 }
 

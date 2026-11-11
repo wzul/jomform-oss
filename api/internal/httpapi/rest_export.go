@@ -109,6 +109,14 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 	// Issue #518: refunded / outstanding / refund_status make a partial refund
 	// visible in the export instead of the sale reading as fully paid.
 	//
+	// Card t_8064a965: `fee` and `net` sit beside `total`, because the total a
+	// buyer paid is NOT what the merchant earned — the buyer-borne processing
+	// fee is inside it and is never paid out. `net` is total − fee in the sale's
+	// own currency (the payment's net; a refund is its own column and is not
+	// folded in here, exactly as the /sales row's "You receive" reads). Without
+	// these two columns a merchant reconciling from this file counted the fee as
+	// income.
+	//
 	// Issue #185: the money columns are in the SALE's own currency, so the
 	// old `total_rm` / `refunded_rm` / `outstanding_rm` names labelled a USD sale
 	// as RM, and a workspace whose history spans currencies gave a reader no way
@@ -118,7 +126,7 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 	// would keep stating the wrong money, and this export is produced by the
 	// merchant's own download button, not a versioned API contract.
 	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"currency", "total", "created_at", "purchase_id", "table_number",
+		"currency", "total", "fee", "net", "created_at", "purchase_id", "table_number",
 		"refunded", "outstanding", "refund_status"}
 	if haveSubs {
 		// record_type + submission_id only when the set is actually mixed: a
@@ -142,6 +150,10 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 				csvguard.Cell(s.Client.FullName), csvguard.Cell(s.Client.Email),
 				s.CurrencyOrMYR(),
 				strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
+				strconv.FormatFloat(float64(s.FeeSen)/100, 'f', 2, 64),
+				// net is what the merchant keeps: the buyer's total minus the
+				// buyer-borne fee, in integer sen before the decimal render.
+				strconv.FormatFloat(float64(s.TotalSen-s.FeeSen)/100, 'f', 2, 64),
 				s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				s.ChipPurchaseID, csvguard.Cell(s.TableNumber),
 				strconv.FormatFloat(float64(s.RefundedSen)/100, 'f', 2, 64),
@@ -162,6 +174,10 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 				csvguard.Cell(buyer), csvguard.Cell(email),
 				"", // a response has no money and therefore no currency
 				"0.00",
+				// fee and net: a response has no payment, so both are zero —
+				// the columns stay present so every row of the file has the
+				// same shape.
+				"0.00", "0.00",
 				sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				"", "",
 				"0.00", "0.00", dbstore.RefundNone,

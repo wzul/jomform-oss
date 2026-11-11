@@ -52,12 +52,25 @@ type oauthStore interface {
 	RefreshGrant(ctx context.Context, refreshHash, newAccessHash, newRefreshHash string, accessExpires, refreshExpires time.Time) (*dbstore.OAuthToken, error)
 	RevokeAccessToken(ctx context.Context, tokenHash string) error
 	RevokeByRefreshHash(ctx context.Context, refreshHash string) error
+
+	// RFC 8628 device authorisation (card t_9a6cc85f).
+	CreateDeviceCode(ctx context.Context, d *dbstore.OAuthDeviceCode) error
+	DeviceCodeByUserCode(ctx context.Context, userCodeHash string) (*dbstore.OAuthDeviceCode, error)
+	ApproveDeviceCode(ctx context.Context, userCodeHash, userID, accountID string, scope []string) (*dbstore.OAuthDeviceCode, error)
+	DenyDeviceCode(ctx context.Context, userCodeHash, userID string) error
+	PollDeviceCode(ctx context.Context, deviceHash, clientID string) (*dbstore.OAuthDeviceCode, error)
+	CountDeviceCodesByIP(ctx context.Context, ip string, since time.Time) (int, error)
+	CountDeviceCodesByUser(ctx context.Context, userID string, since time.Time) (int, error)
 }
 
 // oauthUserStore resolves a user by ID for the authorize step. *dbstore.UserStore
 // satisfies it; tests inject a fake so the flow runs without Postgres.
+//
+// ByEmail is how a device authorisation turns RFC 8628's `login_hint` into the
+// account the consent email goes to (card t_9a6cc85f).
 type oauthUserStore interface {
 	ByID(ctx context.Context, id string) (*dbstore.User, error)
+	ByEmail(ctx context.Context, email string) (*dbstore.User, error)
 }
 
 // oauthSessionStore resolves (and can destroy) a browser session for the human
@@ -81,6 +94,22 @@ type OAuthHandlers struct {
 	Accounts oauthAccountStore
 	BaseURL  string // web AppBaseURL for the /login redirect
 
+	// Mailer delivers the RFC 8628 consent email (card t_9a6cc85f). Same
+	// interface the rest of the auth mail uses; nil → no device mail is sent
+	// (the authorisation still exists and can be approved by typing the code).
+	Mailer VerifyMailer
+	// SuperAdmin reports whether an address may not use device onboarding —
+	// an emailed code must not be the only thing between an attacker and a
+	// platform-admin token.
+	SuperAdmin func(email string) bool
+	// SendDeviceMailAsync sends the consent mail off the request goroutine in
+	// production, so "address exists" and "address does not" cost the same
+	// wall-clock time. Tests leave it false to observe the send.
+	SendDeviceMailAsync bool
+
+	// DeviceTTL overrides the 10-minute device authorisation lifetime (tests).
+	DeviceTTL time.Duration
+
 	CodeTTL         time.Duration // authorization code lifetime (10 min)
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
@@ -93,12 +122,14 @@ func defaultOAuthTTLs() (code, access, refresh time.Duration) {
 }
 
 // newOAuthHandlers builds the handler set from a config (or defaults in tests).
-func newOAuthHandlers(o *dbstore.OAuthStore, sessions *auth.Sessions, users *dbstore.UserStore, accounts *dbstore.AccountStore, baseURL string, cfg *config.Config) *OAuthHandlers {
+func newOAuthHandlers(o *dbstore.OAuthStore, sessions *auth.Sessions, users *dbstore.UserStore, accounts *dbstore.AccountStore, baseURL string, cfg *config.Config, mailer VerifyMailer) *OAuthHandlers {
 	h := &OAuthHandlers{
 		Store: o, Sessions: sessions, Users: users, Accounts: accounts, BaseURL: baseURL,
+		Mailer: mailer, SendDeviceMailAsync: true,
 		CodeTTL: 10 * time.Minute, AccessTokenTTL: time.Hour, RefreshTokenTTL: 30 * 24 * time.Hour,
 	}
 	if cfg != nil {
+		h.SuperAdmin = cfg.IsSuperAdmin
 		if cfg.OAuthCodeTTLSeconds > 0 {
 			h.CodeTTL = cfg.OAuthCodeTTLSeconds
 		}
@@ -118,6 +149,11 @@ func (o *OAuthHandlers) RegisterRoutes(mux *http.ServeMux, dcrRate, dcrBurst flo
 	mux.HandleFunc("GET /oauth/authorize", o.authorize)
 	mux.HandleFunc("POST /oauth/token", o.token)
 	mux.HandleFunc("POST /oauth/revoke", o.revoke)
+	// RFC 8628 §3.1: the headless (no-browser) onboarding entry point. Its
+	// per-IP and per-account limits are enforced in the handler against the
+	// device table, because they are HOURLY limits (the generic token-bucket
+	// middleware says nothing about how many emails went out this hour).
+	mux.HandleFunc("POST /oauth/device_authorization", o.deviceAuthorization)
 	mux.Handle("POST /oauth/register", middleware.RateLimitWith(dcrRate, dcrBurst)(http.HandlerFunc(o.register)))
 }
 
@@ -469,6 +505,10 @@ func (o *OAuthHandlers) token(w http.ResponseWriter, r *http.Request) {
 		o.tokenAuthCode(w, r)
 	case "refresh_token":
 		o.tokenRefresh(w, r)
+	case oauthmeta.DeviceGrantType:
+		// RFC 8628 §3.4. Additive: a client that can drive a browser keeps
+		// using authorization_code, and that path is untouched.
+		o.tokenDevice(w, r)
 	default:
 		oauthErr(w, http.StatusBadRequest, "unsupported_grant_type", "unsupported grant_type")
 	}

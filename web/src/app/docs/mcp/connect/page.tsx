@@ -52,6 +52,16 @@ const SECTIONS: Section[] = [
       },
     ],
   },
+  {
+    id: "no-browser",
+    title: "No browser at all",
+    icon: "🖥️",
+    body: [
+      "A headless harness can skip the browser. JomForm supports the **device authorization grant**, RFC 8628.",
+      "The harness asks for a code, JomForm emails it to your account, and you approve it from that email.",
+      "See [OAuth & tokens](/docs/mcp/oauth) for the endpoints, the polling rules and the scope ladder.",
+    ],
+  },
 ];
 
 export default function McpConnectPage() {

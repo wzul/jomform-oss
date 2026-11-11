@@ -50,6 +50,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { Markdown } from "../components/Markdown.ts";
 import { GUIDES } from "./guides.gen.ts";
+// The PRIVATE guides. They are authored in docs/guides/ and validated by the
+// same generator and the same rules, but they are rendered by a noindex page outside app/docs
+// and must never appear in GUIDES (/docs/guides, the sitemap, llms.txt, the docs search index).
+// Leg 5 therefore reads both modules, so a private guide still has to match its README and its
+// copied PNGs byte for byte — it just does so under public/<assets>/ instead of public/guides/.
+import { PRIVATE_GUIDES } from "./guidesPrivate.gen.ts";
 
 // Derived from this file's own location (web/src/lib) rather than from `new URL("...")`
 // literals: those literals are read targets to src/lib/buildContext.test.ts, and the only one
@@ -265,12 +271,33 @@ test("the generated content matches docs/guides byte for byte (checkout only)", 
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort();
+  // A private guide is a source directory in docs/guides that the generator deliberately keeps
+  // OUT of GUIDES, so the comparison is done per module: the public list against the public
+  // directories, the private list against the private ones. Anything in neither is drift.
+  const privateSlugs = new Set(PRIVATE_GUIDES.map((g) => g.slug));
   assert.deepEqual(
     GUIDES.map((g) => g.slug),
-    slugs,
+    slugs.filter((s) => !privateSlugs.has(s)),
     "docs/guides and src/lib/guides.gen.ts carry different guides — run `npm run guides:sync`",
   );
-  for (const g of GUIDES) {
+  const privateDirs = slugs.filter((s) => privateSlugs.has(s));
+  assert.deepEqual(
+    PRIVATE_GUIDES.map((g) => g.slug),
+    privateDirs,
+    "docs/guides carries a private-guide directory that src/lib/guidesPrivate.gen.ts does not — " +
+      "run `npm run guides:sync` (or remove the directory). A private guide with no generated " +
+      "record is a page nobody can render; a generated record with no directory is stale text.",
+  );
+  // The public copy of each guide's PNGs lives at public/guides/<slug>/; a private guide's live
+  // at its own `assets` directory (public/panduan/surau), which is what its page renders from.
+  const all = [
+    ...GUIDES.map((g) => ({ ...g, publicDir: join(PUBLIC_GUIDES, g.slug) })),
+    ...PRIVATE_GUIDES.map((g) => ({
+      ...g,
+      publicDir: join(WEB_DIR, "public", g.assets.replace(/^\//, "")),
+    })),
+  ];
+  for (const g of all) {
     const dir = join(DOCS_GUIDES, g.slug);
     const readme = readFileSync(join(dir, "README.md"), "utf8").replace(/\r\n?/g, "\n");
     // The generated body is the README minus its title line (the page renders that as its h1)
@@ -306,8 +333,8 @@ test("the generated content matches docs/guides byte for byte (checkout only)", 
         problems.push(`${g.slug}/${shot.file}: no such file in docs/guides`);
         continue;
       }
-      if (!readFileSync(src).equals(readFileSync(join(PUBLIC_GUIDES, g.slug, shot.file)))) {
-        problems.push(`${g.slug}/${shot.file}: public/guides copy differs from docs/guides — run npm run guides:sync`);
+      if (!readFileSync(src).equals(readFileSync(join(g.publicDir, shot.file)))) {
+        problems.push(`${g.slug}/${shot.file}: the copied PNG differs from docs/guides — run npm run guides:sync`);
       }
     }
   }

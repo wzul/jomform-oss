@@ -119,11 +119,25 @@ Parity checklist (dashboard → MCP):
   matching refunded / paid pairs), because the rollup spans every workspace and
   one form's history can hold more than one currency. Same contract as the
   dashboard bundle and the CSV export (#185).
+  revenue_sen is what BUYERS PAID and includes the buyer-borne processing fee;
+  fees_sen is that fee and net_revenue_sen is revenue_sen − fees_sen — what the
+  merchant keeps (card t_8064a965). get_sales_summary carries the same two
+  fields. The sale-level and CSV money columns follow the rule too (total /
+  fee / net). Product revenue is item prices and never included the fee.
 - CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
 - e-Invoice settings → `set_einvoice_settings`, `get_einvoice_settings`
 - Webhooks → `create_webhook`, `list_webhooks`, `update_webhook`,
   `delete_webhook`, `webhook_deliveries`
 - API keys → `list_api_keys`, `create_api_key`, `revoke_api_key`
+- Connected apps (the OAuth credentials an AI agent holds, one row per live
+  token pair) → `list_connected_apps`, `revoke_connected_app`,
+  `set_connected_app_scope`.
+  The dashboard surface is Profile → MCP → **Connected apps**, which also hosts
+  the consent card a device authorisation's email links to. The scope ladder is
+  the same on both doors: `set_connected_app_scope` can only LOWER a grant (it
+  rotates the pair, and the old credential stops working), because widening to
+  readwrite needs a human decision — one confirm on the dashboard, or a new
+  device authorisation whose consent screen is the email. Docs: `/docs/mcp`.
 - Event tracking / audit log → `list_events` (account-scoped, read-only)
   The dashboard surface is the **Activity page** (`/activity`, card t_eb09b25a):
   the workspace-scoped audit trail, per workspace via the `?workspace=<slug>`

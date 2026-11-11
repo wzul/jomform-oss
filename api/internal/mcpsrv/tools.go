@@ -107,7 +107,7 @@ func (s *Server) registerTools() {
 
 	addTool(s, &mcp.Tool{
 		Name:        "get_sales_summary",
-		Description: "Sales summary: counts by status (including refunded), refunded_sen (total refunded) and revenue_sen (net value after refunds) — issue #518.",
+		Description: "Sales summary: counts by status (including refunded), refunded_sen (total refunded), revenue_sen (what buyers paid, net of refunds) and net_revenue_sen (revenue_sen minus the buyer-borne processing fees in fees_sen — the money you keep). Quote net_revenue_sen as income; revenue_sen includes a fee you never receive. Issue #518, card t_8064a965.",
 	}, s.salesSummary)
 
 	// The lifecycle table (card t_52429d6f). An agent can ask what a state
@@ -331,6 +331,23 @@ func (s *Server) registerTools() {
 		Name:        "revoke_api_key",
 		Description: "PERMANENTLY delete an API key (id from list_api_keys; there is no disable/re-enable — create a new key). WARNING: if the id is the key authenticating this session, it will cut off its own access immediately — set confirm=true to confirm; otherwise the call is rejected.",
 	}, s.revokeAPIKey)
+
+	// ── Connected apps (OAuth credentials an agent holds) ─────────────────────
+	// Dashboard parity for Profile → MCP → Connected apps (card t_9a6cc85f). The
+	// scope ladder is the same one the dashboard enforces: these tools can lower
+	// a grant and can never raise it.
+	addTool(s, &mcp.Tool{
+		Name:        "list_connected_apps",
+		Description: "List the live OAuth connections (AI agents) the signed-in person has authorised, one row per credential: id, client name, scopes, created and last used. Needs an OAuth connection, not an API key.",
+	}, s.listConnectedApps)
+	addTool(s, &mcp.Tool{
+		Name:        "revoke_connected_app",
+		Description: "Revoke ONE connected app: its access token and its refresh token die together. Takes the id from list_connected_apps. Revoking the connection this call is using ends the session.",
+	}, s.revokeConnectedApp)
+	addTool(s, &mcp.Tool{
+		Name:        "set_connected_app_scope",
+		Description: "Lower a connected app to read-only by rotating its credential (the old token pair stops working). Widening to readwrite is REFUSED here — it needs a human consent on the Connected apps page or a new device authorisation.",
+	}, s.setConnectedAppScope)
 
 	// ── Workspaces (multi-tenant storefronts) ───────────────────────────────────
 	addTool(s, &mcp.Tool{
@@ -824,7 +841,7 @@ func (s *Server) registerTools() {
 	// ── Parity: analytics (issue #396) ────────────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "get_form_analytics",
-		Description: "Per-form analytics: number of entries (submissions), paid/confirmed/failed/pending, and NET revenue after refunds. submissions = entries recorded for that form, read from the table the form writes: mode=response → submissions table; payment form → sales (all statuses). mode is included so the label is correct. Money in minor units: revenue_sen and refunded_sen are totals across currencies (do not label with a single symbol), broken down by the currency of each sale in revenue_by_currency and refunded_by_currency (keys are ISO codes, values in minor units). Across all your workspaces. Read-only.",
+		Description: "Per-form analytics: number of entries (submissions), paid/confirmed/failed/pending, and NET revenue after refunds. submissions = entries recorded for that form, read from the table the form writes: mode=response → submissions table; payment form → sales (all statuses). mode is included so the label is correct. Money in minor units: revenue_sen is what buyers paid (includes the buyer-borne fee in fees_sen) and net_revenue_sen is what you keep; both are totals across currencies (do not label with a single symbol), broken down by the currency of each sale in revenue_by_currency / fees_by_currency / net_revenue_by_currency and refunded_by_currency (keys are ISO codes, values in minor units). Across all your workspaces. Read-only.",
 	}, s.formAnalytics)
 	addTool(s, &mcp.Tool{
 		Name:        "get_product_analytics",
@@ -966,7 +983,7 @@ func (s *Server) registerTools() {
 	// ── Parity: sales export CSV (issue #396) ────────────────────────────
 	addTool(s, &mcp.Tool{
 		Name:        "export_sales_csv",
-		Description: "Export a set of account records as CSV. Without form_id it contains both sales AND responses (a record_type column marks each row, plus the recorded answer columns), matching the list that is shown. Filterable by form_id/status/date_from/date_to/q — the same filters as the list. The refund column exposes partial refunds (issue #518). Returns the csv content.",
+		Description: "Export a set of account records as CSV. Without form_id it contains both sales AND responses (a record_type column marks each row, plus the recorded answer columns), matching the list that is shown. Filterable by form_id/status/date_from/date_to/q — the same filters as the list. The refund column exposes partial refunds (issue #518); total is what the buyer paid, fee is the buyer-borne processing fee inside it, and net is total − fee — the money you keep (card t_8064a965). Returns the csv content.",
 	}, s.exportSalesCSV)
 
 	// ── Parity: Cloudflare (issue #396) ──────────────────────────────────

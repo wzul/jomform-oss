@@ -121,18 +121,42 @@ func (h *RESTHandlers) summaryData(ctx context.Context, accountIDs []string) (ma
 	// symbol can label; the dashboard reads this map so a USD workspace shows
 	// US$ instead of the RM the page used to hardcode.
 	revenueByCurrency := map[string]int64{}
+	// Card t_8064a965: the buyer-borne processing fee is INSIDE total_sen, so
+	// the revenue above counted money the merchant never receives. Read the fee
+	// off the same paid/confirmed rows and surface what is actually kept:
+	//   collected  revenue_sen        = SUM(total_sen - refunded_sen)
+	//   fees       fees_sen           = SUM(fee_sen)
+	//   kept       net_revenue_sen    = revenue_sen - fees_sen
+	// All three, and their per-currency splits, come from this ONE loop so no
+	// surface can disagree with another. /docs/payment-fees#reporting states
+	// the rule for a merchant.
+	var fees int64
+	feesByCurrency := map[string]int64{}
+	netByCurrency := map[string]int64{}
 	for _, s := range sales {
 		sum[s.Status]++
 		if s.Status == dbstore.SalePaid || s.Status == dbstore.SaleConfirmed {
 			net := s.TotalSen - s.RefundedSen
+			cur := s.CurrencyOrMYR()
 			revenue += net
-			revenueByCurrency[s.CurrencyOrMYR()] += net
+			revenueByCurrency[cur] += net
+			fees += s.FeeSen
+			feesByCurrency[cur] += s.FeeSen
+			netByCurrency[cur] += net - s.FeeSen
 		}
 		refunded += s.RefundedSen
 	}
 	return map[string]any{
 		"counts": sum, "revenue_sen": revenue, "refunded_sen": refunded,
 		"revenue_by_currency": revenueByCurrency,
+		// Card t_8064a965: what the merchant keeps. Every consumer that labels
+		// income (dashboard stat, 14-day chart, per-form panel, CSV) reads these
+		// instead of revenue_sen; revenue_sen stays the fee-inclusive collected
+		// figure for the sales list and for API consumers that already read it.
+		"fees_sen":                fees,
+		"net_revenue_sen":         revenue - fees,
+		"fees_by_currency":        feesByCurrency,
+		"net_revenue_by_currency": netByCurrency,
 	}, nil
 }
 

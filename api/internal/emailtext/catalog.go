@@ -223,6 +223,60 @@ var catalog = map[Kind]map[string]msg{
 				"إذا لم تطلب ذلك، يمكنك تجاهل هذا البريد.\n"},
 	},
 
+	// RFC 8628 device authorisation (card t_9a6cc85f). This email IS the consent
+	// screen for a headless MCP onboarding: the reader has to be able to tell
+	// what is asking, what it will be allowed to do, where the request came
+	// from, and what to do if it was not them. Hence the client / access / from
+	// / time block, and hence the explicit "do not share this code" line — the
+	// code is a bearer secret that a token is minted from.
+	DeviceAuthorization: {
+		En: {Subject: "Approve an AI agent connection to JomForm",
+			Body: "A device is asking to connect to your JomForm account as an AI agent.\n\n" +
+				"Client : {client}\n" +
+				"Access : {scope}\n" +
+				"From   : {where} ({ip})\n" +
+				"Time   : {time}\n\n" +
+				"Your code: {code}\n" +
+				"Approve or deny at {link} — the code expires in 10 minutes.\n\n" +
+				"If this was not you, do not share this code. Deny the request at the link above.\n"},
+		Ms: {Subject: "Luluskan sambungan ejen AI ke JomForm",
+			Body: "Sesebuah peranti meminta untuk menyambung ke akaun JomForm anda sebagai ejen AI.\n\n" +
+				"Klien  : {client}\n" +
+				"Akses  : {scope}\n" +
+				"Dari   : {where} ({ip})\n" +
+				"Masa   : {time}\n\n" +
+				"Kod anda: {code}\n" +
+				"Luluskan atau tolak di {link} — kod ini tamat tempoh dalam 10 minit.\n\n" +
+				"Jika ini bukan anda, jangan kongsi kod ini. Tolak permintaan di pautan di atas.\n"},
+		Zh: {Subject: "批准 AI 代理连接到 JomForm",
+			Body: "有设备请求以 AI 代理身份连接到您的 JomForm 账户。\n\n" +
+				"客户端：{client}\n" +
+				"权限：{scope}\n" +
+				"来源：{where}（{ip}）\n" +
+				"时间：{time}\n\n" +
+				"您的代码：{code}\n" +
+				"在 {link} 批准或拒绝 — 代码将在 10 分钟后失效。\n\n" +
+				"如果这不是您本人操作，请勿分享此代码。请在上面的链接中拒绝该请求。\n"},
+		Ta: {Subject: "JomForm க்கு AI முகவர் இணைப்பை அனுமதிக்கவும்",
+			Body: "ஒரு சாதனம் AI முகவராக உங்கள் JomForm கணக்குடன் இணைக்கக் கோருகிறது.\n\n" +
+				"கிளையன்ட்: {client}\n" +
+				"அணுகல்: {scope}\n" +
+				"இருப்பிடம்: {where} ({ip})\n" +
+				"நேரம்: {time}\n\n" +
+				"உங்கள் குறியீடு: {code}\n" +
+				"{link} இல் அனுமதிக்கவும் அல்லது நிராகரிக்கவும் — குறியீடு 10 நிமிடங்களில் காலாவதியாகும்.\n\n" +
+				"இது நீங்கள் இல்லை என்றால், இந்தக் குறியீட்டைப் பகிர வேண்டாம். மேலே உள்ள இணைப்பில் கோரிக்கையை நிராகரிக்கவும்.\n"},
+		Ar: {Subject: "الموافقة على اتصال وكيل ذكاء اصطناعي بـ JomForm",
+			Body: "جهاز يطلب الاتصال بحساب JomForm الخاص بك كوكيل ذكاء اصطناعي.\n\n" +
+				"العميل: {client}\n" +
+				"الوصول: {scope}\n" +
+				"من: {where} ({ip})\n" +
+				"الوقت: {time}\n\n" +
+				"رمزك: {code}\n" +
+				"وافق أو ارفض على {link} — ينتهي الرمز خلال 10 دقائق.\n\n" +
+				"إذا لم تكن أنت، فلا تشارك هذا الرمز. ارفض الطلب من الرابط أعلاه.\n"},
+	},
+
 	WorkspaceInvite: {
 		En: {Subject: "Invitation to join a JomForm workspace",
 			Body: "You've been invited to join a JomForm workspace.\n\n" +
@@ -512,6 +566,40 @@ var phrases = map[PhraseKey]map[string]string{
 		Zh: "JomForm — 马来西亚制造。",
 		Ta: "JomForm — மலேசியாவில் உருவாக்கப்பட்டது.",
 		Ar: "JomForm — صُنع في ماليزيا.",
+	},
+	// An OAuth client registered through Dynamic Client Registration without a
+	// client_name. The consent email must still say who is asking.
+	PhraseUnnamedClient: {
+		En: "an unregistered client (auto-registered without a name)",
+		Ms: "klien tidak berdaftar (didaftar automatik tanpa nama)",
+		Zh: "未注册的客户端（自动注册，无名称）",
+		Ta: "பதிவு செய்யப்படாத கிளையன்ட் (பெயர் இல்லாமல் தானாகப் பதிவு)",
+		Ar: "عميل غير مسجل (سُجّل تلقائياً بدون اسم)",
+	},
+	// The two OAuth scopes in plain words, for the consent email. The reader is
+	// being asked to hand an AI agent a credential; "readwrite" is not an answer
+	// to "what will it be able to do".
+	PhraseScopeRead: {
+		En: "read-only — can view your forms, products and sales; cannot change anything",
+		Ms: "baca sahaja — boleh melihat borang, produk dan jualan anda; tidak boleh mengubah apa-apa",
+		Zh: "只读 — 可以查看您的表单、产品和销售；不能更改任何内容",
+		Ta: "படிக்க மட்டும் — உங்கள் படிவங்கள், தயாரிப்புகள் மற்றும் விற்பனைகளைப் பார்க்கலாம்; எதையும் மாற்ற முடியாது",
+		Ar: "للقراءة فقط — يمكنه عرض نماذجك ومنتجاتك ومبيعاتك؛ لا يمكنه تغيير أي شيء",
+	},
+	PhraseScopeReadWrite: {
+		En: "read and write — can create, change and delete your forms, products and sales",
+		Ms: "baca dan tulis — boleh mencipta, mengubah dan memadam borang, produk dan jualan anda",
+		Zh: "读写 — 可以创建、更改和删除您的表单、产品和销售",
+		Ta: "படிக்க மற்றும் எழுத — உங்கள் படிவங்கள், தயாரிப்புகள் மற்றும் விற்பனைகளை உருவாக்க, மாற்ற, நீக்க முடியும்",
+		Ar: "قراءة وكتابة — يمكنه إنشاء نماذجك ومنتجاتك ومبيعاتك وتغييرها وحذفها",
+	},
+	// Where a device authorisation came from, when no edge reported a city.
+	PhraseUnknownLocation: {
+		En: "location not reported by the network",
+		Ms: "lokasi tidak dilaporkan oleh rangkaian",
+		Zh: "网络未报告位置",
+		Ta: "பிணையம் இருப்பிடத்தைத் தெரிவிக்கவில்லை",
+		Ar: "لم تُبلغ الشبكة عن الموقع",
 	},
 	// Branded wrapper footer: copyright. JomForm's code is MIT-licensed, so the
 	// footer states the licence rather than a blanket reservation of rights.

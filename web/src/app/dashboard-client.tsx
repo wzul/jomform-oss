@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Shell } from "../components/Shell";
 import { SessionFault } from "../components/SessionFault";
@@ -26,6 +26,10 @@ type SaleRow = {
   ref_code: string;
   status: string;
   total_sen: number;
+  // Card t_8064a965: the buyer-borne processing fee inside total_sen (absent
+  // when the buyer bore none). The 14-day chart subtracts it so the chart plots
+  // what the merchant keeps, not what buyers paid.
+  fee_sen?: number;
   // The currency the sale was RECORDED in (the API emits it from the sale row
   // itself, never from the workspace's current setting). Optional because a
   // response row has no money; formatMoney then falls back to MYR, which is
@@ -59,6 +63,13 @@ type FormStats = {
   // recorded in, so the panel can label US$ for a USD workspace instead of
   // printing a literal RM over the sum.
   revenue_by_currency?: Record<string, number>;
+  // Card t_8064a965: revenue_sen above INCLUDES the buyer-borne processing fee;
+  // net_revenue_sen is what the merchant keeps (revenue_sen − fees_sen). The
+  // panel headlines the net figure and names the fee beside it.
+  fees_sen?: number;
+  net_revenue_sen?: number;
+  fees_by_currency?: Record<string, number>;
+  net_revenue_by_currency?: Record<string, number>;
 };
 type ProductStats = {
   product_id: string;
@@ -78,6 +89,14 @@ type Summary = {
   // Issue #185: the NET revenue grouped by the currency each sale was recorded
   // in, plus the scope's own currency for a figure with no money behind it yet.
   revenue_by_currency?: Record<string, number>;
+  // Card t_8064a965: revenue_sen is what buyers PAID and includes the
+  // buyer-borne processing fee (fees_sen). net_revenue_sen / its per-currency
+  // map is what the merchant actually keeps, and is what the revenue stat and
+  // the 14-day chart plot.
+  fees_sen?: number;
+  net_revenue_sen?: number;
+  fees_by_currency?: Record<string, number>;
+  net_revenue_by_currency?: Record<string, number>;
   currency?: string;
 };
 
@@ -161,6 +180,11 @@ export default function Dashboard() {
   // one currency charted an invented total under the wrong symbol. Each band
   // keeps the currency of the sale it came from; the product never adds across
   // currencies (that is the conversion it refuses to do silently).
+  //
+  // Card t_8064a965: a sale's total_sen contains the buyer-borne processing fee,
+  // which the merchant never receives, so the band plots total_sen - fee_sen
+  // (what is actually kept). Charting total_sen made the fee look like income on
+  // the one surface a merchant reads as a trend.
   const { series, bands } = (() => {
     const paid = sales.filter((s) => s.status === "paid" || s.status === "confirmed");
     if (!paid.length) return { series: [] as Record<string, number | string>[], bands: [] as string[] };
@@ -171,7 +195,8 @@ export default function Dashboard() {
       if (!bands.includes(cur)) bands.push(cur);
       const day = s.created_at.slice(0, 10);
       const dayMap = byDay.get(day) ?? new Map<string, number>();
-      dayMap.set(cur, (dayMap.get(cur) ?? 0) + s.total_sen);
+      const kept = s.total_sen - (s.fee_sen ?? 0);
+      dayMap.set(cur, (dayMap.get(cur) ?? 0) + kept);
       byDay.set(day, dayMap);
     }
     const days: Record<string, number | string>[] = [];
@@ -260,6 +285,25 @@ export default function Dashboard() {
       complaint: "bg-red-50 text-red-700 border-red-200",
     })[s || ""] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
 
+  // Card t_8064a965: the revenue stat headlines what the merchant KEEPS. The
+  // collected figure and the buyer-borne fee inside it are named underneath, so
+  // no reader has to guess which number is income. A workspace whose buyers
+  // never bore a fee renders exactly as before (no note, no extra line). The fee
+  // phrase is kept on one line: it wrapped as "Processing / fee" in a quarter-
+  // width card, which reads as two different things.
+  const feesSen = summary?.fees_sen ?? 0;
+  const revenueNote: ReactNode =
+    feesSen > 0 ? (
+      <>
+        {t("dash.collected")}{" "}
+        {formatCurrencyTotals(summary?.revenue_by_currency, summary?.currency)}
+        {" · "}
+        <span className="whitespace-nowrap">
+          {t("dash.fee")} {formatCurrencyTotals(summary?.fees_by_currency, summary?.currency)}
+        </span>
+      </>
+    ) : undefined;
+
   return (
     <Shell active="dashboard">
       <div className="w-full flex-1 px-6 py-8">
@@ -275,7 +319,16 @@ export default function Dashboard() {
 
         {summary && (
           <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label={t("dash.revenue")} value={formatCurrencyTotals(summary.revenue_by_currency, summary.currency)} accent />
+            {/* Card t_8064a965: the NET figure — collected minus the
+                buyer-borne fee — is the income line; revenue_sen (collected)
+                stays visible in the note instead of standing in as revenue. */}
+            <Stat
+              label={t("dash.revenue")}
+              value={formatCurrencyTotals(summary.net_revenue_by_currency ?? summary.revenue_by_currency, summary.currency)}
+              note={revenueNote}
+              docs={{ href: "/docs/payment-fees#reporting", title: t("dash.revenueDocs") }}
+              accent
+            />
             <Stat label={t("dash.pending")} value={String(summary.counts.pending ?? 0)} />
             <Stat label={t("dash.confirmed")} value={String(summary.counts.confirmed ?? 0)} />
             <Stat label={t("dash.activeProducts")} value={String(products.length)} />
@@ -286,6 +339,18 @@ export default function Dashboard() {
         <section className="jf-card mt-6 p-5">
           <h2 className="text-sm font-semibold">
             {t("dash.revenue")} · 14d
+            {/* Card t_8064a965 / AGENTS.md docs-parity rule 4: the "?" that
+                states which figure the chart plots (what you keep, not what
+                buyers paid). */}
+            <a
+              href="/docs/payment-fees#reporting"
+              target="_blank"
+              rel="noopener noreferrer"
+              title={t("dash.revenueDocs")}
+              className="ml-1.5 align-middle font-mono text-jf-2xs text-[var(--jf-primary)] hover:underline"
+            >
+              ?
+            </a>
           </h2>
           <div className="mt-3 h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -365,7 +430,18 @@ export default function Dashboard() {
                   <span>{t("dash.pendingLabel")} <b>{f.pending_count}</b></span>
                   <span>{t("dash.failedLabel")} <b>{f.failed_count}</b></span>
                 </div>
-                <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">{formatCurrencyTotals(f.revenue_by_currency, summary?.currency)}</p>
+                {/* Card t_8064a965: the headline is what the form EARNED —
+                    collected minus the buyer-borne fee — and the collected
+                    figure is named underneath when a fee was taken, so the
+                    panel cannot read as if the fee were income. */}
+                <p className="mt-1.5 text-sm font-semibold text-[var(--jf-primary)]">
+                  {formatCurrencyTotals(f.net_revenue_by_currency ?? f.revenue_by_currency, summary?.currency)}
+                </p>
+                {(f.fees_sen ?? 0) > 0 && (
+                  <p className="text-jf-3xs text-[var(--jf-muted)]">
+                    {t("dash.collected")} {formatCurrencyTotals(f.revenue_by_currency, summary?.currency)}
+                  </p>
+                )}
               </div>
             ))}
             {formStats.length === 0 && <p className="text-xs text-[var(--jf-muted)]">{t("dash.noForms")}</p>}
@@ -551,13 +627,43 @@ export default function Dashboard() {
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+// Stat is one dashboard figure. `note` is the secondary line under the value
+// (card t_8064a965: the collected amount and the buyer-borne fee behind a
+// net revenue figure) and `docs` renders the inline "?" the docs-parity rule
+// requires next to a figure whose meaning is not obvious from its label.
+function Stat({
+  label,
+  value,
+  note,
+  accent,
+  docs,
+}: {
+  label: string;
+  value: string;
+  note?: ReactNode;
+  accent?: boolean;
+  docs?: { href: string; title: string };
+}) {
   return (
     <div className="jf-card p-4">
-      <p className="text-xs text-[var(--jf-muted)]">{label}</p>
+      <p className="text-xs text-[var(--jf-muted)]">
+        {label}
+        {docs && (
+          <a
+            href={docs.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={docs.title}
+            className="ml-1.5 align-middle font-mono text-jf-2xs text-[var(--jf-primary)] hover:underline"
+          >
+            ?
+          </a>
+        )}
+      </p>
       <p className={`mt-1 text-xl font-semibold tracking-tight ${accent ? "text-[var(--jf-primary)]" : ""}`}>
         {value}
       </p>
+      {note && <p className="mt-0.5 text-jf-2xs text-[var(--jf-muted)]">{note}</p>}
     </div>
   );
 }

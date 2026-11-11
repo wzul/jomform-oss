@@ -28,9 +28,23 @@
 #      text — the import it drives) selects that spec. This is derived, not
 #      typed here, so a shared helper the spec imports cannot be missed by a row.
 #   3. A change to a path matched by a row's area globs selects that row's spec.
-#   4. ANY OTHER changed path under `web/` selects the WHOLE family. A change
-#      nothing in this file claims might still reach any spec, so it is never
-#      narrowed away.
+#   4. ANY OTHER changed path under `web/` selects the WHOLE family — UNLESS the
+#      TREE attributes it (rule 4a). A change nothing can attribute might still
+#      reach any spec, so it is never narrowed away.
+#   4a. DERIVED attribution (card t_902bd1f7) — a new page, and a screenshot under
+#      `web/public/`, used to match no row at all, so a docs diff ran BOTH families
+#      in full (measured on PR #1701: 2359s of browser work, e2e-core's only red on
+#      a page no spec visits). A path the map does not claim is instead derived
+#      from the tree: a `web/public/` asset -> the page(s) whose source names its
+#      URL -> the route(s) they serve; any other `web/src/` module -> the route(s)
+#      of the page(s) that import it; a `web/scripts/` file -> inert when no npm
+#      script in the build/start chain runs it. Only the specs whose own text
+#      names that route run, and NONE means ZERO (the gate prints NOT RUN). It
+#      widens back to the whole family when the route is named by code serving a
+#      DIFFERENT route, when an e2e helper names it, when the route cannot be
+#      spelled statically (`[param]`, a route handler, the root route), or when
+#      the tree cannot be read — the fail-closed valve stays ON; what is switched
+#      off is only the assumption that an unattributable path is unknowable.
 #   5. A feature spec with NO row here selects the WHOLE family (the family's
 #      coverage is not knowable, so it is not narrowed).
 #   6. `web/playwright.config.ts`, `web/playwright.menufixture.config.ts`, this
@@ -136,6 +150,14 @@ docs-passkeys-anchor.spec.ts	web/src/app/docs/**
 # Markdown.ts is deliberately NOT claimed — the chat and feedback surfaces render through it
 # too, so a change there stays unclaimed and keeps selecting the whole family.
 docs-guide-fold.spec.ts	web/src/app/docs/guides/**	web/src/components/GuideArticle.tsx	web/src/lib/guides.gen.ts	docs/guides/**
+
+# The surau guide's phone-legibility spec (card t_e1ea03a2). It reads /panduan/surau, whose
+# figures come from the guide manifest (guidesPrivate.gen.ts) and whose inline crops are produced
+# by web/scripts/guides.mjs from docs/guides/surau-donation/crops.json, so a change to any of those
+# can move the numbers it asserts. web/src/components/Markdown.ts is NOT claimed here — the chat
+# and feedback surfaces render through it too, so a change there stays unclaimed and keeps
+# selecting the whole family (the same rule as docs-guide-fold above).
+panduan-surau-shot-scale.spec.ts	web/src/app/panduan/**	web/src/lib/panduanSurauPage.ts	web/src/lib/guidesPrivate.gen.ts	web/scripts/guides.mjs	docs/guides/surau-donation/**
 
 # ---- NOT MAPPED HERE, ON PURPOSE: menu-checkout-option-group.spec.ts ----------
 # Its runner is the `menufixture` gate (scripts/menu-fixture-e2e.sh, which starts the

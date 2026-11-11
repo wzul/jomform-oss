@@ -25,12 +25,16 @@ import (
 type fakeOAuthStore struct {
 	mu      sync.Mutex
 	clients map[string]*dbstore.OAuthClient
-	codes   map[string]*dbstore.OAuthAuthCode // code_hash → code
-	tokens  []*dbstore.OAuthToken             // ordered; latest at end
+	codes   map[string]*dbstore.OAuthAuthCode   // code_hash → code
+	tokens  []*dbstore.OAuthToken               // ordered; latest at end
+	devices map[string]*dbstore.OAuthDeviceCode // device_hash → authorisation
 }
 
 func newFakeOAuthStore() *fakeOAuthStore {
-	return &fakeOAuthStore{clients: map[string]*dbstore.OAuthClient{}, codes: map[string]*dbstore.OAuthAuthCode{}}
+	return &fakeOAuthStore{
+		clients: map[string]*dbstore.OAuthClient{}, codes: map[string]*dbstore.OAuthAuthCode{},
+		devices: map[string]*dbstore.OAuthDeviceCode{},
+	}
 }
 
 func (f *fakeOAuthStore) ClientByID(_ context.Context, clientID string) (*dbstore.OAuthClient, error) {
@@ -137,13 +141,152 @@ func (f *fakeOAuthStore) RevokeByRefreshHash(_ context.Context, refreshHash stri
 }
 
 // fakeOAuthUsers satisfies oauthUserStore.
-type fakeOAuthUsers struct{ byID map[string]*dbstore.User }
+type fakeOAuthUsers struct {
+	byID    map[string]*dbstore.User
+	byEmail map[string]*dbstore.User
+}
 
 func (f *fakeOAuthUsers) ByID(_ context.Context, id string) (*dbstore.User, error) {
 	if u, ok := f.byID[id]; ok {
 		return u, nil
 	}
 	return nil, errors.New("not found")
+}
+
+// ByEmail implements the device flow's login_hint lookup. An address not in the
+// map is simply unknown — exactly what production answers.
+func (f *fakeOAuthUsers) ByEmail(_ context.Context, email string) (*dbstore.User, error) {
+	if u, ok := f.byEmail[strings.ToLower(strings.TrimSpace(email))]; ok {
+		return u, nil
+	}
+	return nil, errors.New("not found")
+}
+
+// ─── RFC 8628 device authorisation (in-memory mirror of the SQL store) ──────
+//
+// The fake reproduces the STATES the handler has to map onto the RFC's error
+// codes — pending / slow_down / denied / expired / consumed — because those
+// mappings are what the handler tests assert. The SQL semantics themselves
+// (row locks, single-use UPDATE, the persisted +5s penalty) are exercised
+// against a real Postgres in dbstore/oauth_device_test.go.
+
+func (f *fakeOAuthStore) CreateDeviceCode(_ context.Context, d *dbstore.OAuthDeviceCode) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *d
+	f.devices[d.DeviceHash] = &cp
+	return nil
+}
+
+func (f *fakeOAuthStore) DeviceCodeByUserCode(_ context.Context, userCodeHash string) (*dbstore.OAuthDeviceCode, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.devices {
+		if d.UserCodeHash == userCodeHash {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, dbstore.ErrDeviceCodeInvalid
+}
+
+func (f *fakeOAuthStore) ApproveDeviceCode(_ context.Context, userCodeHash, userID, accountID string, scope []string) (*dbstore.OAuthDeviceCode, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.devices {
+		if d.UserCodeHash != userCodeHash {
+			continue
+		}
+		now := time.Now().UTC()
+		switch {
+		case d.ConsumedAt != nil, d.ApprovedAt != nil:
+			return nil, dbstore.ErrDeviceCodeInvalid
+		case d.DeniedAt != nil:
+			return nil, dbstore.ErrDeviceDenied
+		case !now.Before(d.ExpiresAt):
+			return nil, dbstore.ErrDeviceExpired
+		case d.UserID != "" && d.UserID != userID:
+			return nil, dbstore.ErrDeviceCodeInvalid
+		}
+		d.UserID, d.AccountID, d.Scope = userID, accountID, scope
+		d.ApprovedAt = &now
+		cp := *d
+		return &cp, nil
+	}
+	return nil, dbstore.ErrDeviceCodeInvalid
+}
+
+func (f *fakeOAuthStore) DenyDeviceCode(_ context.Context, userCodeHash, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.devices {
+		if d.UserCodeHash != userCodeHash || d.ConsumedAt != nil || d.ApprovedAt != nil || d.DeniedAt != nil {
+			continue
+		}
+		if d.UserID != "" && d.UserID != userID {
+			continue
+		}
+		now := time.Now().UTC()
+		d.DeniedAt = &now
+		return nil
+	}
+	return dbstore.ErrDeviceCodeInvalid
+}
+
+func (f *fakeOAuthStore) PollDeviceCode(_ context.Context, deviceHash, clientID string) (*dbstore.OAuthDeviceCode, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.devices[deviceHash]
+	if !ok {
+		return nil, dbstore.ErrDeviceCodeInvalid
+	}
+	if d.ConsumedAt != nil || (clientID != "" && d.ClientID != clientID) {
+		return nil, dbstore.ErrDeviceCodeInvalid
+	}
+	if d.DeniedAt != nil {
+		return nil, dbstore.ErrDeviceDenied
+	}
+	now := time.Now().UTC()
+	if !now.Before(d.ExpiresAt) {
+		return nil, dbstore.ErrDeviceExpired
+	}
+	if d.LastPolledAt != nil && now.Sub(*d.LastPolledAt) < time.Duration(d.IntervalS)*time.Second {
+		d.IntervalS += 5
+		d.LastPolledAt = &now
+		return nil, dbstore.ErrDeviceSlowDown
+	}
+	if d.ApprovedAt == nil {
+		d.LastPolledAt = &now
+		return nil, dbstore.ErrDevicePending
+	}
+	d.ConsumedAt = &now
+	d.LastPolledAt = &now
+	cp := *d
+	return &cp, nil
+}
+
+func (f *fakeOAuthStore) CountDeviceCodesByIP(_ context.Context, ip string, since time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, d := range f.devices {
+		if d.IP == ip && !d.CreatedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeOAuthStore) CountDeviceCodesByUser(_ context.Context, userID string, since time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, d := range f.devices {
+		if d.UserID == userID && userID != "" && !d.CreatedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // fakeOAuthSessions satisfies oauthSessionStore.

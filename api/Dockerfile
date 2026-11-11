@@ -2,20 +2,25 @@
 # advisories (net/http HPACK, html/template, crypto/tls, mime/multipart, os —
 # all "Fixed in go1.27.2") AND the crypto/x509 change in go1.27.3 that refuses
 # certificate chains through the eight eMudhra intermediate CA keys revoked for
-# cACompromise (CVE-2026-111943 / go.dev/issue/82345). This line is the toolchain
+# cACompromise (CVE-2026-111943 / go.dev/issue/82345). 1.27.4 adds the fix for
+# GO-2026-6859 / CVE-2026-97054 (published 2026-11-11): HTTP/1 MaxBytesReader
+# sets `Connection: close` unsynchronised, so a handler that reads the body
+# while writing a response header can panic — "Fixed in net/http@go1.27.4",
+# affecting go1.27.0-0 through go1.27.3 across 87 symbols of the net/http server
+# surface, which is the whole of this api. This line is the toolchain
 # the SHIPPED binary is built with, so it decides which stdlib — and which
 # intermediates are trusted — prod runs with, on every outbound TLS call: CHIP,
 # SES, S3/MinIO, Cloudflare, MCP OAuth providers and merchant-configured webhook
 # URLs (any host in the world).
-# api/go.mod carries `toolchain go1.27.3` for the host gates, but this image runs
+# api/go.mod carries `toolchain go1.27.4` for the host gates, but this image runs
 # GOTOOLCHAIN=local (its own /usr/local/go/go.env), so a `toolchain` line is
 # IGNORED here and only the base image decides which stdlib the shipped binary is
 # built against.
 # api/internal/version/go_toolchain_pin_test.go fails the build if this tag — or
-# go.mod's `toolchain` line — drops below go1.27.3. It exists because govulncheck
+# go.mod's `toolchain` line — drops below go1.27.4. It exists because govulncheck
 # reported "No vulnerabilities found" while 1.27.2 was pinned (the advisory DB
 # had not caught up), so the govuln gate would NOT have forced this fix.
-FROM golang:1.27.3-alpine AS build
+FROM golang:1.27.4-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

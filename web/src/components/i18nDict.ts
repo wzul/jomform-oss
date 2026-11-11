@@ -246,6 +246,15 @@ export const DICT = {
   "dash.sold": { en: "sold", ms: "terjual", zh: "已售", ta: "விற்றது", ar: "مبيع" },
   "dash.paid": { en: "paid", ms: "dibayar", zh: "已付款", ta: "செலுத்தியது", ar: "مدفوع" },
   "dash.gross": { en: "gross", ms: "kasar", zh: "总额", ta: "மொத்தம்", ar: "إجمالي" },
+  // Card t_8064a965: the dashboard's revenue figures headline what the merchant
+  // KEEPS, so the collected amount and the buyer-borne fee behind it are named
+  // beside the figure. `dash.fee` uses the receipt's own word for the charge
+  // (payments.FeeLine / httpapi formLang FeeLine) so one charge is never called
+  // two things; the five strings are pinned against that map in
+  // src/lib/dashboardFee.test.ts.
+  "dash.collected": { en: "Buyers paid", ms: "Pembeli bayar", zh: "买家支付", ta: "வாங்குபவர் செலுத்தியது", ar: "دفع المشترون" },
+  "dash.fee": { en: "Processing fee", ms: "Caj pemprosesan", zh: "手续费", ta: "செயலாக்கக் கட்டணம்", ar: "رسوم المعالجة" },
+  "dash.revenueDocs": { en: "What this revenue figure counts", ms: "Apakah yang dikira oleh hasil ini", zh: "此收入数字包含什么", ta: "இந்த வருவாய் எதைக் கணக்கிடுகிறது", ar: "ما الذي تحسبه إيراداتك" },
   "dash.noProdSales": { en: "No product sales yet.", ms: "Belum ada jualan produk.", zh: "暂无商品销售。", ta: "இன்னும் பொருள் விற்பனை இல்லை.", ar: "لا مبيعات منتجات بعد." },
   "dash.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
   // issue #106: per-sale receipt email status (Sent/Delivered/Opened/Clicked)
@@ -1353,6 +1362,34 @@ export const DICT = {
   "prof.mcpEmptyTitle": { en: "No agents connected yet", ms: "Belum ada agent bersambung", zh: "尚无代理连接", ta: "இன்னும் முகவர்கள் இணைக்கப்படவில்லை", ar: "لا يوجد وكلاء متصلون بعد" },
   "prof.mcpEmptyHelp": { en: "Point any MCP client at the server URL. It registers itself automatically.", ms: "Tunjuk mana-mana klien MCP ke URL pelayan — ia daftar sendiri secara automatik.", zh: "将任何 MCP 客户端指向服务器 URL — 它会自动注册。", ta: "எந்த MCP க்ளையன்டையும் சர்வர் URL-ஐ சுட்டிக்காட்டுங்கள் — அது தானே பதிவுசெய்யும்.", ar: "وجّه أي عميل MCP إلى عنوان URL للخادم — سيسجل نفسه تلقائياً." },
   "prof.mcpConnect": { en: "Connect an agent", ms: "Sambung agent", zh: "连接代理", ta: "முகவரை இணைக்கவும்", ar: "ربط وكيل" },
+  // Card t_9a6cc85f: "Connected apps" (one row per live OAuth credential, with
+  // revoke + the scope ladder) and the RFC 8628 consent card the device-flow
+  // email links to.
+  "prof.appsTitle": { en: "Connected apps", ms: "Apl bersambung", zh: "已连接的应用", ta: "இணைக்கப்பட்ட செயலிகள்", ar: "التطبيقات المتصلة" },
+  "prof.appsDocs": { en: "What these connections can do", ms: "Apa yang boleh dilakukan sambungan ini", zh: "这些连接能做什么", ta: "இந்த இணைப்புகள் என்ன செய்ய முடியும்", ar: "ما يمكن لهذه الاتصالات فعله" },
+  "prof.appsHelp": { en: "Every credential an AI agent holds for your account. Revoking one ends its access immediately, including the token it would use to refresh itself.", ms: "Setiap kelayakan yang dipegang ejen AI untuk akaun anda. Membatalkan satu menamatkan aksesnya serta-merta, termasuk token yang akan digunakannya untuk memperbaharui diri.", zh: "AI 代理为您的账户持有的每一份凭据。撤销后其访问立即终止，包括它用来刷新的令牌。", ta: "உங்கள் கணக்கிற்காக AI முகவர் வைத்திருக்கும் ஒவ்வொரு அனுமதிச் சீட்டும். ஒன்றை ரத்துசெய்தால் அதன் அணுகல் உடனடியாக முடிவடையும் — தன்னைப் புதுப்பிக்கப் பயன்படுத்தும் டோக்கன் உட்பட.", ar: "كل تصريح يحمله وكيل ذكاء اصطناعي لحسابك. إلغاء أحدها ينهي وصوله فوراً، بما في ذلك الرمز الذي يستخدمه لتجديد نفسه." },
+  "prof.appsScope": { en: "Access", ms: "Akses", zh: "权限", ta: "அணுகல்", ar: "الوصول" },
+  "prof.appsScopeRead": { en: "Read only", ms: "Baca sahaja", zh: "只读", ta: "படிக்க மட்டும்", ar: "للقراءة فقط" },
+  "prof.appsScopeReadWrite": { en: "Read and write", ms: "Baca dan tulis", zh: "读写", ta: "படிக்க மற்றும் எழுத", ar: "قراءة وكتابة" },
+  "prof.appsCreated": { en: "Created", ms: "Dicipta", zh: "创建于", ta: "உருவாக்கப்பட்டது", ar: "أُنشئ" },
+  "prof.appsLastUsed": { en: "Last used", ms: "Kali terakhir digunakan", zh: "上次使用", ta: "கடைசியாகப் பயன்படுத்தப்பட்டது", ar: "آخر استخدام" },
+  "prof.appsNever": { en: "never", ms: "belum", zh: "从未", ta: "இல்லை", ar: "أبداً" },
+  "prof.appsRevoke": { en: "Revoke", ms: "Batalkan", zh: "撤销", ta: "ரத்துசெய்", ar: "إلغاء" },
+  "prof.appsRevokeConfirm": { en: "Revoke this connection? The agent loses access immediately.", ms: "Batalkan sambungan ini? Agent kehilangan akses serta-merta.", zh: "撤销此连接？代理将立即失去访问权限。", ta: "இந்த இணைப்பை ரத்துசெய்யவா? முகவர் உடனடியாக அணுகலை இழக்கும்.", ar: "إلغاء هذا الاتصال؟ سيفقد الوكيل الوصول فوراً." },
+  "prof.appsUpgradeConfirm": { en: "Give this agent write access? It will be able to create, change and delete your forms, products and sales. The current credential stops working.", ms: "Beri ejen ini akses tulis? Ia boleh mencipta, mengubah dan memadam borang, produk dan jualan anda — dan kelayakan semasa tidak lagi berfungsi.", zh: "授予此代理写入权限？它将可以创建、更改和删除您的表单、产品和销售 — 当前凭据将失效。", ta: "இந்த முகவருக்கு எழுதும் அணுகலை வழங்கவா? உங்கள் படிவங்கள், தயாரிப்புகள் மற்றும் விற்பனைகளை உருவாக்க, மாற்ற, நீக்க முடியும் — தற்போதைய அனுமதிச் சீட்டு செயலிழக்கும்.", ar: "منح هذا الوكيل صلاحية الكتابة؟ سيتمكن من إنشاء نماذجك ومنتجاتك ومبيعاتك وتغييرها وحذفها — وسيتوقف التصريح الحالي عن العمل." },
+  "prof.appsRotatedTitle": { en: "New credential", ms: "Kelayakan baharu", zh: "新凭据", ta: "புதிய அனுமதிச் சீட்டு", ar: "تصريح جديد" },
+  "prof.appsRotatedHelp": { en: "The previous credential no longer works. Copy these into your AI harness now: they are shown once.", ms: "Kelayakan terdahulu tidak lagi berfungsi. Salin ini ke dalam harness AI anda sekarang — ia dipaparkan sekali sahaja.", zh: "之前的凭据已失效。现在将这些复制到您的 AI 工具中 — 只显示一次。", ta: "முந்தைய அனுமதிச் சீட்டு செயலிழந்தது. இவற்றை இப்போது உங்கள் AI கருவியில் நகலெடுக்கவும் — ஒருமுறை மட்டுமே காட்டப்படும்.", ar: "التصريح السابق لم يعد يعمل. انسخ هذه الآن إلى أداتك — تُعرض مرة واحدة فقط." },
+  "prof.appsEmpty": { en: "No agent has connected yet.", ms: "Belum ada agent bersambung.", zh: "尚无代理连接。", ta: "இன்னும் எந்த முகவரும் இணைக்கப்படவில்லை.", ar: "لم يتصل أي وكيل بعد." },
+  "prof.deviceTitle": { en: "Approve an AI agent connection", ms: "Luluskan sambungan ejen AI", zh: "批准 AI 代理连接", ta: "AI முகவர் இணைப்பை அனுமதிக்கவும்", ar: "الموافقة على اتصال وكيل ذكاء اصطناعي" },
+  "prof.deviceHelp": { en: "A harness is waiting for this code. Approving gives it access to your account. Deny it unless you started the request.", ms: "Sesebuah harness sedang menunggu kod ini. Meluluskan memberi akses ke akaun anda — tolak jika anda tidak memulakannya.", zh: "有一个工具正在等待此代码。批准将授予其访问您账户的权限 — 如果不是您发起的，请拒绝。", ta: "ஒரு கருவி இந்தக் குறியீட்டிற்காகக் காத்திருக்கிறது. அனுமதித்தால் உங்கள் கணக்கிற்கான அணுகல் வழங்கப்படும் — நீங்கள் தொடங்கவில்லை என்றால் நிராகரிக்கவும்.", ar: "أداة تنتظر هذا الرمز. الموافقة تمنحها الوصول إلى حسابك — ارفض إن لم تكن أنت من بدأ الطلب." },
+  "prof.deviceClient": { en: "Client", ms: "Klien", zh: "客户端", ta: "கிளையன்ட்", ar: "العميل" },
+  "prof.deviceApprove": { en: "Approve", ms: "Luluskan", zh: "批准", ta: "அனுமதி", ar: "موافقة" },
+  "prof.deviceDeny": { en: "Deny", ms: "Tolak", zh: "拒绝", ta: "நிராகரி", ar: "رفض" },
+  "prof.deviceApproved": { en: "Approved. Return to your AI harness: it picks up the connection on its next check.", ms: "Diluluskan. Kembali ke harness AI anda — ia akan mengambil sambungan pada pemeriksaan seterusnya.", zh: "已批准。回到您的 AI 工具 — 它会在下次检查时取得连接。", ta: "அனுமதிக்கப்பட்டது. உங்கள் AI கருவிக்குத் திரும்புங்கள் — அடுத்த சரிபார்ப்பில் இணைப்பைப் பெறும்.", ar: "تمت الموافقة. عُد إلى أداتك — ستلتقط الاتصال في فحصها التالي." },
+  "prof.deviceDenied": { en: "Denied. The agent cannot connect.", ms: "Ditolak. Agent tidak boleh bersambung.", zh: "已拒绝。代理无法连接。", ta: "நிராகரிக்கப்பட்டது. முகவர் இணைக்க முடியாது.", ar: "تم الرفض. لا يمكن للوكيل الاتصال." },
+  "prof.deviceEnterCode": { en: "Code from the email", ms: "Kod dari emel", zh: "邮件中的代码", ta: "மின்னஞ்சலில் உள்ள குறியீடு", ar: "الرمز من البريد" },
+  "prof.deviceCheck": { en: "Check code", ms: "Semak kod", zh: "检查代码", ta: "குறியீட்டைச் சரிபார்", ar: "تحقق من الرمز" },
+  "prof.deviceNotFound": { en: "This code is not valid or has expired.", ms: "Kod ini tidak sah atau sudah tamat tempoh.", zh: "此代码无效或已过期。", ta: "இந்தக் குறியீடு செல்லாதது அல்லது காலாவதியானது.", ar: "هذا الرمز غير صالح أو منتهي." },
   "prof.connectedTitle": { en: "Connected accounts", ms: "Akaun bersambung", zh: "已连接的账户", ta: "இணைக்கப்பட்ட கணக்குகள்", ar: "الحسابات المتصلة" },
   "prof.connectedHelp": { en: "Link a Google account to sign in with one click. More providers (Microsoft/Azure, GitHub, Cloudflare) can be enabled later through the same connector system. These connections belong to you, not to any single workspace.", ms: "Paut akaun Google untuk log masuk satu klik. Pembekal lain (Microsoft/Azure, GitHub, Cloudflare) boleh diaktifkan kemudian — sistem penyambung sama. Sambungan ini milik anda, bukan mana-mana ruang kerja.", zh: "关联 Google 账户即可一键登录。之后可启用更多提供商（Microsoft/Azure、GitHub、Cloudflare）— 同一连接器系统。这些连接属于您本人，而非任何单个工作区。", ta: "Google கணக்கை இணைத்து, ஒரே கிளிக்கில் உள்நுழையவும். பிற வழங்குநர்கள் (Microsoft/Azure, GitHub, Cloudflare) பின்னர் இயக்கக்கூடியவை — அதே இணைப்பான் அமைப்பு. இந்த இணைப்புகள் எந்த ஒற்றை பணியிடத்தின் சொந்தம் அல்ல, உங்களுடையவை.", ar: "اربط حساب Google لتسجيل الدخول بنقرة واحدة. يمكن تفعيل مزودين آخرين (Microsoft/Azure وGitHub وCloudflare) لاحقاً — بنفس نظام الربط. هذه الاتصالات ملك لك، وليست لأي مساحة عمل معينة." },
   "prof.linked": { en: "linked", ms: "dipaut", zh: "已关联", ta: "இணைக்கப்பட்டது", ar: "مرتبط" },
@@ -2408,6 +2445,13 @@ export const DICT = {
   "act.event.form.status_published": { en: "Form is now published", ms: "Borang kini diterbitkan", zh: "表单现已发布", ta: "படிவம் இப்போது வெளியிடப்பட்டுள்ளது", ar: "النموذج الآن منشور" },
   "act.event.form.status_unlisted": { en: "Form is now unlisted", ms: "Borang kini tidak tersenarai", zh: "表单现为不公开列出", ta: "படிவம் இப்போது பட்டியலில் இல்லை", ar: "النموذج الآن غير مُدرج" },
   "act.event.form.status_private": { en: "Form is now private", ms: "Borang kini peribadi", zh: "表单现为私有", ta: "படிவம் இப்போது தனியுரிமை", ar: "النموذج الآن خاص" },
+  // Card t_9a6cc85f: the OAuth scope ladder + Connected apps. Activity rows for
+  // a credential change say what moved, because "who widened this" is the
+  // question an audit trail exists to answer.
+  "act.event.oauth.device_approved": { en: "You approved an AI agent connection from an email code", ms: "Anda meluluskan sambungan ejen AI melalui kod emel", zh: "您通过邮件代码批准了 AI 代理连接", ta: "மின்னஞ்சல் குறியீட்டின் மூலம் AI முகவர் இணைப்பை அனுமதித்தீர்கள்", ar: "وافقت على اتصال وكيل ذكاء اصطناعي عبر رمز بريدي" },
+  "act.event.oauth.scope_changed": { en: "You changed an AI agent's access", ms: "Anda mengubah akses ejen AI", zh: "您更改了 AI 代理的权限", ta: "AI முகவரின் அணுகலை மாற்றினீர்கள்", ar: "غيّرت وصول وكيل ذكاء اصطناعي" },
+  "act.event.oauth.scope_upgraded": { en: "You gave an AI agent write access", ms: "Anda memberi ejen AI akses tulis", zh: "您授予了 AI 代理写入权限", ta: "AI முகவருக்கு எழுதும் அணுகலை வழங்கினீர்கள்", ar: "منحت وكيل ذكاء اصطناعي صلاحية الكتابة" },
+  "act.event.oauth.token_revoked": { en: "You revoked an AI agent connection", ms: "Anda membatalkan sambungan ejen AI", zh: "您撤销了一个 AI 代理连接", ta: "AI முகவர் இணைப்பை ரத்துசெய்தீர்கள்", ar: "ألغيت اتصال وكيل ذكاء اصطناعي" },
   "act.event.mcp.tool_call": { en: "AI agent used a tool", ms: "Ejen AI menggunakan alat", zh: "AI 助手调用了工具", ta: "AI முகவர் ஒரு கருவியைப் பயன்படுத்தியது", ar: "استخدم وكيل الذكاء أداة" },
   "act.event.mcp.agent_disconnected": { en: "AI agent disconnected", ms: "Ejen AI diputuskan", zh: "AI 助手已断开连接", ta: "AI முகவர் துண்டிக்கப்பட்டது", ar: "تم فصل وكيل الذكاء" },
   "act.event.media.deleted": { en: "Media deleted", ms: "Media dipadam", zh: "已删除媒体", ta: "மீடியா நீக்கப்பட்டது", ar: "تم حذف وسائط" },

@@ -96,6 +96,34 @@ func ScopesSupported() []string { return []string{ScopeRead, ScopeReadWrite} }
 // write capability from all of them. A client that wants read asks for read.
 func DefaultScopes() []string { return []string{ScopeReadWrite} }
 
+// DeviceGrantType is the RFC 8628 §3.4 grant type for the device
+// authorization exchange. It is a full URN (the RFC's spelling), which is what
+// the AS metadata must advertise and what a client sends as `grant_type`.
+const DeviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
+
+// DeviceDefaultScopes is the grant for a DEVICE authorisation that omits
+// `scope`. It is read, deliberately, and different from DefaultScopes() above.
+//
+// WHY THEY DIFFER. A browser authorize request arrives with a human sitting in
+// front of the consent screen; the historical default there is readwrite
+// because every client connecting at the time omitted `scope` and read would
+// have silently stripped write capability from them. A device request arrives
+// from a HARNESS with nobody watching, and the consent screen is an email that
+// a person reads — possibly on a phone, possibly at speed. The scope ladder for
+// that path starts at read: a write-capable agent credential has to be asked
+// for explicitly and has to be named in the email in plain words.
+func DeviceDefaultScopes() []string { return []string{ScopeRead} }
+
+// DeviceScopes resolves a device authorisation's requested `scope`.
+//
+// Same membership rule as GrantedScopes (exact, case-sensitive, no prefix
+// matching, unadvertised value → ok=false), but the absent case resolves to
+// read rather than readwrite. One resolver, two defaults — the difference is
+// the whole scope ladder.
+func DeviceScopes(requested string) ([]string, bool) {
+	return grantedScopesFrom(requested, DeviceDefaultScopes())
+}
+
 // GrantedScopes resolves a requested `scope` parameter (RFC 6749 §3.3: a
 // space-delimited, case-sensitive list) into the exact set to grant.
 //
@@ -109,9 +137,14 @@ func DefaultScopes() []string { return []string{ScopeReadWrite} }
 //     readwrite and never silently narrow it to read, because either would
 //     hand the client a credential it did not ask for.
 func GrantedScopes(requested string) ([]string, bool) {
+	return grantedScopesFrom(requested, DefaultScopes())
+}
+
+// grantedScopesFrom is the ONE resolver both entry points share.
+func grantedScopesFrom(requested string, def []string) ([]string, bool) {
 	want := strings.Fields(requested)
 	if len(want) == 0 {
-		return DefaultScopes(), true
+		return def, true
 	}
 	requestedSet := make(map[string]bool, len(want))
 	for _, w := range want {
