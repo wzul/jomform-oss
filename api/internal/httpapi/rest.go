@@ -125,6 +125,12 @@ type RESTHandlers struct {
 	// super-admin screen added in issue #601.
 	Suppressions *dbstore.SuppressionStore
 
+	// Dormancy is the read-only phase-1 dormancy report store (card t_94e5cca3).
+	// Nil → GET /v1/admin/dormancy reports the store as unavailable. It owns no
+	// table: the report is computed from accounts/events/forms/sales/submissions/
+	// subscriptions in one statement.
+	Dormancy *dbstore.DormancyStore
+
 	// Issue #171: response-only form submissions (list + count endpoints).
 	Submissions *dbstore.SubmissionStore
 
@@ -469,6 +475,9 @@ func (h *RESTHandlers) RegisterRoutes(mux *http.ServeMux) {
 	// admin_dead_letter_events / admin_requeue_dead_letter_event MCP tools.
 	mux.Handle("GET /v1/admin/dead-letters", h.authed(h.handleAdminDeadLetters))
 	mux.Handle("POST /v1/admin/dead-letters/requeue", h.authed(h.handleAdminRequeueDeadLetter))
+	// Card t_94e5cca3: the phase-1 dormancy report (read-only; ?format=csv for the
+	// operator export). Mirrors the admin_dormancy_report MCP tool.
+	mux.Handle("GET /v1/admin/dormancy", h.authed(h.handleAdminDormancy))
 	// Issue #601: super-admin suppression list — list/search, manual add, and
 	// remove so mail to an address resumes. Mirrors the admin_list_suppressions
 	// / admin_add_suppression / admin_remove_suppression MCP tools.

@@ -62,6 +62,8 @@ const NAV_GROUPS: Group[] = [
       // sidebar still describes the same structure as the /docs index — docsIndex.test.ts
       // fails the build when a page the index links is absent from this list.
       { href: "/docs/activity", label: "Activity log" },
+      // Card t_94e5cca3: the dormancy report + retention policy.
+      { href: "/docs/dormancy", label: "Dormant workspaces & retention" },
     ],
   },
   {

@@ -104,6 +104,9 @@ const (
 	WorkspaceInvite Kind = "workspace_invite"
 	FeedbackNew     Kind = "feedback_new_thread"
 	FeedbackReply   Kind = "feedback_reply"
+	// DormancyNudge is the phase-1 "your form is still live" reminder (card
+	// t_94e5cca3). It is platform-user mail.
+	DormancyNudge Kind = "dormancy_nudge"
 
 	// Buyer-facing mail (resolved from the form/workspace axis). The merchant's
 	// copy of a receipt is NOT a separate kind: it is the receipt template with

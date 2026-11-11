@@ -758,6 +758,12 @@ func (s *Server) registerTools() {
 		Name:        "admin_system_health",
 		Description: "System health: uptime, number of recent MCP errors (24h), email queue depth. Super-admin only; read-only; audited.",
 	}, s.adminSystemHealth)
+	// Card t_94e5cca3: the phase-1 dormancy report (read-only). Mirrors the /admin
+	// dormancy table and GET /v1/admin/dormancy.
+	addTool(s, &mcp.Tool{
+		Name:        "admin_dormancy_report",
+		Description: "Per-account dormancy report (phase 1 of the dormancy policy): account id, workspace slug, owner email, created, last activity, days dormant, dormancy bucket (active|30|60|90|365), forms published, submissions in the last 90 days, sales ever, and - for an account that may NOT be treated as dormant - the exclusion reasons (system_account, has_sales, has_subscription, recent_submissions, workspace_in_trash, no_owner_email). Rows are most-dormant-first, capped by limit (1-500, default 200). READ-ONLY: nothing is deleted, unpublished or flagged; phases 2 (unpublish) and 3 (delete) are separate, unimplemented decisions. The same report is rendered on the /admin page and exported as CSV (GET /v1/admin/dormancy?format=csv). Super-admin only; audited.",
+	}, s.adminDormancyReport)
 
 	// ── Super-admin: suppression list (issue #601) ──────────────────────
 	// The pre-send suppression list (issue #56) had no surface at all: SES

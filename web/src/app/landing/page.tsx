@@ -12,10 +12,18 @@
 //
 //   Now: a two-column hero whose right column IS the product (`HeroOrderForm`,
 //   a real order-form card on a dark stage), a three-step lane under it, the
-//   seven use cases as cards in a three-column grid — each with its title, body,
-//   tick bullets and ONE plain line pointing at its screenshot guide — the MCP band
-//   as a white card with a short terminal transcript, then "Free. Not a trial."
-//   and the footer.
+//   seven use cases as cards in a three-column grid — each with a short title, ONE
+//   lead sentence, four tick bullets and one action row holding its filled CTA and a
+//   compact "Guide" link — the MCP band as a white card with a short terminal
+//   transcript, then "Free. Not a trial." and the footer.
+//
+// ONE ACTION PER CARD (card t_516bab9d). Wan, on three phone screenshots: "bahagian ni
+// masih nampak wordy". The cards were 56–138 words and 413–708px tall; the three he
+// flagged had 44–72-word lead paragraphs and each card carried TWO links (a whole
+// "Read the full … guide with screenshots →" sentence plus the CTA). The guide sentence
+// is now gone and the copy is on a measured budget — <= 55 words and <= 460px per card
+// at 390px, within +/-10 words of each other — enforced by
+// `e2e/landing-usecases-mobile.spec.ts` in all five locales.
 //
 // NO "HOW TO SET IT UP" LISTS ON THIS PAGE (card t_b4e5881d, reversing t_41666fb1)
 //   Each showcase used to carry a nested setup box: a heading, a four/five-item
@@ -38,7 +46,7 @@
 //   `src/lib/landingRaisedText.test.ts` pins the nav's `flex-wrap`, the Log in
 //   anchor's `whitespace-nowrap` and the footer row's `flex-wrap` + `gap-y-1`.
 //   `src/lib/landingUseCases.test.ts` requires, per showcase, its title/body/
-//   bullets/cta rendered once, ONE guide line inside the card's own slice of this
+//   bullets/cta rendered once, ONE guide link inside the card's own slice of this
 //   file, and ZERO setup lists — and it checks each linked guide still carries
 //   numbered steps, so removing the steps here cannot mean losing them from the
 //   product.
@@ -383,7 +391,6 @@ export default function Landing() {
               t("land.wedding4"),
             ]}
             cta={{ href: "/builder", label: t("land.weddingcta") }}
-            secondary={{ href: "/mcp", label: t("land.weddingmcp") }}
             guide={{ href: "/docs/guides/wedding-rsvp", label: t("land.guidewedding") }}
           />
 
@@ -460,7 +467,6 @@ export default function Landing() {
             body={t("land.affbody")}
             bullets={[t("land.aff1"), t("land.aff2"), t("land.aff3"), t("land.aff4")]}
             cta={{ href: "/settings", label: t("land.affcta") }}
-            secondary={{ href: "/mcp", label: t("land.affmcp") }}
             guide={{ href: "/docs/guides/affiliate-programme", label: t("land.guideaff") }}
           />
 
@@ -514,7 +520,6 @@ export default function Landing() {
               t("land.donation4"),
             ]}
             cta={{ href: "/builder", label: t("land.donationcta") }}
-            secondary={{ href: "/mcp", label: t("land.donationmcp") }}
             guide={{ href: "/docs/guides/donations", label: t("land.guidedonation") }}
           />
         </div>

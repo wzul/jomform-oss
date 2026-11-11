@@ -236,6 +236,18 @@ Parity checklist (dashboard → MCP):
   (dead-letter visibility + requeue for parked inbound callbacks — issue #574;
   also exposed to the admin dashboard as `GET /v1/admin/dead-letters` +
   `POST /v1/admin/dead-letters/requeue` — issue #579)
+- Dormancy report (card t_94e5cca3; gated on #385 super-admin) →
+  `admin_dormancy_report`.
+  Phase 1 of the approved three-phase dormancy policy: a READ-ONLY per-account
+  report (workspace slug, owner email, created, last activity, days dormant,
+  bucket 30/60/90/365, forms published, submissions in the last 90 days, sales
+  ever) plus one "your form is still live" email to the owners in the ≥60-day
+  buckets, never twice within 90 days. An account with any sale, any
+  subscription, a submission in the last 90 days, or that is the system/admin
+  account is listed as EXCLUDED with its reason rather than as a candidate.
+  It deletes nothing, unpublishes nothing and writes no flag a later job could
+  act on; phases 2 and 3 are separate decisions. The same report is on the /admin
+  page and as CSV at `GET /v1/admin/dormancy?format=csv`.
 - Email suppression list (gated on #385 super-admin) →
   `admin_list_suppressions`, `admin_add_suppression`, `admin_remove_suppression`
   (the addresses JomForm refuses to mail — SES hard bounces and complaints

@@ -267,6 +267,10 @@ var transactionals = []kindAxis{
 	{emailtext.WorkspaceInvite, "profile"},
 	{emailtext.FeedbackNew, "profile"},
 	{emailtext.FeedbackReply, "profile"},
+	// Card t_94e5cca3: the phase-1 dormancy reminder is mail to a platform user
+	// about their own workspace, so it follows users.lang like the rest of the
+	// profile axis.
+	{emailtext.DormancyNudge, "profile"},
 	// Buyer-facing mail: resolved from form.config.lang ?? workspace default.
 	{emailtext.Receipt, "buyer"},
 	{emailtext.NotificationSale, "buyer"},

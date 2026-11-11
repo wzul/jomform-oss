@@ -202,6 +202,86 @@ function fbStatusBadge(status: string) {
   }
 }
 
+// Card t_94e5cca3 — phase 1 of the dormancy policy. `/admin` shows the REPORT the
+// daily job uses to decide who gets the "your form is still live" nudge. It is
+// read-only: there is no delete, no unpublish and no flag on this surface, and the
+// bucket badge for an account that may NOT be treated as dormant says "Excluded"
+// with the machine reason beside it.
+type DormancyRow = {
+  account_id: string;
+  workspace_slug: string;
+  owner_email: string;
+  created_at: string;
+  last_activity: string;
+  dormant_days: number;
+  bucket: string;
+  excluded: boolean;
+  exclusion_reasons?: string[];
+  forms_published: number;
+  submissions_90d: number;
+  sales_ever: number;
+  last_nudge_at?: string;
+  nudge_eligible: boolean;
+  nudge_skip_reason?: string;
+};
+
+type DormancyReport = {
+  generated_at: string;
+  rows: DormancyRow[];
+  counts: Record<string, number>;
+  candidates: number;
+  excluded: number;
+  nudgeable: number;
+  truncated: boolean;
+  limit: number;
+  read_only: boolean;
+  policy: string;
+};
+
+// The bucket badge palette, in one function so the legend and the rows cannot
+// drift. A candidate tier uses the amber family (a warning, not an error); an
+// excluded account is slate, because being excluded is the SAFE state.
+function dormBucketBadge(bucket: string) {
+  switch (bucket) {
+    case "30":
+      return "bg-amber-50 text-amber-700 border-amber-200";
+    case "60":
+      return "bg-amber-100 text-amber-800 border-amber-300";
+    case "90":
+      return "bg-orange-100 text-orange-800 border-orange-300";
+    case "365":
+      return "bg-orange-200 text-orange-900 border-orange-400";
+    case "excluded":
+      return "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-300";
+    default:
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  }
+}
+
+// The bucket's translated label. It is a SWITCH over literals rather than
+// `t(`admin.dormBucket.${bucket}` as Key)` on purpose: the i18n key-coverage guard
+// (src/lib/i18nKeys.test.ts) counts every call site it cannot resolve statically
+// against a fixed ceiling, and a template literal here would spend two of that
+// budget on six keys the compiler already knows. This form keeps all six
+// resolvable, so the guard keeps covering them.
+function dormBucketLabel(bucket: string, t: (k: Key) => string): string {
+  switch (bucket) {
+    case "30":
+      return t("admin.dormBucket.30");
+    case "60":
+      return t("admin.dormBucket.60");
+    case "90":
+      return t("admin.dormBucket.90");
+    case "365":
+      return t("admin.dormBucket.365");
+    case "excluded":
+      return t("admin.dormBucket.excluded");
+    case "active":
+    default:
+      return t("admin.dormBucket.active");
+  }
+}
+
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
     <div className="rounded-xl border border-[var(--jf-border)] bg-white p-4">
@@ -418,6 +498,38 @@ export default function AdminPage() {
       setAdding(false);
     }
   }, [addEmail, addNote, addReason, goToLogin, loadSupp, suppPages, suppQuery, t]);
+
+  // Dormancy report state (card t_94e5cca3). Its own loader + error line, like the
+  // suppression list and the feedback queue: one section failing must not blank
+  // the page.
+  const [dorm, setDorm] = useState<DormancyReport | null>(null);
+  const [dormErr, setDormErr] = useState("");
+
+  const loadDorm = useCallback(async () => {
+    const r = await runLoad(
+      () => fetchJson<DormancyReport>("/api/admin/dormancy?limit=200"),
+      { onUnauth: goToLogin, message: t("admin.dormLoadFail"), errorKey: (b: unknown) => translateApiErr(b, t) },
+    );
+    if (!r.ok) {
+      setDormErr(r.error);
+      return;
+    }
+    // A 200 whose body is not the report is a LOAD FAILURE for this section, not
+    // an empty report (card t_170c8512). `runLoad` hands back whatever the request
+    // parsed, and the section below reads `rows.length` and `rows.map`, so ONE
+    // malformed 200 — an older API behind the web build during a rolling deploy,
+    // a proxy body — threw during render and unmounted the WHOLE /admin page,
+    // feedback queue and suppression list included. The a11y feedback-row spec
+    // caught it on the merged tree (the row it measures was gone, the page showed
+    // Next's "This page couldn't load"). Same guard the /form-settings
+    // notifications load carries: an array is the shape this section reads.
+    if (!Array.isArray(r.data.rows)) {
+      setDormErr(t("admin.dormLoadFail"));
+      return;
+    }
+    setDormErr("");
+    setDorm(r.data);
+  }, [goToLogin, t]);
 
   // In-app feedback triage state. Separate from the other sections for the same
   // reason the suppression list is: a failure here must not blank the overview.
@@ -655,8 +767,9 @@ export default function AdminPage() {
     if (isSuperAdmin) {
       load();
       loadDead();
+      void loadDorm();
     }
-  }, [isSuperAdmin, load, loadDead]);
+  }, [isSuperAdmin, load, loadDead, loadDorm]);
 
   // Issue #601: the suppression list is a server-paginated, server-searched
   // section, so it reloads on its own whenever the debounced query or the page
@@ -1467,6 +1580,173 @@ export default function AdminPage() {
                     {t("common.next")}
                   </button>
                 </div>
+              )}
+            </section>
+
+            {/* Dormancy report (card t_94e5cca3, phase 1 of the dormancy policy).
+                It is the SAME report the daily job uses to pick who gets the
+                reminder, so the table and the email cannot disagree. There is no
+                action on this section on purpose: phase 1 deletes nothing,
+                unpublishes nothing and sets no flag. Below xl each account is a
+                stacked card (a UUID, an email and a slug in seven columns cannot
+                fit the page box — the same measurement that forced the card list
+                on the dead-letters section). */}
+            <section>
+              <h2 className="mb-3 flex flex-wrap items-center gap-2 text-sm font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
+                {t("admin.dormTitle")}
+                {/* AGENTS.md DOCUMENTATION PARITY rule 4: the inline "?" that
+                    deep-links the page explaining the feature. */}
+                <a
+                  href="/docs/dormancy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t("admin.dormDocs")}
+                  aria-label={t("admin.dormDocs")}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                >
+                  ?
+                </a>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-[var(--jf-muted-on-tint)]">
+                  {t("admin.readonly")}
+                </span>
+              </h2>
+              <p className="mb-3 text-sm text-[var(--jf-muted)]">{t("admin.dormHint")}</p>
+
+              {dormErr && (
+                <div role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                  {dormErr}
+                  <button
+                    type="button"
+                    onClick={() => void loadDorm()}
+                    className="ml-2 inline-flex min-h-11 items-center px-2 underline decoration-dotted underline-offset-2"
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+
+              {!dorm ? (
+                <p className="text-sm text-[var(--jf-muted)]">Loading…</p>
+              ) : (
+                <>
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-medium text-amber-700">
+                      {t("admin.dormCandidates", { n: dorm.candidates })}
+                    </span>
+                    <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 font-medium text-[var(--jf-muted-on-tint)]">
+                      {t("admin.dormExcluded", { n: dorm.excluded })}
+                    </span>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">
+                      {t("admin.dormNudgeable", { n: dorm.nudgeable })}
+                    </span>
+                  </div>
+                  {dorm.truncated && (
+                    <p className="mb-3 text-sm text-[var(--jf-muted)]">
+                      {t("admin.dormTruncated", { n: dorm.limit })}
+                    </p>
+                  )}
+                  {dorm.rows.length === 0 ? (
+                    <p className="text-sm text-[var(--jf-muted)]">{t("admin.dormNone")}</p>
+                  ) : (
+                    <>
+                      {/* Below xl: one card per account. */}
+                      <ul className="space-y-3 xl:hidden">
+                        {dorm.rows.map((d) => (
+                          <li key={d.account_id} className="rounded-xl border border-[var(--jf-border)] bg-white p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="min-w-0 break-all font-medium text-[var(--jf-text)]">
+                                {d.owner_email || "—"}
+                              </span>
+                              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${dormBucketBadge(d.bucket)}`}>
+                                {dormBucketLabel(d.bucket, t)}
+                              </span>
+                            </div>
+                            <dl className="mt-2 space-y-1 text-sm">
+                              <div className="flex gap-2">
+                                <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.workspaces")}</dt>
+                                <dd className="min-w-0 break-all">
+                                  {d.workspace_slug ? `/${d.workspace_slug}` : "—"}
+                                </dd>
+                              </div>
+                              <div className="flex gap-2">
+                                <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.lastActivity")}</dt>
+                                <dd>{formatDateTime(d.last_activity)}</dd>
+                              </div>
+                              <div className="flex gap-2">
+                                <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.dormDays", { n: d.dormant_days })}</dt>
+                                <dd>
+                                  {t("admin.dormFormsPublished")}: {d.forms_published} ·{" "}
+                                  {t("admin.dormSubmissions")}: {d.submissions_90d}
+                                </dd>
+                              </div>
+                              {d.excluded && (
+                                <div className="flex gap-2">
+                                  <dt className="shrink-0 text-[var(--jf-muted)]">{t("admin.dormReason")}</dt>
+                                  <dd className="min-w-0 break-all font-mono text-xs">
+                                    {(d.exclusion_reasons ?? []).join(" · ") || "—"}
+                                  </dd>
+                                </div>
+                              )}
+                            </dl>
+                            <p className="mt-1 break-all font-mono text-xs text-[var(--jf-muted)]">{d.account_id}</p>
+                          </li>
+                        ))}
+                      </ul>
+
+                      {/* From xl up: the table. */}
+                      <div className="hidden overflow-x-auto rounded-xl border border-[var(--jf-border)] xl:block">
+                        <table className="w-full text-left text-sm">
+                          <thead className="border-b border-[var(--jf-border)] bg-slate-50 text-sm uppercase tracking-wide text-[var(--jf-muted)]">
+                            <tr>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormBucket")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.workspaces")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.owner")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormCreated")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.lastActivity")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormFormsPublished")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormSubmissions")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormSales")}</th>
+                              <th className="px-4 py-2 font-medium">{t("admin.dormReason")}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dorm.rows.map((d) => (
+                              <tr key={d.account_id} className="border-b border-[var(--jf-border)] last:border-0">
+                                <td className="px-4 py-2">
+                                  <span className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${dormBucketBadge(d.bucket)}`}>
+                                    {dormBucketLabel(d.bucket, t)}
+                                  </span>
+                                  <div className="mt-1 whitespace-nowrap text-xs text-[var(--jf-muted)]">
+                                    {t("admin.dormDays", { n: d.dormant_days })}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-2 break-all">
+                                  {d.workspace_slug ? `/${d.workspace_slug}` : "—"}
+                                  {/* The account id is an unbreakable UUID: broken so it
+                                      cannot set the table's min-content floor. */}
+                                  <div className="break-all font-mono text-xs text-[var(--jf-muted)]">{d.account_id}</div>
+                                </td>
+                                <td className="px-4 py-2 break-all">{d.owner_email || "—"}</td>
+                                <td className="px-4 py-2 whitespace-nowrap text-xs text-[var(--jf-muted)]">
+                                  {formatDate(d.created_at)}
+                                </td>
+                                <td className="px-4 py-2 whitespace-nowrap text-xs text-[var(--jf-muted)]">
+                                  {formatDateTime(d.last_activity)}
+                                </td>
+                                <td className="px-4 py-2">{d.forms_published}</td>
+                                <td className="px-4 py-2">{d.submissions_90d}</td>
+                                <td className="px-4 py-2">{d.sales_ever}</td>
+                                <td className="px-4 py-2 break-all font-mono text-xs">
+                                  {(d.exclusion_reasons ?? []).join(" · ") || t("admin.dormNoReason")}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </>
               )}
             </section>
 

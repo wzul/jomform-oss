@@ -317,6 +317,40 @@ var catalog = map[Kind]map[string]msg{
 				"عرض المحادثة على {link}\n"},
 	},
 
+	// Card t_94e5cca3: the phase-1 dormancy nudge. It is platform-user mail
+	// (resolved from the recipient's users.lang, like every other message to a
+	// merchant) and it promises ONE thing only: the forms are still online. It
+	// deliberately makes no claim about deletion, because phases 2/3 of the
+	// policy are separate decisions and an email must not promise what the
+	// product has not decided.
+	DormancyNudge: {
+		En: {Subject: "Your JomForm form is still online",
+			Body: "Hi,\n\n" +
+				"Just a check-in: the forms in your JomForm workspace \"{workspace}\" are still online and still accepting responses. Nothing has changed there in {days} days.\n\n" +
+				"You do not need to do anything. If you have finished with them, you can unpublish or delete a form yourself from your dashboard.\n\n" +
+				"This is the only reminder about activity we will send you in the next 90 days.\n"},
+		Ms: {Subject: "Borang JomForm anda masih dalam talian",
+			Body: "Hai,\n\n" +
+				"Sekadar bertanya khabar: borang dalam ruang kerja JomForm anda \"{workspace}\" masih dalam talian dan masih menerima respons. Tiada perubahan di situ sejak {days} hari.\n\n" +
+				"Anda tidak perlu buat apa-apa. Jika sudah selesai, anda boleh nyahterbit atau padam borang itu sendiri dari papan pemuka anda.\n\n" +
+				"Ini satu-satunya peringatan tentang aktiviti yang akan kami hantar dalam 90 hari akan datang.\n"},
+		Zh: {Subject: "您的 JomForm 表单仍然在线",
+			Body: "您好，\n\n" +
+				"只是问候一下：您的 JomForm 工作区“{workspace}”中的表单仍然在线，并且仍在接收回复。那里已经 {days} 天没有任何变更。\n\n" +
+				"您不需要做任何事。如果已经用完，您可以在控制台中自行取消发布或删除表单。\n\n" +
+				"这是未来 90 天内我们唯一一次关于活跃度的提醒。\n"},
+		Ta: {Subject: "உங்கள் JomForm படிவம் இன்னும் இணையத்தில் உள்ளது",
+			Body: "வணக்கம்,\n\n" +
+				"ஒரு நினைவூட்டல்: உங்கள் JomForm பணியிடமான \"{workspace}\" இல் உள்ள படிவங்கள் இன்னும் இணையத்தில் உள்ளன, பதில்களையும் பெற்றுக்கொண்டிருக்கின்றன. {days} நாட்களாக அங்கு எந்த மாற்றமும் இல்லை.\n\n" +
+				"நீங்கள் எதுவும் செய்யத் தேவையில்லை. வேலை முடிந்திருந்தால், உங்கள் டாஷ்போர்டில் இருந்து படிவத்தை வெளியிடாமல் செய்யலாம் அல்லது நீக்கலாம்.\n\n" +
+				"அடுத்த 90 நாட்களில் செயல்பாடு குறித்து நாங்கள் அனுப்பும் ஒரே நினைவூட்டல் இதுவே.\n"},
+		Ar: {Subject: "نموذج JomForm الخاص بك لا يزال منشوراً",
+			Body: "مرحباً،\n\n" +
+				"مجرد تذكير: النماذج في مساحة عملك \"{workspace}\" على JomForm لا تزال منشورة ولا تزال تستقبل الردود. لم يتغير شيء هناك منذ {days} يوماً.\n\n" +
+				"لا حاجة لفعل أي شيء. إذا انتهيت منها، يمكنك إلغاء نشر النموذج أو حذفه بنفسك من لوحة التحكم.\n\n" +
+				"هذا هو التذكير الوحيد الذي سنرسله عن النشاط خلال الـ 90 يوماً القادمة.\n"},
+	},
+
 	// ── buyer-facing mail (resolved from the form/workspace axis) ────────────
 
 	Receipt: {

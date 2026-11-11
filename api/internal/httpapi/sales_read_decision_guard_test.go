@@ -1025,6 +1025,15 @@ func TestMergedReadGoesThroughTheOneBuilder(t *testing.T) {
 		mergedOwner:                                   true,
 		filepath.Join("dbstore", "analytics.go"):      true,
 		filepath.Join("dbstore", "admin_overview.go"): true,
+		// The phase-1 dormancy report (card t_94e5cca3) is a third COUNTER, not a
+		// record-set reader: one GROUP BY account_id that takes MAX(created_at) and
+		// COUNT(*) from each table to answer "has anything happened for this
+		// account, and how long ago". It never selects a record row, never merges
+		// the two sets, and is only reachable through the super-admin gate — the
+		// same shape as admin_overview.go's platform-wide counts. Reading it through
+		// the merged read would mean paging every sale and response just to compute
+		// two aggregates.
+		filepath.Join("dbstore", "dormancy.go"): true,
 	}
 	salesTable := regexp.MustCompile(`(?i)FROM\s+sales\b`)
 	subsTable := regexp.MustCompile(`(?i)FROM\s+submissions\b`)

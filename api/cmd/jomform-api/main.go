@@ -27,6 +27,7 @@ import (
 	"github.com/wzul/jomform/api/internal/config"
 	"github.com/wzul/jomform/api/internal/db"
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/dormancy"
 	"github.com/wzul/jomform/api/internal/email"
 	"github.com/wzul/jomform/api/internal/emailqueue"
 	"github.com/wzul/jomform/api/internal/feedbacksvc"
@@ -195,6 +196,11 @@ func main() {
 		accounts := dbstore.NewAccountStore(pool)
 		deps.Users = dbstore.NewUserStore(pool)
 		deps.Accounts = accounts
+		// Card t_94e5cca3: the phase-1 dormancy report (read-only). It owns no
+		// table — the report is one statement over accounts/events/forms/sales/
+		// submissions/subscriptions — and the daily job below is its only writer,
+		// recording the nudge in the existing events log.
+		deps.Dormancy = dbstore.NewDormancyStore(pool)
 	}
 	if sessions != nil {
 		deps.Sessions = sessions
@@ -458,6 +464,9 @@ func main() {
 			WebhookEvents: events,
 			// Issue #601: suppression list view/manage for the admin dashboard.
 			Suppressions: dbstore.NewSuppressionStore(pool),
+			// Card t_94e5cca3: the read-only dormancy report behind the /admin
+			// section (GET /v1/admin/dormancy).
+			Dormancy: deps.Dormancy,
 			// Issue #171: response-only form submissions.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules.
@@ -530,6 +539,9 @@ func main() {
 			// Issue #601: suppression list tools (admin_list_suppressions /
 			// admin_add_suppression / admin_remove_suppression).
 			Suppressions: dbstore.NewSuppressionStore(pool),
+			// Card t_94e5cca3: the admin_dormancy_report tool, same store as the
+			// /admin section and GET /v1/admin/dormancy.
+			Dormancy: deps.Dormancy,
 			// Issue #171: response-only form submissions tool.
 			Submissions: submissionsStore,
 			// Issue #193: per-form notification rules tool.
@@ -731,6 +743,61 @@ func main() {
 		// they live in Postgres. A short interval keeps manual retries snappy.
 		go httpapi.RunWebhookRetrySweep(ctx, rest, whStore, 30*time.Second)
 		log.Info("webhook_retry_sweep_started")
+
+		// Card t_94e5cca3: the daily dormancy job (phase 1 of the dormancy
+		// policy). It builds the READ-ONLY per-account report and sends the "your
+		// form is still live" nudge to the owners the policy allows. It deletes
+		// nothing, unpublishes nothing and sets no flag; the only write is one
+		// `dormancy.nudge_sent` audit row per send in the existing events log,
+		// which is also what enforces "never twice within 90 days".
+		//
+		// The mailer is handed over as a NIL INTERFACE when SES is unconfigured
+		// (the same typed-nil trap makeAuthMailer documents): a nil *email.Sender
+		// stored in this interface is not nil and the runner would call its Send
+		// and panic.
+		if deps.Dormancy != nil {
+			var dormancyMailer dormancy.Mailer
+			if mailer != nil {
+				dormancyMailer = mailer
+			}
+			runner := &dormancy.Runner{
+				Source:   deps.Dormancy,
+				Recorder: deps.Dormancy,
+				Mailer:   dormancyMailer,
+				Log:      log,
+			}
+			go func() {
+				run := func() {
+					rctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					defer cancel()
+					res, err := runner.Run(rctx)
+					if err != nil {
+						slog.Warn("dormancy_report", "err", err)
+						return
+					}
+					slog.Info("dormancy_report",
+						"accounts", len(res.Report.Rows),
+						"candidates", res.Report.Candidates,
+						"excluded", res.Report.Excluded,
+						"nudgeable", res.Report.Nudgeable,
+						"sent", len(res.Sent),
+						"skipped", len(res.Skipped),
+						"truncated", res.Report.Truncated)
+				}
+				run()
+				ticker := time.NewTicker(24 * time.Hour)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						run()
+					}
+				}
+			}()
+			log.Info("dormancy_job_started")
+		}
 
 		// Issue #517: the inbound CHIP callback claims its event row before
 		// running the business logic, and a failed attempt releases it. This

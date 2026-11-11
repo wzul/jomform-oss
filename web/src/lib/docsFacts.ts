@@ -247,6 +247,17 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "full_name, email and phone",
     "its value is stored as full_name",
   ],
+  // Card t_94e5cca3: the dormancy report and retention policy. The facts a reader
+  // must be able to find on the guide: what the report is (and that it is
+  // read-only), the two exclusion codes that protect a live buyer flow and the
+  // system account, the 90-day email limit, and the ordering rule.
+  "Dormant workspaces and retention": [
+    "read-only report",
+    "recent_submissions",
+    "system_account",
+    "at most once every 90 days",
+    "most dormant first",
+  ],
 };
 
 // The floor each entry's fact list must not fall below.
@@ -306,6 +317,8 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   // three storage facts t_f55ecdea added (the identity keys are written outside
   // the custom_fields filter, so "only registered ids are stored" was false).
   "Custom HTML forms": 9,
+  // Card t_94e5cca3: the dormancy guide, at the count its facts list above holds.
+  "Dormant workspaces and retention": 5,
 };
 
 // parseFactTables pulls `title: "…"` and the following `href: "…"` out of a JSX

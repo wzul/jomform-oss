@@ -56,6 +56,17 @@ gate re-reads on every run and what `selftest` check 39 asserts (every spec belo
 to exactly ONE playwright project — measured, because a project rule that matches
 nothing is a silent coverage loss and one that matches twice runs the suite twice).
 
+THE FAMILY IS NO LONGER "EVERY `*.spec.ts` UNDER web/e2e/" (card `t_440c9417`). One spec
+there is owned by another gate: `menu-checkout-option-group.spec.ts` needs the
+`menufixture` Go server (`MENU_FIXTURE_URL`), which these gates' `next start` cannot
+serve, so `feature-core` `testIgnore`s it and the `menufixture` gate is its only
+runner. THIS half is unchanged — 56 tests in 17 files, same `--list` — but the family's
+total is now **373 tests in 78 files** (56 + 317 in 17 + 61). `selftest` check 39 now
+judges ownership as `testMatch matches AND testIgnore does not`, and accepts a spec no
+project runs ONLY when it is declared in the check's `OWNED_ELSEWHERE` table; that
+declaration is verified in both directions, so a spec that matches nothing and is not
+declared still fails, and so does one that is declared while a project still runs it.
+
 THE SPLIT'S RULE IS THE FILENAME PREFIX, deliberately: a list of explicit spec paths
 would have to be edited every time a spec is added, and a spec in no project simply
 stops running. `builder-*.spec.ts` is the builder half by name; `a11y*` is the axe

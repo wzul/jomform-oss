@@ -135,6 +135,14 @@ const GROUPS: Group[] = [
         href: "/docs/activity",
         body: "Every action in this workspace, newest first, including the destructive ones — a deletion leaves no other trace. Append-only.",
       },
+      {
+        // Card t_94e5cca3: the dormancy report and the retention policy behind the
+        // /admin dormancy section's "?" link. One sentence, as the entry-shape
+        // guard requires; the walk-through is on the page.
+        title: "Dormant workspaces and retention",
+        href: "/docs/dormancy",
+        body: "A read-only report of how long each workspace has been quiet, why a silent merchant is not a silent form, which accounts are excluded, and the one reminder email.",
+      },
     ],
   },
   {

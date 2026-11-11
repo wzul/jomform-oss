@@ -27,7 +27,11 @@
 //      spec whose own file it is, and any spec whose TEXT names it (the import
 //      it drives — derived from the tree, so a shared helper cannot be missed).
 //   8. a selection of ZERO specs                      -> FULL, loudly: a
-//      narrowed run that ran nothing must never be reported as a pass.
+//      narrowed run that ran nothing must never be reported as a pass. The ONE
+//      exception is a diff whose only spec path is owned by ANOTHER gate
+//      (`OTHER_GATE_SPECS`): it selects nothing here by definition, so the
+//      decision is a subset of zero and the caller prints NOT RUN — a narrowed
+//      verdict naming the owner, not a pass.
 //
 // Exit status: 0 when a decision was reached (FULL or subset), non-zero when the
 // map or the tree could not be read. The caller treats a non-zero exit as FULL.
@@ -42,7 +46,7 @@
 // the decision is a subset:
 //   DECISION full|subset <n>/<total> <reason>
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,8 +116,22 @@ export function parseMap(text) {
 
 // A feature spec is every `*.spec.ts` in web/e2e/ that is NOT in the axe family
 // (`a11y*`, owned by the `a11y` gate by filename prefix — the same rule
-// playwright.config.ts encodes). `builder-*` is the `e2e-builder` half.
-export const isFeatureSpec = (name) => name.endsWith(".spec.ts") && !name.startsWith("a11y");
+// playwright.config.ts encodes) and NOT owned by another gate. `builder-*` is the
+// `e2e-builder` half.
+//
+// SPECS OWNED BY ANOTHER GATE (card t_440c9417, option B: one owner per test). The
+// menu-checkout geometry spec needs `MENU_FIXTURE_URL` and the `api/cmd/menu-fixture`
+// Go server, which the e2e gates' `next start` cannot serve, so `web/playwright.config.ts`
+// testIgnore's it in `feature-core` and the `menufixture` gate is its ONLY runner.
+// It is therefore not a member of this family at all: it is not in `specFiles`, it
+// cannot be selected for `e2e-core`, and `areas.tsv` carries no row for it. Without
+// this, a narrowed run would hand playwright a path its project does not enumerate,
+// which runs NOTHING while the gate reports a pass — the one shape this file exists
+// to prevent.
+export const OTHER_GATE_SPECS = new Map([
+  ["menu-checkout-option-group.spec.ts", "menufixture"],
+]);
+export const isFeatureSpec = (name) => name.endsWith(".spec.ts") && !name.startsWith("a11y") && !OTHER_GATE_SPECS.has(name);
 export const isBuilderSpec = (name) => isFeatureSpec(name) && name.startsWith("builder-");
 export const gateSpecs = (files, gate) =>
   files.filter((f) => (gate === "builder" ? isBuilderSpec(basename(f)) : isFeatureSpec(basename(f)) && !isBuilderSpec(basename(f))));
@@ -155,12 +173,19 @@ export function decide({ specFiles, mapText, changedPaths, forceFull = false, sp
 
   const selected = new Set();
   let attribution = "";
+  let ownedElsewhere = "";
   for (const p of paths) {
     const base = basename(p);
     const isSpecFile = p.startsWith("web/e2e/") && base.endsWith(".spec.ts");
     if (isSpecFile) {
-      if (specFiles.includes(base)) selected.add(base);
-      attribution = attribution || `matched ${p}`;
+      if (specFiles.includes(base)) {
+        selected.add(base);
+        attribution = attribution || `matched ${p}`;
+      } else if (OTHER_GATE_SPECS.has(base))
+        // Its own gate runs it, this family does not enumerate it — so it selects
+        // nothing here and must not WIDEN the run either (the spec does not reach a
+        // single feature spec; `web/playwright.config.ts` excludes it by design).
+        ownedElsewhere = `${p} is owned by the \`${OTHER_GATE_SPECS.get(base)}\` gate, which web/playwright.config.ts testIgnore's here — no e2e spec can see it`;
       continue;
     }
     // rule 7a: the map attributes this path to a row
@@ -193,7 +218,14 @@ export function decide({ specFiles, mapText, changedPaths, forceFull = false, sp
     // browser level), so a non-web path that no row claims cannot reach one.
   }
 
-  if (!selected.size) return full("the diff selected no spec — refusing to report a narrowed run that ran nothing");
+  if (!selected.size) {
+    // The only spec the diff touches belongs to another gate: this family owes
+    // NOTHING, so the caller prints "NOT RUN — 0/N" (a narrowed verdict, never a
+    // pass). Rule 8's widening is for a diff that attributes nothing at all; here
+    // the attribution is positive and it says "not this gate's test".
+    if (ownedElsewhere) return { full: false, reason: ownedElsewhere, selected: [], total };
+    return full("the diff selected no spec — refusing to report a narrowed run that ran nothing");
+  }
   return { full: false, reason: attribution || "matched a mapped area", selected: [...selected].sort(), total };
 }
 
@@ -237,6 +269,13 @@ function checkMap(root) {
 
   for (const f of files) {
     if (!rows.some((r) => globToRe(r.specGlob).test(f))) problems.push(`${f} has no row in web/e2e/areas.tsv`);
+  }
+  // A spec declared as owned by another gate is not in the family, so it needs no row
+  // — but the declaration itself must still name a file that is there, or a rename
+  // silently takes the spec out of every gate at once (card t_440c9417).
+  for (const spec of OTHER_GATE_SPECS.keys()) {
+    if (!existsSync(join(root, "web", "e2e", spec)))
+      problems.push(`'${spec}' is declared as owned by the \`${OTHER_GATE_SPECS.get(spec)}\` gate but does not exist under web/e2e/ (renamed? then the new name must be declared too)`);
   }
   for (const r of rows) {
     if (!files.some((f) => globToRe(r.specGlob).test(f))) problems.push(`row '${r.specGlob}' matches no feature spec`);
@@ -330,6 +369,25 @@ function selfTest() {
     const d = decide({ specFiles: specs, mapText: MAP, changedPaths: ["web/e2e/chat-a.spec.ts"] });
     eq(d.full, false, "full");
     eq(JSON.stringify(d.selected), JSON.stringify(["chat-a.spec.ts"]), "selected");
+  });
+  t("a spec owned by ANOTHER gate selects nothing here and does NOT widen the run", () => {
+    // Card t_440c9417: the menu-checkout spec belongs to the `menufixture` gate, and
+    // `feature-core` testIgnore's it. Selecting it would hand playwright a file its
+    // project does not enumerate — zero tests run, and the gate would call that a pass.
+    const d = decide({ specFiles: specs, mapText: MAP, changedPaths: ["web/e2e/menu-checkout-option-group.spec.ts"] });
+    eq(d.full, false, "full");
+    eq(JSON.stringify(d.selected), JSON.stringify([]), "selected");
+    if (!/menufixture/.test(d.reason)) throw new Error(`the reason did not name the owner gate: ${d.reason}`);
+  });
+  t("the owned-elsewhere spec is not a member of the family at all", () => {
+    eq(isFeatureSpec("menu-checkout-option-group.spec.ts"), false, "isFeatureSpec");
+    eq(gateSpecs(["menu-checkout-option-group.spec.ts", "sales-a.spec.ts"], "core").join(","), "sales-a.spec.ts", "gateSpecs(core)");
+  });
+  t("a diff touching BOTH the owned-elsewhere spec and a mapped area narrows to the area", () => {
+    const d = decide({ specFiles: specs, mapText: MAP, changedPaths: ["web/e2e/menu-checkout-option-group.spec.ts", "web/src/app/sales/page.tsx"] });
+    eq(d.full, false, "full");
+    eq(JSON.stringify(d.selected), JSON.stringify(["sales-a.spec.ts", "sales-b.spec.ts"]), "selected");
+    eq(d.reason, "matched web/src/app/sales/**", "reason");
   });
   t("a path a spec NAMES is selected even with no row", () => {
     const d = decide({

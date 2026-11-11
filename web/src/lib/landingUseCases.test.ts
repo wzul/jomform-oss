@@ -404,23 +404,30 @@ test("the donation copy still describes the shipped pay-what-you-want product, a
   );
 
   // The showcase for "collect donations" must not omit the donation-specific capability:
-  // the body and the lead bullet have to say the amount is typed by the donor, and the
-  // floor has to be stated (RM1.00 is enforced by the server: payments.MinCustomAmountSen).
+  // the lead sentence has to say the amount is typed by the donor and state the floor
+  // (RM1.00 is enforced by the server: payments.MinCustomAmountSen), and the bullets keep the
+  // payment methods. Card t_516bab9d moved the claim from the first bullet into the card's
+  // ONE lead sentence (a bullet is now five words or fewer) and Wan approved that rewrite
+  // verbatim, so this arm reads the lead instead of bullet 1.
   const TYPED = /pay[- ]what[- ]you[- ]want|types? the amount|type the amount/i;
-  for (const key of ["land.donationbody", "land.donation1"]) {
-    assert.match(
-      entry(key).en,
-      TYPED,
-      `${key} does not describe the shipped custom_amount product. The landing page for ` +
-        "collecting donations has to lead with the product the buyer types an amount into " +
-        "(migration 000085), not only with fixed denominations",
-    );
-  }
+  assert.match(
+    entry("land.donationbody").en,
+    TYPED,
+    "land.donationbody does not describe the shipped custom_amount product. The landing " +
+      "page for collecting donations has to lead with the product the buyer types an amount " +
+      "into (migration 000085), not only with fixed denominations",
+  );
+  assert.match(
+    entry("land.donationbody").en,
+    /RM1(?:\.00)?/,
+    "land.donationbody does not state the RM1.00 minimum — an amount below it is refused, so " +
+      "copy that leaves the floor out promises something the checkout rejects",
+  );
   assert.match(
     entry("land.donation1").en,
-    /RM1(?:\.00)?/,
-    "land.donation1 does not state the RM1.00 minimum — an amount below it is refused, so " +
-      "copy that leaves the floor out promises something the checkout rejects",
+    /FPX/,
+    "land.donation1 no longer names a payment method — the donation copy has to keep the " +
+      "payment methods it claims, and that bullet is where they live now",
   );
 
   // The guide keeps the two claims the deleted landing steps used to make: the amount field
@@ -471,4 +478,121 @@ test("the landing page keeps its real routes", () => {
   for (const href of ["/builder", "/mcp", "/login", "/docs", "/docs/api"]) {
     assert.ok(landingCode.includes(`href="${href}"`), `the landing page lost its ${href} link`);
   }
+});
+
+// THE CARD BUDGET (card t_516bab9d), checked in the dictionary as well as in the browser
+// ---------------------------------------------------------------------------------------
+// `e2e/landing-usecases-mobile.spec.ts` measures the rendered cards at 390px in all five
+// locales — that is the guard that sees layout. This arm is the cheap half: it reads the
+// copy that is about to ship and fails `npm run test:unit` (which `npm run build` runs)
+// the moment a copy edit spends the budget, without needing a build, a server or a browser.
+// The two must agree on the numbers; if they ever drift, the browser arm is the authority
+// for what a reader sees and this one is the early warning.
+test("every showcase is inside the card budget in all five locales, with one action and one Guide link", () => {
+  const BUDGET = { title: 8, lead: 20, bullet: 5, total: 55, spread: 10 } as const;
+  const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
+  const problems: string[] = [];
+
+  const totals: Record<Lang, number[]> = { en: [], ms: [], zh: [], ta: [], ar: [] };
+  for (const s of SHOWCASES) {
+    for (const lang of LANGS) {
+      const title = entry(s.title)?.[lang] ?? "";
+      const lead = entry(s.body)?.[lang] ?? "";
+      const bullets = s.bullets.map((k) => entry(k)?.[lang] ?? "");
+      const total =
+        words(title) +
+        words(lead) +
+        bullets.reduce((n, b) => n + words(b), 0) +
+        words(entry(s.cta)?.[lang] ?? "") +
+        words(entry(s.guide.labelKey)?.[lang] ?? "");
+      totals[lang].push(total);
+      const where = `${lang} / ${s.name}`;
+      if (words(title) > BUDGET.title) problems.push(`${where}: ${words(title)}-word heading`);
+      if (words(lead) > BUDGET.lead) problems.push(`${where}: ${words(lead)}-word lead`);
+      for (const b of bullets) {
+        if (words(b) > BUDGET.bullet) problems.push(`${where}: ${words(b)}-word bullet "${b}"`);
+      }
+      if (total > BUDGET.total) problems.push(`${where}: ${total} words > ${BUDGET.total}`);
+      // The whole "Read the full … guide with screenshots →" sentence is gone, not shortened.
+      for (const value of [lead, ...bullets, entry(s.guide.labelKey)?.[lang] ?? ""]) {
+        if (/Read the full .* guide/i.test(value)) {
+          problems.push(`${where}: a "Read the full … guide" sentence is back: "${value}"`);
+        }
+      }
+    }
+  }
+  for (const lang of LANGS) {
+    const spread = Math.max(...totals[lang]) - Math.min(...totals[lang]);
+    if (spread > BUDGET.spread) {
+      problems.push(
+        `${lang}: the seven cards run ${totals[lang].join(", ")} words — a spread of ` +
+          `${spread} over ${BUDGET.spread}, so the grid stops being even on a phone`,
+      );
+    }
+  }
+
+  // ONE filled CTA and ONE guide link per card, written in the page's own card slice: the
+  // `secondary` action and the guide sentence were the two links doing one job.
+  for (const s of SHOWCASES) {
+    const card = cardSlice(s);
+    const ctas = card.split("cta={{").length - 1;
+    const guides = card.split("guide={{").length - 1;
+    if (ctas !== 1) problems.push(`${s.name}: ${ctas} CTAs, expected exactly one filled CTA`);
+    if (guides !== 1) problems.push(`${s.name}: ${guides} guide links, expected exactly one`);
+    if (card.includes("secondary=")) {
+      problems.push(`${s.name}: a second action is back on the card — one action per card`);
+    }
+  }
+
+  assert.deepEqual(problems, [], `the use-case cards are over budget:\n  ${problems.join("\n  ")}`);
+});
+
+// Wan approved these three sentences VERBATIM on 2026-11-11 (tuition, club, donations —
+// the three phone screenshots his "masih nampak wordy" was about). They are pinned so a
+// later copy pass has to make the same decision knowingly rather than drifting, and the
+// four remaining cards are held to the same budget by the arm above.
+test("the three approved reference rewrites are the ones on the page", () => {
+  // One deliberate deviation, recorded here so it is visible rather than silent: the
+  // donation lead was approved as "RM1 minimum" and ships as "RM1.00 minimum". `RM1` is
+  // rejected by `voiceRules.test.ts` ("money in an English string carries two decimals"),
+  // and the card itself lists "RM1.00 minimum" among the claims that must survive — so the
+  // decimal is the one word-level change, and the fact is identical.
+  const APPROVED: [string, string][] = [
+    [
+      "land.tuitionbody",
+      "Take the registration fee now, and charge the monthly class fee to the same card automatically.",
+    ],
+    [
+      "land.membershipbody",
+      "Members pay once; their card is charged every month or year, hands-free.",
+    ],
+    [
+      "land.donationbody",
+      "Publish a pay-what-you-want form: RM1.00 minimum, every Malaysian payment method.",
+    ],
+  ];
+  for (const [key, sentence] of APPROVED) {
+    assert.equal(entry(key).en, sentence, `${key}.en drifted from the copy Wan approved`);
+  }
+  // The three bullets Wan wrote for those cards, verbatim (one per line for legibility).
+  const APPROVED_BULLETS: [string, string][] = [
+    ["land.tuition1", "Student, subject, session"],
+    ["land.tuition2", "Receipt emailed"],
+    ["land.tuition3", "Monthly fee auto-charged"],
+    ["land.tuition4", "Cancel from dashboard"],
+    ["land.membership1", "Auto-charged each period"],
+    ["land.membership2", "Card saved securely"],
+    ["land.membership3", "Cancel anytime, card kept"],
+    ["land.membership4", "Managed from dashboard"],
+    ["land.donation1", "Card, FPX, DuitNow QR"],
+    ["land.donation2", "Donor details in Sales"],
+    ["land.donation4", "Publish in minutes"],
+  ];
+  for (const [key, bullet] of APPROVED_BULLETS) {
+    assert.equal(entry(key).en, bullet, `${key}.en drifted from the copy Wan approved`);
+  }
+  // ...and the one bullet that had to lose a word: it was approved as "One filter for the
+  // day's total", which is six words against a five-word bullet budget. The fact is the
+  // same; only the article is gone.
+  assert.equal(entry("land.donation3").en, "One filter, today's total");
 });

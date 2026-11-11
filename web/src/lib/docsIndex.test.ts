@@ -597,6 +597,11 @@ const ORIGINAL_TITLES = [
   // walk-through, and a live destination the builder's shipping block and the
   // Form Settings → Shipping tab both link at.
   "Shipping by zone",
+  // Card t_94e5cca3: the dormancy report and the retention policy. It is a live
+  // destination — the /admin dormancy section's inline "?" deep-links
+  // /docs/dormancy — so it joins the contract like every entry above. The
+  // walk-through is on the page; the entry stays one summary sentence.
+  "Dormant workspaces and retention",
 ];
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;

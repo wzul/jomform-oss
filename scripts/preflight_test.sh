@@ -4060,48 +4060,84 @@ fi
 #     `--project=feature-builder`, which is the same fact seen from the other side.
 #     So each spec is matched as a synthetic path whose tail is the real path shape,
 #     with `re.search` (a pattern may or may not be anchored).
+#
+#     testIgnore IS PART OF THE JUDGEMENT (card t_440c9417, option B: one owner per
+#     test). A spec can be matched by a project's `testMatch` AND excluded by that
+#     same project's `testIgnore`; the project then does not run it, so counting the
+#     match alone as ownership is a lie in the direction that matters — the check
+#     would keep calling a spec covered after it stopped being enumerated. So the
+#     ownership test is `testMatch matches AND testIgnore does not`, and a spec no
+#     project runs is allowed ONLY when it is declared in OWNED_ELSEWHERE below. That
+#     declaration is verified in BOTH directions (the file must still exist; no
+#     project may still run it), because "owned by another gate" and "run here" at the
+#     same time is two owners again, which is the defect being fixed.
 s39_out="$(python3 - "$LIVE_ROOT" <<'PYEOF' 2>&1
 import re, sys, glob, os
 root = sys.argv[1]
+# Specs under web/e2e/ that a DIFFERENT gate owns, so no playwright project in this
+# config may enumerate them. Each entry is checked, not trusted: the file must exist,
+# and every project whose testMatch matches it MUST testIgnore it.
+OWNED_ELSEWHERE = {
+    # Needs the menufixture Go server (MENU_FIXTURE_URL, api/cmd/menu-fixture), which
+    # this config's `next start` cannot serve at all; scripts/menu-fixture-e2e.sh runs
+    # it through web/playwright.menufixture.config.ts as the `menufixture` gate.
+    "menu-checkout-option-group.spec.ts": "menufixture",
+}
 cfg = os.path.join(root, "web", "playwright.config.ts")
 specs = sorted(os.path.basename(p) for p in glob.glob(os.path.join(root, "web", "e2e", "*.spec.ts")))
 if not specs:
     print("NO_SPECS"); sys.exit(0)
+src = open(cfg, encoding="utf-8").read()
+# Read the projects from the TEXT, not one line at a time: a project object may be
+# formatted over several lines, and a line-based parse silently found NO project the
+# moment `feature-core` was written that way (measured while adding testIgnore).
+def unesc(s):
+    # The config is TypeScript source, so its regex literal is JS-escaped: `\\.`
+    # means a literal dot. Undo that one level before using it as a pattern — a
+    # pattern that still says `\\.` matches nothing.
+    return s.replace("\\\\", "\\")
+marks = [m for m in re.finditer(r'\bname:\s*"([^"]+)"', src)]
 projs = []
-for line in open(cfg, encoding="utf-8"):
-    if "testMatch" not in line:
-        continue
-    n = re.search(r'name:\s*"([^"]+)"', line)
-    t = re.search(r'testMatch:\s*/(.+)/\s*\}?\s*,?\s*$', line.rstrip())
-    if n and t:
-        # The config is TypeScript source, so its regex literal is JS-escaped: `\\.`
-        # means a literal dot. Undo that one level before using it as a pattern — a
-        # pattern that still says `\\.` matches nothing.
-        projs.append((n.group(1), t.group(1).replace("\\\\", "\\")))
+for k, m in enumerate(marks):
+    chunk = src[m.end(): marks[k + 1].start() if k + 1 < len(marks) else len(src)]
+    t = re.search(r'testMatch:\s*/(.+?)/(?=\s*[,}])', chunk, re.S)
+    i = re.search(r'testIgnore:\s*/(.+?)/(?=\s*[,}])', chunk, re.S)
+    if t:
+        projs.append((m.group(1), unesc(t.group(1)), unesc(i.group(1)) if i else None))
 if not projs:
     print("NO_PROJECTS"); sys.exit(0)
-unowned, double = [], []
+unowned, double, twoowners = [], [], []
 for sp in specs:
     # The full path Playwright matches against, shaped like this tree's (`web/e2e/`).
     path = os.path.join(root, "web", "e2e", sp)
-    who = [name for name, pat in projs if re.search(pat, path)]
-    if not who:
-        unowned.append(sp)
-    elif len(who) > 1:
-        double.append("%s(%s)" % (sp, ",".join(who)))
-if unowned:
+    runners = [name for name, pat, ign in projs
+               if re.search(pat, path) and not (ign and re.search(ign, path))]
+    if not runners:
+        if sp not in OWNED_ELSEWHERE:
+            unowned.append(sp)
+    elif len(runners) > 1:
+        double.append("%s(%s)" % (sp, ",".join(runners)))
+    elif sp in OWNED_ELSEWHERE:
+        twoowners.append("%s(%s+%s)" % (sp, runners[0], OWNED_ELSEWHERE[sp]))
+stale = [sp for sp in OWNED_ELSEWHERE if sp not in specs]
+if twoowners:
+    print("TWOOWNERS " + " ".join(twoowners))
+elif stale:
+    print("STALE " + " ".join(stale))
+elif unowned:
     print("UNOWNED " + " ".join(unowned))
 elif double:
     print("DOUBLE " + " ".join(double))
 else:
-    print("OK %d %d" % (len(specs), len(projs)))
+    declared = ",".join("%s=%s" % (sp, OWNED_ELSEWHERE[sp]) for sp in sorted(OWNED_ELSEWHERE)) or "(none)"
+    print("OK %d %d %d %s" % (len(specs), len(projs), len(OWNED_ELSEWHERE), declared))
 PYEOF
 )"
 case "$s39_out" in
   OK\ *)
     # shellcheck disable=SC2086
     set -- $s39_out
-    ok "check 39 — every one of the $2 web/e2e specs belongs to exactly ONE of the $3 playwright projects (no spec unowned, none double-run), so the a11y/feature split cannot drop coverage"
+    ok "check 39 — every one of the $2 web/e2e specs is run by exactly ONE of the $3 playwright projects (no spec unowned, none double-run) and the $4 declared as owned by another gate ($5) is testIgnored by every project that matches it, so the split cannot drop coverage"
     ;;
   NO_SPECS)
     bad "check 39 — no *.spec.ts under $LIVE_ROOT/web/e2e, so the project split cannot be judged (a guard that reads nothing proves nothing)"
@@ -4110,10 +4146,16 @@ case "$s39_out" in
     bad "check 39 — no project in web/playwright.config.ts declares a testMatch, so the split cannot be proven; an unnamed project would run EVERY spec and the a11y gate would silently be the whole directory again"
     ;;
   UNOWNED\ *)
-    bad "check 39 — spec(s) match NO playwright project, so no gate runs them:${s39_out#UNOWNED}. A spec outside every project is a silent coverage loss; add it to a family's testMatch"
+    bad "check 39 — spec(s) match NO playwright project, so no gate runs them:${s39_out#UNOWNED}. A spec outside every project is a silent coverage loss; add it to a family's testMatch — or, when another gate really owns it, declare it (with its owner) in OWNED_ELSEWHERE of this check"
     ;;
   DOUBLE\ *)
     bad "check 39 — spec(s) match MORE THAN ONE project, so they run twice and the family split is not a split:${s39_out#DOUBLE}"
+    ;;
+  TWOOWNERS\ *)
+    bad "check 39 — spec(s) declared as owned by ANOTHER gate are ALSO run by a playwright project here:${s39_out#TWOOWNERS}. One test with two owners is the defect this split exists to prevent: either the project owns it (drop the declaration) or it does not (testIgnore it there)"
+    ;;
+  STALE\ *)
+    bad "check 39 — OWNED_ELSEWHERE names spec(s) that no longer exist under web/e2e:${s39_out#STALE}. A stale declaration hides a rename — the new file would then be judged unowned, or worse, silently re-owned"
     ;;
   *)
     bad "check 39 — the project/spec judgement did not run: [$s39_out]"

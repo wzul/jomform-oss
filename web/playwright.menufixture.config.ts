@@ -19,11 +19,14 @@ import { defineConfig, devices } from "@playwright/test";
 //   - `reuseExistingServer` is deliberately false there (a leftover server must
 //     never answer a gate), so it could not be talked out of it.
 //
-// The main config STILL selects this spec through its `feature-core` project
-// (filename prefix rule), so it is enumerated by `scripts/spec-counts.sh` and
-// runs in the `e2e` gate — where, with no MENU_FIXTURE_URL, it skips and says so.
-// That keeps the spec in the family (a spec in no project is a silent coverage
-// loss) while giving the lane that WANTS the measurement a one-command path.
+// THE MAIN CONFIG DOES NOT ENUMERATE IT (card t_440c9417, option B: one owner per
+// test). `playwright.config.ts`'s `feature-core` project carries a `testIgnore` for
+// this file, so the `e2e-core`/`speccounts` enumerations do not count it and the e2e
+// gates cannot report it as a skippable pass. This config plus
+// `scripts/menu-fixture-e2e.sh` (the `menufixture` preflight gate) is therefore its
+// ONLY runner. It used to be listed under `feature-core` and skip itself there
+// ("MENU_FIXTURE_URL is unset"), which made two gates its nominal owners while only
+// this one could ever measure it.
 export default defineConfig({
   testDir: "./e2e",
   testMatch: /menu-checkout-option-group\.spec\.ts/,

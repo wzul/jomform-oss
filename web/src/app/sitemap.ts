@@ -35,6 +35,9 @@ const APEX_PAGES = [
   "/docs/mcp/troubleshooting",
   "/docs/subscriptions",
   "/docs/variations",
+  // Card t_94e5cca3: the dormancy report + retention policy page the /admin
+  // dormancy section's "?" link opens.
+  "/docs/dormancy",
   // t_bac29e18: the public REST API reference. It is a product surface — the
   // entry point for a developer integrating with JomForm.
   "/docs/api",

@@ -57,6 +57,10 @@ type Deps struct {
 	// tests; the SNS endpoint skips the write when nil.
 	EmailDeliveryEvents *dbstore.EmailDeliveryEventStore
 
+	// Card t_94e5cca3: the read-only phase-1 dormancy report store. Nil when
+	// there is no database; the daily job and the admin surface then stay off.
+	Dormancy *dbstore.DormancyStore
+
 	// Issue #106: sale lookup by receipt MessageID, so the SNS endpoint can
 	// correlate Open/Click/Delivered events to a specific sale. Nil in
 	// bare-mode tests; events are then recorded without a sale_ref.

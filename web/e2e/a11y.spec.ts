@@ -74,6 +74,8 @@ const PAGES = [
   { name: "docs-ses-reputation", path: "/docs/ses-reputation" },
   // Card t_eb09b25a: the activity log / audit trail.
   { name: "docs-activity", path: "/docs/activity" },
+  // Card t_94e5cca3: the dormancy report + retention policy.
+  { name: "docs-dormancy", path: "/docs/dormancy" },
   { name: "docs-placeholders", path: "/docs/placeholders" },
   { name: "docs-mcp", path: "/docs/mcp" },
   // Card t_0356ed4c: /docs/mcp is a hub; its four task pages are separately

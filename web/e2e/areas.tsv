@@ -41,6 +41,17 @@
 # attributed. Getting a row wrong costs coverage of one area; leaving a path
 # unclaimed costs the whole family's run time, never coverage.
 #
+# SPECS OWNED BY ANOTHER GATE HAVE NO ROW HERE (card t_440c9417, option B: one owner
+# per test). A spec can live under web/e2e/ and still not belong to this family:
+# `menu-checkout-option-group.spec.ts` needs the `menufixture` Go server
+# (MENU_FIXTURE_URL, api/cmd/menu-fixture), which these gates' `next start` cannot
+# serve, so `web/playwright.config.ts` testIgnore's it and the `menufixture` gate is
+# its ONLY runner. The matcher excludes it by name (`OTHER_GATE_SPECS` in
+# web/scripts/e2e-scope.mjs, which is also where the declaration is checked against
+# the tree); a diff that touches only it decides a subset of ZERO, so the e2e gates
+# print NOT RUN — never a spec path handed to a project that does not enumerate it,
+# which runs nothing and would read as a pass.
+#
 # THE BLIND SPOT, NAMED. A narrowed run does not exercise a spec whose area the
 # diff did not touch, and the printed decision line says so (`e2e-core: 41/76
 # specs`) — it is never reported as the full family. `PREFLIGHT_E2E=full` forces
@@ -113,6 +124,7 @@ profile-*.spec.ts	web/src/app/profile/**
 # ---- cross-page presentation, security and caching ----
 action-failure-tone.spec.ts	web/src/app/sales/**	web/src/app/spam/**	web/src/app/form-settings/**
 landing-header-mobile.spec.ts	web/src/app/landing/page.tsx
+landing-usecases-mobile.spec.ts	web/src/app/landing/page.tsx	web/src/components/landing/ShowcaseCard.tsx	web/src/components/i18nDict.ts
 mobile-tables.spec.ts	web/src/app/sales/**	web/src/app/products/**	web/src/app/subscriptions/**	web/src/app/deliveries/**	web/src/app/spam/**	web/src/components/MobileRecord.tsx
 security-headers.spec.ts	web/next.config.mjs
 static-asset-cache.spec.ts	web/next.config.mjs
@@ -125,8 +137,8 @@ docs-passkeys-anchor.spec.ts	web/src/app/docs/**
 # too, so a change there stays unclaimed and keeps selecting the whole family.
 docs-guide-fold.spec.ts	web/src/app/docs/guides/**	web/src/components/GuideArticle.tsx	web/src/lib/guides.gen.ts	docs/guides/**
 
-# ---- the menu-checkout fixture spec: it SKIPS unless MENU_FIXTURE_URL is set,
-#      and its measurement is owned by `scripts/menu-fixture-e2e.sh` (the
-#      `menufixture` gate). Mapping it to its own runner keeps it selected by a
-#      change to that runner and never by an unrelated web change.
-menu-checkout-option-group.spec.ts	scripts/menu-fixture-e2e.sh	web/playwright.menufixture.config.ts
+# ---- NOT MAPPED HERE, ON PURPOSE: menu-checkout-option-group.spec.ts ----------
+# Its runner is the `menufixture` gate (scripts/menu-fixture-e2e.sh, which starts the
+# Go fixture and drives web/playwright.menufixture.config.ts). It is not in the e2e
+# family at all — see "SPECS OWNED BY ANOTHER GATE" above — so it has no row, and the
+# `menufixture` gate's own scope in scripts/preflight.sh is what a change to it selects.

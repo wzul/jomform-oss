@@ -53,6 +53,9 @@ type Deps struct {
 	// super-admin suppression tools (issue #601) error. Backs the /admin
 	// suppression section through the matching REST endpoints.
 	Suppressions *dbstore.SuppressionStore
+	// Dormancy is the read-only phase-1 dormancy report store (card t_94e5cca3).
+	// Nil → admin_dormancy_report errors. It owns no table.
+	Dormancy *dbstore.DormancyStore
 	// Issue #171: response-only form submissions (list_form_submissions tool).
 	// Nil → the tool errors.
 	Submissions *dbstore.SubmissionStore

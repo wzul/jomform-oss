@@ -3744,6 +3744,14 @@ run_browser_group
 # leaves no schema, listener or process behind. So the only guard that can see this
 # class now runs on every release instead of when a lane remembers.
 #
+# IT IS THAT SPEC'S ONLY OWNER (card t_440c9417, option B: one owner per test). The e2e
+# projects `testIgnore` the file — their `next start` cannot serve the fixture page —
+# so the e2e gates no longer enumerate it and can no longer report a skip they could
+# never turn into a pass. Setting MENU_FIXTURE_URL for those gates instead was rejected:
+# the browser gates run CONCURRENTLY below, and two of them driving one fixture server
+# is a flake generator. A diff that touches only that spec therefore selects NO e2e
+# spec (web/scripts/e2e-scope.mjs, which prints NOT RUN) and does select this gate.
+#
 # ORDER MATTERS: it runs immediately AFTER the e2e gates, which have just warmed the browser
 # cache. It binds an EPHEMERAL loopback port (:0) and its own `test_menufixture_fx_p<pid>`
 # schema, so it collides with neither the a11y/e2e server port claim nor the `test`

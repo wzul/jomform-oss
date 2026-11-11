@@ -75,7 +75,37 @@ export default defineConfig({
     // so each pattern must name the file it wants where the basename starts, not
     // anchor at the start of the string.
     { name: "feature-builder", use: { ...devices["Desktop Chrome"] }, testMatch: /\/builder-.*\.spec\.ts$/ },
-    { name: "feature-core", use: { ...devices["Desktop Chrome"] }, testMatch: /^(?!.*a11y)(?!.*\/builder-).*\.spec\.ts$/ },
+    // ONE OWNER PER TEST (option B, card t_440c9417): `menu-checkout-option-group.spec.ts`
+    // is NOT part of this family and no project here may enumerate it.
+    //
+    // It measures the menu checkout's option-group GEOMETRY against
+    // `api/cmd/menu-fixture`, a Go server that serves the real public handler. This
+    // config's `webServer` is `next start`, which cannot serve that page at all, and
+    // the spec needs MENU_FIXTURE_URL to know where the fixture listens. Its owner is
+    // the `menufixture` preflight gate: `scripts/menu-fixture-e2e.sh` starts the
+    // fixture and runs all three arms through `playwright.menufixture.config.ts`
+    // (measured 3 passed in 18.4s on 2026-11-09).
+    //
+    // Here it used to be enumerated by `feature-core` and then skip itself at file
+    // level ("MENU_FIXTURE_URL is unset"), so the e2e gates reported a skip they
+    // could never turn into a pass, and had the `menufixture` gate stopped running the
+    // file nothing in this suite would have noticed — one test, two owners, neither
+    // responsible. The coverage never lived here.
+    //
+    // SETTING MENU_FIXTURE_URL FOR THESE GATES WAS REJECTED (option C): the browser
+    // gates run CONCURRENTLY (`run_browser_group` in scripts/preflight.sh), and two of
+    // them driving one fixture server is a flake generator, not a second guard.
+    //
+    // The spec's own file-level skip STAYS. Run by hand without the fixture it still
+    // has to say why it will not measure anything; this testIgnore only decides who
+    // ENUMERATES it. `testIgnore` matches the absolute path (playwright docs,
+    // TestConfig.testIgnore), hence the unanchored tail rather than a `\/` prefix.
+    {
+      name: "feature-core",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /menu-checkout-option-group\.spec\.ts$/,
+      testMatch: /^(?!.*a11y)(?!.*\/builder-).*\.spec\.ts$/,
+    },
   ],
   webServer: {
     command: `npm run start -- -p ${PORT}`,

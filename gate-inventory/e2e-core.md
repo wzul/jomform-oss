@@ -11,11 +11,40 @@ file per gate" there).
 ## What it catches
 
 every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (the
-`a11y` gate) nor a `builder-*` spec (the `e2e-builder` gate) — playwright project
-`feature-core`, **320 tests in 62 files**: sales, chat, forms, form settings,
-settings/workspaces, products, media, templates, deliveries, activity, landing, login,
-session, profile, docs and the cross-page presentation specs. The figure grew by
-card `t_2b2da6a7`, whose `web/e2e/landing-header-mobile.spec.ts` is the 61st FILE and
+`a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
+gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
+`testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
+**323 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
+products, media, templates, deliveries, activity, landing, login, session, profile,
+docs and the cross-page presentation specs.
+
+The figure before that was **317 tests in 61 files**, which card `t_516bab9d` grew with
+`web/e2e/landing-usecases-mobile.spec.ts` — the 62nd FILE, 6 arms on the seven use-case
+cards of `/landing` at a real 390px viewport (isMobile/hasTouch/dpr 2): one arm per locale
+(en/ms/zh/ta/ar) asserting per card that it renders <= 55 words, a lead <= 20 words, four
+bullets of <= 5 words each, a height <= 460px, exactly one filled CTA and one guide link,
+no `Read the full … guide` sentence, and that the seven cards are within 10 words of each
+other; plus one arm on the block's one-action shape and the 390px no-pan. Measured with
+`cd web && ./node_modules/.bin/playwright test --project=feature-core --list`, which read
+**317 in 61** on this same tree before that spec existed, so the delta is exactly its 1
+file and 6 arms.
+
+THE SPEC THIS PROJECT DOES NOT OWN (card `t_440c9417`, option B: one owner per test).
+`web/e2e/menu-checkout-option-group.spec.ts` measures the menu checkout's option-group
+geometry against `api/cmd/menu-fixture`, a Go server this gate's `next start` cannot
+serve and which the spec finds through `MENU_FIXTURE_URL`. Its owner is the
+`menufixture` gate (`scripts/menu-fixture-e2e.sh` + `playwright.menufixture.config.ts`),
+which runs all 3 of its arms. Here it used to be enumerated by `feature-core` and then
+skip itself at file level ("MENU_FIXTURE_URL is unset"), so this gate reported a skip
+it could never turn into a pass — and had `menufixture` stopped running the file,
+nothing in this suite would have noticed. Measured on the tree that carries the change
+(`playwright test --project=feature-core --list`): **320 tests in 62 files** before,
+**317 in 61** after — exactly that file's 3 arms, and no other test moved. The spec's
+own file-level skip STAYS: run by hand without the fixture it still has to say why it
+measures nothing. What `testIgnore` decides is who ENUMERATES it.
+
+The figure before that was **320 tests in 62 files**, which grew by card
+`t_2b2da6a7`, whose `web/e2e/landing-header-mobile.spec.ts` is the 61st FILE and
 holds 5 arms on the landing page's header at a real phone viewport (390x844,
 isMobile/hasTouch/dpr 2): header height <= 72px with every control on one baseline,
 no visible control under 44px, exactly one filled primary and it is `/builder`, the
@@ -34,8 +63,8 @@ the NEWER figure on top of that, `web/e2e/docs-guide-fold.spec.ts` as the 62nd F
 one arm over all eight screenshot guides at 390x844 — each page's word count against
 700, the y-offset of its first step's heading against the 844px first screen, the
 computed `white-space` of its paragraphs and list items, and its lede sentence exactly
-once. The figure before it was **319 tests in 61 files**; what the arm holds is under
-History.
+once. That arm's 1 test is what separates the 319-in-61 figure from the 320-in-62 one;
+what it holds is under History.
 
 It runs CONCURRENTLY with `e2e-builder` and `a11y`, each on its own claimed port with
 its own `next start` (card `t_ec2aac42`; see `gate-inventory/e2e-builder.md` for the
@@ -53,6 +82,12 @@ therefore runs this gate SCOPED to the diff since the previous release tag:
   whose change makes that spec necessary (`builder-*.spec.ts <-
   web/src/app/builder/**`, `sales-*.spec.ts <- web/src/app/sales/**`, …), with `*`
   rows for areas shared by the whole family.
+- a spec owned by ANOTHER gate has NO row and selects nothing here: a diff that
+  touches only `web/e2e/menu-checkout-option-group.spec.ts` decides a subset of ZERO
+  and this gate prints NOT RUN. It must never be handed to playwright as a spec path,
+  because `feature-core` `testIgnore`s it and playwright would then run nothing while
+  the gate reported a pass (card `t_440c9417`; the declaration lives in the matcher's
+  `OTHER_GATE_SPECS` and is checked against the tree, in both directions).
 - `web/scripts/e2e-scope.mjs` is the MATCHER. Narrowing is only ever allowed on a
   POSITIVE attribution. A changed path the map does not claim, a spec with no row, a
   change to `playwright.config.ts` / `web/e2e/*` helpers / the map itself, an empty

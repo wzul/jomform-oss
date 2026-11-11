@@ -60,6 +60,15 @@ to the row's edge and off a 375px screen. Every guard in the tree was green:
 - and `web/e2e/menu-checkout-option-group.spec.ts` **skipped** inside the `e2e`
   gate, because it needs `MENU_FIXTURE_URL` and only this script sets it.
 
+SINCE CARD `t_440c9417` THIS GATE IS THAT SPEC'S ONLY OWNER. The e2e projects
+`testIgnore` it (`web/playwright.config.ts`: a `next start` cannot serve the fixture
+page), so it is no longer enumerated by `e2e-core` at all, the `e2e` gates stop
+reporting a skip they could never turn into a pass, and nothing has to re-explain the
+skip line. The spec's own file-level skip stays as the guard for a hand-run without
+the fixture. Option C — setting `MENU_FIXTURE_URL` inside the e2e gates — was rejected:
+the browser gates run CONCURRENTLY (`run_browser_group`) and two of them driving one
+fixture server is a flake generator.
+
 A flex row and an intrinsic control size are resolved by a layout engine, so a
 Go process cannot see this class at all. The script's header used to say "NOT A
 GATE" on cost grounds; MEASURED 2026-11-09: `3 passed (3.3s)`, real **0m18.4s**
