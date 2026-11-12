@@ -14,6 +14,15 @@
 //     web/src/lib/guides.gen.ts          the README text + the screenshot manifest
 //     web/public/guides/<slug>/<file>.png the screenshots, at the URL the page renders
 //
+//   …and guides.gen.ts is NOT the only derived file. `web/scripts/docsNav.mjs` reads that
+//   module and indexes every guide's BODY into `web/src/lib/docsSearch.gen.json` (the docs
+//   search payload), so a guide README edit has two generated outputs. That is why the npm
+//   scripts drive the docs generator together with this one — `npm run guides:sync` also runs
+//   `npm run docs:nav`, and `npm run guides:check` also runs `npm run docs:nav:check` — and why
+//   `--check`'s failure text names `npm run docs:nav`. Regenerating only this module reported
+//   GREEN here while the `web` gate stayed red on docsNav.test.ts ("the committed registry and
+//   search index are fresh"): the false green this pairing closes.
+//
 //   The generated module is COMMITTED, exactly like src/lib/apiExamples.gen.ts: the image
 //   build must not depend on a repo-root directory it does not copy. Drift between
 //   docs/guides and the generated output is caught by src/lib/guidesContent.test.ts on the
@@ -214,6 +223,9 @@ const generated = `// GENERATED FILE — do not edit. Run \`npm run guides:sync\
 // docs/ tree, so the guide text and its screenshot manifest are materialised at build-prep
 // time. src/lib/guidesContent.test.ts fails when this file drifts from docs/guides.
 //
+// src/lib/docsSearch.gen.json indexes the guide bodies OUT of this module (web/scripts/docsNav.mjs),
+// so it is derived from the same READMEs: \`npm run guides:sync\` regenerates both files.
+//
 // The screenshots themselves are copied to web/public/guides/<slug>/ (same script) — the
 // URLs the rendered <img> tags use.
 
@@ -294,7 +306,13 @@ if (CHECK) {
   }
   for (const s of stale) drift.push(`${s} is not generated from docs/guides any more`);
   if (drift.length > 0) {
-    console.error(`guides: out of date — run \`npm run guides:sync\`:\n  ${drift.join("\n  ")}`);
+    console.error(
+      `guides: out of date — run \`npm run guides:sync\`:\n  ${drift.join("\n  ")}\n\n` +
+        `  Both generated files come from docs/guides: src/lib/guides.gen.ts AND the docs search\n` +
+        `  index (src/lib/docsSearch.gen.json), which web/scripts/docsNav.mjs derives from the\n` +
+        `  guide bodies. \`npm run guides:sync\` runs that generator for you; if only the docs\n` +
+        `  pages changed, \`npm run docs:nav\` is the narrower command.`,
+    );
     process.exit(1);
   }
   console.log(`guides: ${guides.length} guide(s) in sync (${guides.map((g) => g.slug).join(", ")})`);

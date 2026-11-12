@@ -551,11 +551,23 @@ info "stamps: version=$VERSION commit=$COMMIT date=$BUILD_DATE"
 #   the eight above.
 if [ -x "$REPO_ROOT/deploy/release_selftest.sh" ] && [ "${SKIP_RELEASE_SELFTEST:-0}" != 1 ]; then
   selftest_log="${TMPDIR:-/tmp}/release-selftest.$$.log"
+  selftest_t0="$(date +%s)"
   if env -u VERSION_OVERRIDE -u SSH_HOST -u REMOTE_BUILD_HOST -u REQUIRE_SHIP \
          -u IMAGE -u CONTEXT -u DOCKERFILE -u SERVICE \
          -u SSH_USER -u SSH_PORT -u SSH_PATH \
          bash "$REPO_ROOT/deploy/release_selftest.sh" >"$selftest_log" 2>&1; then
-    info "release rules selftest: passed ($(grep -c '^  ok' "$selftest_log" 2>/dev/null || echo '?') checks)"
+    selftest_secs=$(( $(date +%s) - selftest_t0 ))
+    # THE DURATION ON THIS LINE IS PART OF THE CONTRACT, not decoration. This stage is
+    # the deploy's largest FIXED cost, it is CPU-bound, and what it costs is whatever
+    # the HOST gives it — measured 112.78s at load 47.7 on 6 cores against a nominal
+    # ~21s. deploy/biteproof_build_and_ship_gate.sh case A times the WHOLE deploy (a
+    # reuse cannot remove this stage) and asserts its ceiling NET of it, which it can
+    # only do from a number the run itself reports. Without that number the harness
+    # either uses an absolute ceiling that false-reds a correct tree on a busy host
+    # (card t_87d48a3e: 135s wall, every semantic assertion green) or guesses a load
+    # factor. A release log that names the stage's cost is also simply more useful:
+    # it makes "this release sat in its own selftest" visible instead of inferred.
+    info "release rules selftest: passed ($(grep -c '^  ok' "$selftest_log" 2>/dev/null || echo '?') checks in ${selftest_secs}s)"
     rm -f "$selftest_log"
   else
     tail -25 "$selftest_log" >&2 || true
@@ -640,7 +652,14 @@ else
   #
   # WHAT MAY BE SKIPPED, AND WHAT MAY NOT. Only a gate the record holds an
   # observed `pass` for, for THIS tree (working-tree sha, not commit) under THIS
-  # environment fingerprint and inside the TTL. The three decisions:
+  # environment fingerprint and inside the TTL. `PREFLIGHT_RERUN` is therefore not
+  # simply "the gates that failed": the consumer also puts `web` back on it when
+  # this tree has no `web/.next` and a browser gate is about to run, because `web`
+  # PRODUCES that build and a remembered pass is evidence about the BYTES, not about
+  # a build directory — `--ship-only` re-seeds a fresh tree with the same tree sha
+  # and carries only `web/node_modules` (card t_7ad889f7, `docs/PREFLIGHT-REUSE.md`
+  # rule 10). So a `web` in this list on a tree whose record says `web: pass` is
+  # correct, not a bug. The three decisions:
   #   * full    -> `--reuse-record` alone. Every gate in the inventory is a
   #                recorded pass on THESE bytes, so the runner re-reads the record
   #                BEFORE the pool and exits without taking a slot at all.

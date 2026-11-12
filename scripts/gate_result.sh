@@ -1120,3 +1120,82 @@ gr_gates_reused_seconds() {
   done
   printf '%s\n' "$total"
 }
+
+# ===========================================================================
+# BUILD ARTEFACTS — A REMEMBERED PASS IS NOT A REMEMBERED ARTEFACT
+# ===========================================================================
+# MEASURED DEFECT (card t_7ad889f7, found by the deploy lane on a release).
+# The record is keyed on the TREE SHA plus the environment fingerprint, and that
+# is the right key for a gate that only READS the tree. `web`
+# (`cd web && npm run build`) does not only read: it PRODUCES `web/.next`, and
+# the browser gates start `next start` against that directory — scripts/preflight.sh
+# says so at the a11y gate itself: "Needs web/build to have produced .next, hence
+# the order."
+#
+# `deploy/cut-release.sh --ship-only` re-seeds a FRESH release tree (a new temp
+# dir; only `web/node_modules` is carried across) whose tree sha is IDENTICAL to
+# the one the record describes. So on a recovery run the record was correct — the
+# bytes were gated — and the browser gates still had nothing to start:
+#
+#   gate [a11y]: FAIL (6s)      [WebServer] Error: Could not find a production
+#   gate [e2e-core]: FAIL (6s)  build in the '.next' directory
+#
+# A red with no product assertion behind it, two browser gates dead in six
+# seconds, and the ship aborted (exit 5). The only workaround was to move the
+# record aside and pay a ~45-minute re-gate.
+#
+# THE RULE, deliberately narrow: a remembered `pass` for a PRODUCER may not stand
+# in for running it when (a) the artefact it produces is not in the tree and
+# (b) this run will EXECUTE at least one gate that reads it. When no consumer
+# will run (a partial record whose only failure is `lint`, say) the rebuild buys
+# nothing and the pass stands — a freshly seeded release tree must not pay for a
+# build nothing is going to read.
+#
+# WHY IT LIVES HERE. Both call sites need the same answer, and this file is the
+# only one both of them source: the CONSUMER (scripts/preflight_reuse.sh, which
+# decides what a lane may skip) and the RUNNER (scripts/preflight.sh, which folds
+# recorded passes into SKIP — it must not fold the one whose output is missing,
+# or asking for that gate by name would still skip it). One table, one predicate,
+# so the two can never disagree about which gate produces what.
+#
+# THE TABLE IS THE HUMAN-MAINTAINED HALF, so `selftest` check 50 pins it: every
+# name here must be a gate `--list` advertises, `web` must still be a real build
+# call site, and each consumer must still start the app's own production server.
+# A rename that forgets this table is a silent return of the defect.
+GR_ARTEFACT_PRODUCER="web"
+# BUILD_ID, not the bare directory: `next start` refuses with "Could not find a
+# production build in the '.next' directory" exactly when .next/BUILD_ID is
+# absent (nextjs.org/docs/messages/production-start-no-build-id), so a half
+# written .next is not a build and must not be treated as one.
+GR_ARTEFACT_FILE="web/.next/BUILD_ID"
+GR_ARTEFACT_CONSUMERS="a11y e2e-builder e2e-core"
+
+# gr_gate_reads_web_build <gate> — 0 when <gate> starts the app's own production
+# server (`next start`) and therefore reads web/.next.
+gr_gate_reads_web_build() {
+  case " $GR_ARTEFACT_CONSUMERS " in
+    *" ${1:-} "*) return 0 ;;
+  esac
+  return 1
+}
+
+# gr_web_build_present <repo> — 0 when that tree holds a production web build.
+gr_web_build_present() {
+  [ -f "${1:-$PWD}/$GR_ARTEFACT_FILE" ]
+}
+
+# gr_producer_must_rerun <repo> <producer gate> <gates this run will EXECUTE...>
+# 0 when a recorded `pass` for <producer gate> must NOT be remembered: the
+# artefact is not in <repo> AND at least one gate that reads it is going to run.
+# Every other producer, and every other selection, keeps its pass.
+gr_producer_must_rerun() {
+  local repo="$1" producer="${2:-}"; shift 2
+  [ -n "$producer" ] || return 1
+  [ "$producer" = "$GR_ARTEFACT_PRODUCER" ] || return 1
+  gr_web_build_present "$repo" && return 1
+  local g
+  for g in "$@"; do
+    gr_gate_reads_web_build "$g" && return 0
+  done
+  return 1
+}

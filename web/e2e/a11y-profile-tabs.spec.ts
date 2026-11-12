@@ -262,7 +262,7 @@ const BUNDLE = {
   product_analytics: [],
 };
 
-async function stubAPI(page: Page) {
+async function stubAPI(page: Page, device?: Record<string, unknown> | null) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
@@ -282,9 +282,28 @@ async function stubAPI(page: Page) {
   await page.route(/(.*)\/api\/auth\/trust-status(\?.*)?$/, (r) => r.fulfill(json({ trusted: false })));
   // Registered last so it wins over the catch-all (Playwright resolves routes in
   // reverse registration order).
-  await page.route(/(.*)\/api\/auth\/connected-apps\/device\?user_code=.*$/, (r) =>
-    r.fulfill(json(DEVICE_CONSENT)),
-  );
+  //
+  // Card t_4f3ab16e: this stub now answers like the REAL handler instead of
+  // always returning the consent object. The code field is on the page even
+  // without `?user_code=`, so the spec has to be able to show BOTH answers a
+  // person can get: a known code resolves (any of its typed shapes, matching
+  // normalizeUserCode on the server) and an unknown one is a 404 that the page
+  // renders as "not valid or has expired". A stub that answered 200 to every
+  // string would make the invalid-state arm pass while the page was broken.
+  await page.route(/(.*)\/api\/auth\/connected-apps\/device(\?.*)?$/, (r) => {
+    if (r.request().method() !== "GET") return r.fulfill(json({}));
+    const code = (new URL(r.request().url()).searchParams.get("user_code") ?? "")
+      .replace(/[-\s]/g, "")
+      .toUpperCase();
+    if (code !== DEVICE_CONSENT.user_code.replace("-", "")) {
+      return r.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "this code is not valid" }),
+      });
+    }
+    return r.fulfill(json(device ?? DEVICE_CONSENT));
+  });
 }
 
 /**
@@ -425,9 +444,10 @@ async function openProfile(
   storage: Record<string, string>,
   expectTab: string,
   path = "/profile",
+  device?: Record<string, unknown> | null,
 ): Promise<TabState> {
   await freshState(page, storage);
-  await stubAPI(page);
+  await stubAPI(page, device);
   await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
   const response = await page.goto(path, { waitUntil: "domcontentloaded" });
   const status = response?.status() ?? 0;
@@ -698,6 +718,329 @@ test("the email link still opens the consent card after the page persisted Ident
   );
   expectContract(s, "en", "mcp", "en ?tab=mcp over stored identity");
   await expect(page.locator("#prof-device-code")).toHaveValue(DEVICE_CONSENT.user_code);
+});
+
+// ─── THE OTHER ENTRY POINT: A CODE THE PERSON TYPES (card t_4f3ab16e) ───────
+//
+// THE DEFECT. The RFC 8628 consent card — code input, Check button, Approve /
+// Deny — was rendered inside `{(deviceCode || deviceConsent) && …}`, and
+// `deviceCode` was seeded ONLY from `?user_code=`. So on /profile?tab=mcp with no
+// code in the URL there was NO field to type a code into: the verification
+// endpoint an agent's "enter this code at jomform.com" points at did not exist.
+// Wan measured it on prod v1.40.0 ("lepas user masukkan alamat e-mail, xda input
+// fields pun untuk merchant masukkan code"). The arms below are the entry point
+// that was missing; the two above are the email's link, which must keep working.
+//
+// WHY THE ASSERTIONS ARE THE DEFECT AND NOT THE IMPLEMENTATION: the field has to
+// be PRESENT with nothing in the URL (arm 1), a code typed in any of the shapes a
+// person produces has to RESOLVE (arm 2, which reads the request URL the page
+// actually sent), a code that is unknown has to SAY SO with a next step (arm 3),
+// a string that cannot be a code must not reach the network at all (arm 4), and
+// the four states the card can be in each need words on screen (arm 5). Remove
+// the guard around the card — the exact reversion this card is about — and arm 1
+// fails on `#prof-device-code` being absent.
+test("with NO code in the URL the MCP tab still offers the field, and a typed code opens the card (en)", async ({
+  page,
+}) => {
+  const s = await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "mcp", "/profile?tab=mcp");
+  expectContract(s, "en", "mcp", "en ?tab=mcp (typed-code entry point)");
+
+  const input = page.locator("#prof-device-code");
+  await expect(input, "the code field must exist with no ?user_code= in the URL").toBeVisible();
+  await expect(input, "the field must be empty when nothing was prefilled").toHaveValue("");
+
+  // The sentence that tells a person who arrived WITHOUT a link what this panel
+  // is for. Without it the panel is an unexplained input.
+  await expect(
+    page.getByText(DICT["prof.deviceEmptyHint"].en, { exact: true }),
+    "the empty state does not name the flow",
+  ).toBeVisible();
+
+  // Nothing is resolved yet, so there is nothing to approve.
+  await expect(
+    page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true }),
+    "an Approve button is on screen before any code was looked up",
+  ).toHaveCount(0);
+
+  // The accessibility contract the card asks for: a label (its accessible name),
+  // a one-time-code hint for the platform's autofill, and a text input mode.
+  await expect(
+    page.getByLabel(DICT["prof.deviceEnterCode"].en, { exact: true }),
+    "the code input has no accessible name",
+  ).toHaveCount(1);
+  expect(await input.getAttribute("autocomplete"), "autoComplete must be one-time-code").toBe(
+    "one-time-code",
+  );
+  expect(await input.getAttribute("inputmode"), "inputMode must be text").toBe("text");
+
+  // TYPE it the way a person will — lower case, no dash — and press Enter, which
+  // must submit the form the field lives in (no button click).
+  const lookups: string[] = [];
+  page.on("request", (r) => {
+    const u = r.url();
+    if (u.includes("/api/auth/connected-apps/device?")) lookups.push(u);
+  });
+  await input.fill("kx9mx5bs");
+  await input.press("Enter");
+
+  await expect(
+    page.getByText(DEVICE_CONSENT.client, { exact: false }).first(),
+    "typing a valid code and pressing Enter did not open the consent card",
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true }),
+    "the consent card is on screen but the Approve button is not",
+  ).toBeVisible();
+
+  // ONE lookup, and it carried the CANONICAL code: the lowercase, dashless input
+  // was normalised before it left the browser, which is what makes the server's
+  // hash find the row.
+  expect(lookups.length, `the page sent ${lookups.length} lookups, want exactly 1`).toBe(1);
+  expect(
+    new URL(lookups[0]).searchParams.get("user_code"),
+    "the lookup did not carry the canonical code",
+  ).toBe(DEVICE_CONSENT.user_code);
+});
+
+test("a code that is not valid says so and names the next step (en)", async ({ page }) => {
+  await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "mcp", "/profile?tab=mcp");
+  const input = page.locator("#prof-device-code");
+  await input.fill("ZZZZ-ZZZZ"); // a shape, but no such authorisation
+  await input.press("Enter");
+
+  await expect(
+    page.getByText(DICT["prof.deviceNotFound"].en, { exact: true }),
+    "an unknown code produced no message, or one that does not say what to do next",
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true }),
+    "an unknown code still offers an Approve button",
+  ).toHaveCount(0);
+});
+
+test("a string that cannot be a code is refused without asking the server (en)", async ({ page }) => {
+  await openProfile(page, "en", { jf_lang: "en", jf_workspace: "demo" }, "mcp", "/profile?tab=mcp");
+  const lookups: string[] = [];
+  page.on("request", (r) => {
+    const u = r.url();
+    if (u.includes("/api/auth/connected-apps/device?")) lookups.push(u);
+  });
+  const input = page.locator("#prof-device-code");
+  await input.fill("abc");
+  await input.press("Enter");
+
+  await expect(
+    page.getByText(DICT["prof.deviceNotFound"].en, { exact: true }),
+    "a 3-character string was not reported as an unusable code",
+  ).toBeVisible();
+  await page.waitForLoadState("domcontentloaded");
+  expect(lookups.length, "a string that cannot be a code still cost a round trip").toBe(0);
+});
+
+// The four states, in the words the card promises. Each is the same page with a
+// different answer from the lookup, so a state that renders no sentence is red
+// here rather than silently blank on the panel.
+for (const [state, key] of [
+  ["approved", "prof.deviceApproved"],
+  ["denied", "prof.deviceDenied"],
+  ["expired", "prof.deviceExpired"],
+] as const) {
+  test(`a ${state} code says so, in words, with no Approve button (en)`, async ({ page }) => {
+    await openProfile(
+      page,
+      "en",
+      { jf_lang: "en", jf_workspace: "demo" },
+      "mcp",
+      "/profile?tab=mcp&user_code=KX9M-X5BS",
+      { ...DEVICE_CONSENT, state },
+    );
+    await expect(
+      page.getByText(DICT[key].en, { exact: true }),
+      `a ${state} code renders no sentence — the reader is left with a code field and no answer`,
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true }),
+      `a ${state} code still offers an Approve button`,
+    ).toHaveCount(0);
+  });
+}
+
+// ─── THE LOOKUP IS ONE SETTLED ANSWER (cards t_3368be9e, t_762ada65) ────────
+//
+// THE DEFECT. /profile?tab=mcp could show a red "This code is not valid or has
+// expired" banner directly above a FULLY RENDERED consent card — client named,
+// scope, Approve / Deny. Both cannot be true at once. The page fires one lookup
+// for the `?user_code=` the email link carried (often the DEAD code from an
+// earlier attempt) and another for the code the person submits; responses were
+// not sequenced, so a slow 404 for the dead code settled LAST and painted its
+// error over the fresh card.
+//
+// The three arms below hold that request in the route handler and release it
+// after the fresh card is on screen, so the older request really does settle
+// last — the exact frame Wan photographed. Two further arms cover the shape the
+// bug needed: an answer and a problem must never be on screen together, and
+// clearing the field must drop the card as well as the error.
+const DEVICE_LOOKUP_URL = /(.*)\/api\/auth\/connected-apps\/device\?user_code=(.*)$/;
+
+/** The code the stub was asked about, in the SERVER's canonical spelling. */
+function lookupCodeOf(url: string): string {
+  return new URL(url).searchParams.get("user_code") ?? "";
+}
+
+/**
+ * /profile?tab=mcp with the device endpoint under this arm's control. Registered
+ * AFTER `stubAPI`'s stubs, which is what makes it win (Playwright resolves a
+ * matching route in reverse registration order), so an arm can hold one request
+ * open and count every lookup the page sends.
+ */
+async function openConsentPage(
+  page: Page,
+  path: string,
+  onLookup: (code: string, route: import("@playwright/test").Route) => Promise<void>,
+): Promise<string[]> {
+  const seen: string[] = [];
+  await freshState(page, { jf_lang: "en", jf_workspace: "demo" });
+  await stubAPI(page);
+  await page.route(DEVICE_LOOKUP_URL, async (route) => {
+    const code = lookupCodeOf(route.request().url());
+    seen.push(code);
+    await onLookup(code, route);
+  });
+  await page.setViewportSize({ width: PHONE_WIDTH, height: 800 });
+  const response = await page.goto(path, { waitUntil: "domcontentloaded" });
+  expect(
+    response?.status() ?? 0,
+    `the consent page answered HTTP ${response?.status()} — nothing was measured`,
+  ).toBe(200);
+  // The field exists only once the client component has hydrated, so this wait is
+  // the hydration witness, not a sleep.
+  await expect(page.locator("#prof-device-code")).toBeVisible();
+  return seen;
+}
+
+const approveButton = (page: Page) =>
+  page.getByRole("button", { name: DICT["prof.deviceApprove"].en, exact: true });
+const expiredCopy = (page: Page) =>
+  page.getByText(DICT["prof.deviceNotFound"].en, { exact: false }).first();
+const checkButton = (page: Page) =>
+  page.getByRole("button", { name: DICT["prof.deviceCheck"].en, exact: true });
+
+test("RACE: a 404 for the dead code released AFTER a valid card cannot paint the expired banner (en)", async ({
+  page,
+}) => {
+  const dead = "ZZZZ-ZZZZ";
+  const valid = DEVICE_CONSENT.user_code;
+  let releaseDead: () => void = () => {};
+  const deadHeld = new Promise<void>((resolve) => {
+    releaseDead = resolve;
+  });
+  let deadAnswered = false;
+
+  const seen = await openConsentPage(
+    page,
+    `/profile?tab=mcp&user_code=${dead}`,
+    async (code, route) => {
+      if (code === dead) {
+        await deadHeld; // held in the ROUTE until the fresh card is on screen
+        deadAnswered = true;
+        await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+        return;
+      }
+      if (code === valid) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(DEVICE_CONSENT),
+        });
+        return;
+      }
+      await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    },
+  );
+
+  // The dead code's lookup is in flight (held). Wait until it has been SENT before
+  // supplying the fresh one.
+  await expect
+    .poll(() => seen.length, { message: "the dead code from the link was never looked up" })
+    .toBe(1);
+
+  // The person supplies the code from the fresh mail and submits it.
+  const input = page.locator("#prof-device-code");
+  await input.fill(valid);
+  await input.press("Enter");
+  await expect(approveButton(page), "the fresh code did not render the consent card").toBeVisible();
+  await expect(page.getByText(DEVICE_CONSENT.client, { exact: false }).first()).toBeVisible();
+
+  // Release the dead lookup's 404 — the older request settles LAST, as it did in
+  // the screenshot.
+  releaseDead();
+  await expect
+    .poll(() => deadAnswered, { message: "the dead code's lookup never settled — this arm held nothing" })
+    .toBe(true);
+  await page.waitForTimeout(300); // let React flush whatever the response tried to set
+
+  await expect(
+    expiredCopy(page),
+    `a superseded 404 painted "${DICT["prof.deviceNotFound"].en}" on top of a valid consent card`,
+  ).toHaveCount(0);
+  await expect(approveButton(page), "the valid card was torn down by the stale response").toBeVisible();
+  expect(seen.length, `expected exactly two lookups, got ${JSON.stringify(seen)}`).toBe(2);
+});
+
+test("clearing the field drops the VALID card as well as the error (en)", async ({ page }) => {
+  await openConsentPage(page, `/profile?tab=mcp&user_code=${DEVICE_CONSENT.user_code}`, async (_code, route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(DEVICE_CONSENT),
+    });
+  });
+  const input = page.locator("#prof-device-code");
+  await expect(approveButton(page), "the linked code did not render the consent card").toBeVisible();
+  await expect(page.getByText(DICT["prof.deviceYourCode"].en, { exact: false }).first()).toBeVisible();
+
+  await input.fill("");
+  await expect(approveButton(page), "the consent card survived the code it was about").toHaveCount(0);
+  await expect(expiredCopy(page), "clearing the field rendered an error").toHaveCount(0);
+  await expect(input).toHaveValue("");
+});
+
+test("a code that does not resolve clears the card it replaced and shows no card beside the error (en)", async ({
+  page,
+}) => {
+  const valid = DEVICE_CONSENT.user_code;
+  const lookups: string[] = [];
+  await openConsentPage(page, `/profile?tab=mcp&user_code=${valid}`, async (code, route) => {
+    lookups.push(code);
+    if (code === valid) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(DEVICE_CONSENT),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+  const input = page.locator("#prof-device-code");
+  await expect(approveButton(page)).toBeVisible();
+
+  // Right shape, unknown to the server: the error state, and no card beside it.
+  await input.fill("ZZZZ-ZZZZ");
+  await input.press("Enter");
+  await expect(expiredCopy(page), "an unknown code did not report the error state").toBeVisible();
+  await expect(approveButton(page), "the old card survived a code that no longer resolves").toHaveCount(0);
+
+  // An incomplete code is answered without a round trip: the server cannot know a
+  // string that is not the right shape, and it must not cost a request either.
+  const before = lookups.length;
+  await input.fill("KX9M");
+  await checkButton(page).click();
+  await expect(expiredCopy(page), "an incomplete code was not refused").toBeVisible();
+  expect(
+    lookups.length - before,
+    `an incomplete code still cost a round trip (${JSON.stringify(lookups)})`,
+  ).toBe(0);
 });
 
 test("a stored value that is NOT a tab falls back to a rendered tab (en)", async ({ page }) => {

@@ -18,8 +18,13 @@
 #   case A  A tree WITH a full-green record does NOT join the pool. Driven
 #           against the REAL `scripts/preflight.sh`, the REAL consumer and a REAL
 #           record: the runner takes its pre-pool exit, so no gate-pool slot file
-#           is created, 0 gates are run, and the wall clock is seconds — not the
-#           ~15 min the same bytes cost when the record is ignored.
+#           is created, 0 gates are run, and the wall clock beyond the deploy's own
+#           FIXED overhead is seconds — not the ~15 min the same bytes cost when
+#           the record is ignored. (The window is the whole deploy, which includes
+#           `deploy/release_selftest.sh`; that stage is load-sensitive and is
+#           SUBTRACTED, from the duration the run itself reports. See the ceiling
+#           comment below — an absolute ceiling on the whole window false-redded a
+#           correct tree at host load 47.7, card t_87d48a3e.)
 #   case B  A tree with NO record still runs the FULL gate. The argv handed to
 #           `scripts/preflight.sh` carries NO reuse flag, and build-and-ship
 #           labels the run as a full run (never as a reuse).
@@ -74,13 +79,30 @@ BUILD_SHIP="deploy/build-and-ship.sh"
 REUSE="scripts/preflight_reuse.sh"
 RESULT="scripts/gate_result.sh"
 
-# Ceiling for case A. A pre-pool reuse exit is seconds; the full gate it replaces
-# measured 910s. Anything between is a regression that must be reported, not
-# waited out. The shipped build-and-ship.sh runs deploy/release_selftest.sh before
-# the gate on a release-tagged script (measured 21s on this host), so the wall
-# clock ceiling allows for that and is still an order of magnitude below the gate.
-TIMEOUT=240
-CASE_A_MAX_SECONDS=120
+# Ceiling for case A's REUSE EXIT, measured NET of the deploy's own fixed overhead.
+#
+# A pre-pool reuse exit is seconds; the full gate it replaces measured 910s.
+# Anything between is a regression that must be reported, not waited out — but the
+# timed window is the WHOLE deploy, and one stage in it is not the gate at all:
+# `deploy/build-and-ship.sh` runs `deploy/release_selftest.sh` before it reads the
+# record. That stage is hermetic, but it is ~21s of CPU nominal and it costs
+# whatever the HOST gives it, so on a contended host it alone can fill any fixed
+# ceiling — measured 112.78s at load 47.7 on 6 cores, while every semantic
+# assertion of this harness still passed. The old absolute ceiling of 120s on the
+# whole window therefore false-redded a CORRECT tree and named the reuse plumbing
+# (card t_87d48a3e: 135s wall). The ceiling is now asserted on the wall clock
+# MINUS that stage's duration as reported by the same run, so the subtraction is
+# exact — same run, same host, same load — instead of a load estimate, and the
+# assertion still bites: a gate that runs in full adds a measured 910s, i.e. two
+# orders of magnitude over the ceiling.
+# Overridable ONLY so the instrument can be shown to bite (see the assertion):
+# raising it to get a green run is the false green that card removed.
+CASE_A_MAX_SECONDS="${CASE_A_MAX_SECONDS:-120}"
+# TIMEOUT is only a hang guard (the discriminating assertion is the ceiling above):
+# it must sit ABOVE any plausible correct run on a busy host (measured 135s at load
+# 47.7, so 600s is ~4x headroom) and BELOW a full gate (910s measured), so a
+# plumbing that silently runs the real gate still fails instead of eating 15 min.
+TIMEOUT=600
 # The tag case A puts on its throwaway clone's HEAD. It IS the version the shipped
 # script resolves (deploy/require-release-tag.sh reads the tag on HEAD), so the case
 # passes NO version argument: an override may only RESTATE a tag, and that rule —
@@ -375,10 +397,50 @@ else
       else
         bad "case A — the deploy did not stamp version $CASE_A_TAG from the tag, so the release-tag resolution never reached the build"; show "$CA/out.log"
       fi
-      if [ "$a_secs" -lt "$CASE_A_MAX_SECONDS" ]; then
-        ok "case A — WALL CLOCK ${a_secs}s (the same bytes re-gated in full cost a measured 910s on this host): the record removed ~$((910 - a_secs))s of serialised gate"
+      # ---- WHAT THE CLOCK MAY ASSERT, AND WHAT IT MAY NOT -------------------
+      # The window above is the WHOLE deploy, and one stage in it is NOT the gate:
+      # build-and-ship runs `deploy/release_selftest.sh` BEFORE it reads the record,
+      # and a reuse cannot remove that stage. It is CPU-bound, so its cost is
+      # whatever the HOST gives it — measured 112.78s at load 47.7 on 6 cores
+      # against a nominal ~21s, i.e. it alone can fill any fixed ceiling, while
+      # every semantic assertion above stayed green. Asserting the absolute wall
+      # clock therefore false-redded a CORRECT tree and blamed the reuse plumbing
+      # (card t_87d48a3e: 135s wall, this exact FAIL line). So the ceiling is
+      # asserted on the time BEYOND that stage, taking the duration from the RUN
+      # ITSELF (`release rules selftest: passed (N checks in Ms)`, build-and-ship
+      # §3): same run, same host, same load, so the subtraction is exact instead of
+      # a load estimate, and a full gate regression still adds a measured 910s.
+      #
+      # FAIL-SAFE DIRECTIONS, stated: (a) the stage line present but WITHOUT a
+      # duration is a SETUP REFUSAL, not a quiet zero — a zero would silently turn
+      # this back into the absolute ceiling and re-introduce the false red; (b) the
+      # stage line absent entirely means the stage did not run in this tree
+      # (SKIP_RELEASE_SELFTEST=1 or no exec bit), so the whole wall clock is net.
+      SELFTEST_SECS=""
+      A_NET=""
+      if grep -q 'release rules selftest: passed' "$CA/out.log" 2>/dev/null; then
+        SELFTEST_SECS="$(sed -n 's/.*release rules selftest: passed (.* in \([0-9]\{1,\}\)s)$/\1/p' "$CA/out.log" | tail -n1)"
+        if [ -n "$SELFTEST_SECS" ]; then
+          # `10#` because bash reads a leading-zero constant as OCTAL, and a
+          # leading-zero duration (from a future format change, or a hand-edited
+          # log) would make this expansion FAIL — leaving A_NET unset and the
+          # assertion below silently skipped, which is a false green. With an
+          # explicit base the arithmetic cannot fail on a digit string.
+          A_NET=$(( 10#$a_secs - 10#$SELFTEST_SECS ))
+          [ "$A_NET" -ge 0 ] || A_NET=0
+        else
+          bad "case A — the deploy reported its release-selftest stage WITHOUT a duration, so the reuse exit cannot be timed net of it (that stage is what host contention inflates, and it is the whole reason the absolute ceiling false-redded). Restore the duration to build-and-ship.sh §3. (setup refusal, NOT a bite.)"
+        fi
       else
-        bad "case A — WALL CLOCK ${a_secs}s is NOT what a pre-pool reuse exit takes (ceiling ${CASE_A_MAX_SECONDS}s) — the record did not remove the gate"
+        SELFTEST_SECS=0
+        A_NET="$a_secs"
+      fi
+      if [ -n "$A_NET" ]; then
+        if [ "$A_NET" -lt "$CASE_A_MAX_SECONDS" ]; then
+          ok "case A — REUSE EXIT ${A_NET}s net of the deploy's own fixed overhead (wall clock ${a_secs}s − release-selftest ${SELFTEST_SECS}s, measured BY THAT RUN, so host contention cancels out; the same bytes re-gated in full cost a measured 910s on this host): the record removed the gate, and the clock that is left is the deploy's own work"
+        else
+          bad "case A — REUSE EXIT ${A_NET}s net of fixed overhead is NOT what a pre-pool reuse exit takes (ceiling ${CASE_A_MAX_SECONDS}s; wall clock ${a_secs}s − release-selftest ${SELFTEST_SECS}s) — the record did not remove the gate"
+        fi
       fi
     else
       bad "case A — could not write the REAL record for tree $GR_TREE_SHORT into $REC_DIR, so this case cannot run"

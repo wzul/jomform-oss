@@ -25,6 +25,20 @@
 #               exact bytes adds cost, not information. The failed gates are
 #               re-run. A red can never come out green — the failed gates are in
 #               PREFLIGHT_RERUN, not in PREFLIGHT_SKIP.
+#
+#               ONE EXCEPTION, and it is about ARTEFACTS, not about bytes (card
+#               t_7ad889f7): `web` is a PRODUCER (`cd web && npm run build`
+#               creates web/.next) and the browser gates start `next start`
+#               against that directory. A record vouches for a GATE RESULT on
+#               these bytes, which is not the same thing as the build directory
+#               being present — deploy/cut-release.sh --ship-only re-seeds a
+#               fresh release tree with the SAME tree sha and no .next. So a
+#               remembered `web` pass is moved to PREFLIGHT_RERUN when the tree
+#               has no web/.next/BUILD_ID AND this pass will execute a gate that
+#               reads it, and the evidence line says so. When no consumer will
+#               run, the pass stands and nothing is rebuilt. The rule is
+#               `gr_producer_must_rerun` in scripts/gate_result.sh, shared with
+#               the runner so the two can never disagree.
 #   * none    — no usable record. Exit 1, and the caller gates normally.
 #
 # USAGE
@@ -253,9 +267,54 @@ preflight_reuse_decision() {
   # an error message: a message that changes wording must not be able to silently
   # widen what may be skipped.
   if gr_record_usable "$tree" 2>/dev/null; then
-    local g passes=() reruns=()
+    local g passes=() reruns=() _will_exec=() _rebuild="" _force_rebuild=0
     for g in "${gates[@]}"; do
-      if [ "$(gr_gate_status "$file" "$g")" = "pass" ]; then passes+=("$g"); else reruns+=("$g"); fi
+      if [ "$(gr_gate_status "$file" "$g")" = "pass" ]; then passes+=("$g"); else _will_exec+=("$g"); fi
+    done
+    # ---- A REMEMBERED PRODUCER IS NOT A REMEMBERED ARTEFACT (card t_7ad889f7) --
+    # The record is keyed on the TREE plus the environment key, which is the right
+    # key for a gate that only READS. `web` also PRODUCES `web/.next`, and the
+    # browser gates (`a11y`, `e2e-builder`, `e2e-core`) start `next start` against
+    # it. deploy/cut-release.sh --ship-only re-seeds a FRESH release tree with the
+    # SAME tree sha and only `web/node_modules` carried across, so a remembered
+    # `web` pass left both browser gates red in six seconds with
+    # "[WebServer] Error: Could not find a production build in the '.next'
+    # directory" — no product assertion involved, and the ship aborted.
+    #
+    # So when the tree has no build and this pass is going to EXECUTE a gate that
+    # reads one, `web` goes back to PREFLIGHT_RERUN and the caller rebuilds. When
+    # no consumer will run, the pass stands: the rebuild would buy nothing.
+    # The rule itself lives in scripts/gate_result.sh (gr_producer_must_rerun),
+    # because the RUNNER applies the same one when it folds recorded passes into
+    # SKIP — two answers to this question is how the two lanes drift apart.
+    # The producer must also be part of THIS run's gate set: if the caller asked for
+    # a narrower set that excludes it, the consumer cannot fix the argv, and the
+    # runner's own net refuses the run up front naming the artefact (rather than
+    # handing back a decision that silently leaves the browser gates without a
+    # build). Saying "web is not remembered" about a gate nobody selected would be
+    # a claim about a run that is not happening.
+    _has_producer=0
+    case " ${gates[*]} " in *" $GR_ARTEFACT_PRODUCER "*) _has_producer=1 ;; esac
+    if [ "$_has_producer" = 1 ] && [ "${#passes[@]}" -gt 0 ] && [ "${#_will_exec[@]}" -gt 0 ] && \
+       gr_producer_must_rerun "$repo" "$GR_ARTEFACT_PRODUCER" "${_will_exec[@]}"; then
+      _force_rebuild=1
+      _rebuild="$GR_ARTEFACT_PRODUCER (this run executes ${_will_exec[*]}, which reads $GR_ARTEFACT_FILE, and the tree has none)"
+    fi
+    # THE TWO LISTS ARE ALWAYS BUILT HERE, from the record and `_force_rebuild` —
+    # never incrementally in one branch. A first attempt filled `reruns` only inside
+    # the rebuild branch, so every OTHER partial decision came back with an EMPTY
+    # PREFLIGHT_RERUN: the failed gates were named nowhere, and a caller reading the
+    # decision would have been told there was nothing left to run. Pinned by
+    # `selftest` check 52 legs (b)/(c), which are exactly the shapes that skip the
+    # branch.
+    passes=(); reruns=()
+    for g in "${gates[@]}"; do
+      if [ "$(gr_gate_status "$file" "$g")" = "pass" ] && \
+         ! { [ "$_force_rebuild" = 1 ] && [ "$g" = "$GR_ARTEFACT_PRODUCER" ]; }; then
+        passes+=("$g")
+      else
+        reruns+=("$g")
+      fi
     done
     if [ "${#passes[@]}" -gt 0 ]; then
       PREFLIGHT_DECISION="partial"
@@ -263,6 +322,10 @@ preflight_reuse_decision() {
       PREFLIGHT_RERUN="$(printf '%s,' "${reruns[@]}")"; PREFLIGHT_RERUN="${PREFLIGHT_RERUN%,}"
       PREFLIGHT_REMEMBERED_SECONDS="$(gr_gates_reused_seconds "$file" "${passes[@]}")"
       PREFLIGHT_EVIDENCE="REUSED RECORD (partial: ${#passes[@]} remembered pass, ${#reruns[@]} re-run): tree ${tree:0:7} finished $(gr_read_field "$file" finished_at) — remembered ${PREFLIGHT_REMEMBERED_SECONDS}s [$reason]"
+      # The rebuild is the one thing a reader must not have to infer from the
+      # rerun list: it is the difference between "the record's pass was reused"
+      # and "the record's pass was NOT reused because its OUTPUT is not here".
+      [ -z "$_rebuild" ] || PREFLIGHT_EVIDENCE="$PREFLIGHT_EVIDENCE — NOT remembering $_rebuild"
       local led=0
       gr_ledger "$tree" partial "$PREFLIGHT_REMEMBERED_SECONDS" "$PREFLIGHT_SKIP" || led=$?
       [ "$led" -eq 0 ] || echo "preflight_reuse: WARNING — could not append to the reuse ledger (rc=$led); the measured saving under-counts." >&2

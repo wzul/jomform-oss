@@ -2,7 +2,7 @@
 
 // Profile page — user identity & security (name, email, password, 2FA, passkeys),
 // organised into Identity / Security / Passkeys tabs.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { Shell } from "../../components/Shell";
@@ -15,6 +15,20 @@ import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 import { resolveProfileTab, type ProfileTab } from "../../lib/profileTab";
+import { normalizeDeviceCode } from "../../lib/deviceCode";
+import {
+  DEVICE_IDLE,
+  beginLookup,
+  clearedDevice,
+  checkingDevice,
+  deviceErrorKey,
+  deviceLookupOf,
+  newLookupSequence,
+  settleLookup,
+  type DeviceConsent,
+  type DeviceState,
+  type LookupOutcome,
+} from "../../lib/deviceConsent";
 import {
   defaultDeviceScope,
   deviceDecisionBody,
@@ -70,23 +84,10 @@ type ConnectedAppRow = {
   access_expires_at?: string;
 };
 
-// The RFC 8628 consent card the device-flow email links to.
-type DeviceConsent = {
-  user_code: string;
-  client_id: string;
-  client: string;
-  /** What the CLIENT asked for in POST /oauth/device_authorization. */
-  scopes: string[];
-  /**
-   * The access levels this deployment can issue (oauthmeta.ScopesSupported()),
-   * one radio each. Absent from an API older than card t_cf45b84c, in which
-   * case the card falls back to both — see lib/deviceScopeChoice.ts.
-   */
-  choices?: string[];
-  scope_prose: string;
-  expires_at: string;
-  state: "pending" | "approved" | "denied" | "expired" | "used";
-};
+// The RFC 8628 consent card the device-flow email links to. The payload type and
+// the whole lookup rule — the one settled answer, the request sequence, the
+// problem key — live in lib/deviceConsent.ts with the tests; this page only
+// renders them (cards t_9a6cc85f, t_4f3ab16e, t_cf45b84c, t_762ada65).
 
 // The tab ids live in lib/profileTab.ts with the arrival rule; this literal is
 // the strip's own order and is pinned equal to PROFILE_TABS by
@@ -197,7 +198,24 @@ export default function ProfilePage() {
   const [newGrant, setNewGrant] = useState<{ scope: string; access: string; refresh: string } | null>(null);
   const [deviceCode, setDeviceCode] = useState("");
   const [deviceBusy, setDeviceBusy] = useState(false);
-  const [deviceConsent, setDeviceConsent] = useState<DeviceConsent | null>(null);
+  // Card t_762ada65: the lookup's answer is ONE value (lib/deviceConsent.ts). Two
+  // independent pieces of state — a consent and an error — is what let a slow 404
+  // for the code the email link carried clear a fresher card and paint "this code
+  // is not valid or has expired" over it, with Approve/Deny still on screen.
+  const [device, setDevice] = useState<DeviceState>(DEVICE_IDLE);
+  const deviceConsent = device.consent;
+  // The tri-state the panel renders from, DERIVED so there is no second value to
+  // keep in step with the answer.
+  const deviceLookup = deviceLookupOf(device);
+  // The problem's sentence, resolved at render (a key, not prose captured when the
+  // request settled) and gated on it still being about the code in the field: a
+  // message may never outlive the code it referred to.
+  const deviceErrKey = deviceErrorKey(device.problem);
+  const deviceErr =
+    deviceErrKey && device.code === normalizeDeviceCode(deviceCode) ? t(deviceErrKey) : "";
+  // Monotonic request id: every lookup claims one, and a response whose id is no
+  // longer current is ignored outright (see settleLookup).
+  const deviceSeq = useRef(newLookupSequence());
   // Card t_cf45b84c: the access level the person picked on the consent card.
   // Seeded from the client's REQUESTED scope by checkDevice below, not by this
   // initial value — the card is not rendered until a consent exists, and
@@ -358,44 +376,83 @@ export default function ProfilePage() {
     load();
   }
 
-  // The device-flow email links here with ?user_code=…, so the card opens already
-  // filled in. A code typed by hand follows the same path.
+  // Card t_4f3ab16e: the device code is TYPED as well as followed from a link.
+  // `normalizeDeviceCode` accepts every shape a person produces ("kx9mx5bs",
+  // " KX9M-X5BS ", "KX9MX5BS") and the API re-normalises before it hashes
+  // (api/internal/httpapi/oauth_device.go normalizeUserCode), so the two halves
+  // agree on what the code is. A string that cannot be a code never leaves the
+  // browser; anything else is submitted, because only the server knows whether it
+  // is expired, denied or simply unknown.
+  //
+  // Card t_762ada65: every lookup CLAIMS AN ID and applies only through
+  // `settleLookup`, so two lookups in flight (the email's code and the typed one)
+  // cannot both paint — the slower one settles into nothing. Without the id guard
+  // this function is exactly the defect: a held 404 for the dead code released
+  // after the fresh card rendered used to clear the card and paint the error on
+  // top of it.
   const checkDevice = useCallback(
     async (raw: string) => {
-      const code = raw.trim();
-      if (!code) return;
+      const id = beginLookup(deviceSeq.current);
+      const code = normalizeDeviceCode(raw);
+      if (!code) {
+        // Not a code at all: answered without a round trip. Still a settled
+        // answer at this id, so it supersedes anything already in flight.
+        setDevice(settleLookup(deviceSeq.current, id, "", { failed: true }) ?? DEVICE_IDLE);
+        return;
+      }
+      // The previous answer was about a different code, so it is not kept on
+      // screen while this one is in flight.
+      setDevice(checkingDevice());
+      let outcome: LookupOutcome;
       try {
         const r = await fetch(
           `/api/auth/connected-apps/device?user_code=${encodeURIComponent(code)}`,
         );
         if (!r.ok) throw new Error(String(r.status));
-        const d = (await r.json()) as DeviceConsent;
-        setDeviceConsent(d);
+        outcome = { consent: (await r.json()) as DeviceConsent };
+      } catch {
+        outcome = { failed: true };
+      }
+      const next = settleLookup(deviceSeq.current, id, code, outcome);
+      // Superseded: touches neither half of the answer, and neither the scope
+      // picker nor the page-level banner.
+      if (!next) return;
+      setDevice(next);
+      if (next.consent) {
         // Card t_cf45b84c: the card opens on WHAT THE CLIENT ASKED FOR, never
         // silently read-only. Resolved per consent, so checking a second code
         // does not carry the previous card's choice over.
-        setDeviceScope(defaultDeviceScope(d.scopes));
+        setDeviceScope(defaultDeviceScope(next.consent.scopes));
         setErr("");
-      } catch {
-        setDeviceConsent(null);
-        setErr(t("prof.deviceNotFound"));
       }
     },
-    [t],
+    [],
   );
 
+  // ENTRY POINT 1 — the link. The consent email (and the CLI's printed line)
+  // carries `?user_code=…`; it fills the field and resolves ONCE. This is also
+  // why the lookup is no longer driven by `useEffect(deviceCode)`: a typed code
+  // must not fire a request per keystroke.
+  const seededDeviceCode = useRef(false);
   useEffect(() => {
+    if (seededDeviceCode.current) return;
+    seededDeviceCode.current = true;
+    let uc = "";
     try {
-      const uc = new URLSearchParams(window.location.search).get("user_code");
-      if (uc) setDeviceCode(uc);
+      uc = new URLSearchParams(window.location.search).get("user_code") ?? "";
     } catch {
       // no window (SSR) — nothing to prefill
     }
-  }, []);
+    if (!uc) return;
+    setDeviceCode(uc);
+    void checkDevice(uc);
+  }, [checkDevice]);
 
-  useEffect(() => {
-    if (deviceCode) void checkDevice(deviceCode);
-  }, [deviceCode, checkDevice]);
+  // ENTRY POINT 2 — the person types the code the harness showed them.
+  function submitDeviceCode(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    void checkDevice(deviceCode);
+  }
 
   async function decideDevice(decision: "approve" | "deny") {
     setDeviceBusy(true); setMsg(""); setErr("");
@@ -403,10 +460,19 @@ export default function ProfilePage() {
       const r = await fetch("/api/auth/connected-apps/device", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Card t_cf45b84c: the radio the person picked is sent as `scope`, so
-        // the credential the harness picks up is exactly that. Omitted on deny
-        // (there is nothing to grant) via lib/deviceScopeChoice.ts.
-        body: JSON.stringify(deviceDecisionBody(deviceCode, decision, deviceScope)),
+        // The code of the row ON SCREEN, never the raw field: the row is keyed on
+        // the hash of the canonical form, and the field can be edited after a
+        // lookup — approving must act on the authorisation the card describes.
+        // Card t_cf45b84c: the radio the person picked rides along as `scope`,
+        // so the credential the harness picks up is exactly that. Omitted on
+        // deny (there is nothing to grant) via lib/deviceScopeChoice.ts.
+        body: JSON.stringify(
+          deviceDecisionBody(
+            deviceConsent?.user_code ?? normalizeDeviceCode(deviceCode),
+            decision,
+            deviceScope,
+          ),
+        ),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
@@ -1143,40 +1209,86 @@ export default function ProfilePage() {
               </a>
             </h2>
 
-            {/* Card t_9a6cc85f: the RFC 8628 consent card. The device-flow email
-                links here with ?user_code=…, so a person who just asked an AI
-                harness to connect lands on a page that names the client, what it
-                will be allowed to do, and when the code expires — then approves
-                or denies. */}
-            {(deviceCode || deviceConsent) && (
-              <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
-                <h3 className="text-sm font-semibold">{t("prof.deviceTitle")}</h3>
-                <p className="mt-1 text-xs text-slate-500">{t("prof.deviceHelp")}</p>
-                <div className="mt-3 flex flex-wrap items-end gap-2">
-                  <label htmlFor="prof-device-code" className="text-xs font-medium text-slate-500">
-                    {t("prof.deviceEnterCode")}
-                  </label>
-                  <input
-                    id="prof-device-code"
-                    value={deviceCode}
-                    onChange={(e) => setDeviceCode(e.target.value)}
-                    autoComplete="one-time-code"
-                    spellCheck={false}
-                    className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 font-mono text-sm tracking-widest"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void checkDevice(deviceCode)}
-                    className="jf-btn-ghost"
-                  >
-                    {t("prof.deviceCheck")}
-                  </button>
-                </div>
+            {/* Card t_9a6cc85f built the RFC 8628 consent card; card t_4f3ab16e
+                made it the VERIFICATION ENDPOINT. Before that the whole card —
+                code input included — lived behind `(deviceCode ||
+                deviceConsent)`, and `deviceCode` was seeded ONLY from
+                `?user_code=`, so a person whose harness printed a code had
+                nowhere to type it: the field they were told to fill in did not
+                exist on the page. The card now renders whenever the MCP tab is
+                open, the code field is always present, and the consent details
+                (client, scopes, expiry, Approve/Deny) still appear only after a
+                lookup resolves. Two entry points, one card: the email/CLI link
+                (which prefills and resolves immediately) and the typed code. */}
+            <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
+              <h3 className="text-sm font-semibold">{t("prof.deviceTitle")}</h3>
+              <p id="prof-device-help" className="mt-1 text-xs text-slate-500">
+                {deviceConsent ? t("prof.deviceHelp") : t("prof.deviceEmptyHint")}
+              </p>
+              <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={submitDeviceCode}>
+                <label htmlFor="prof-device-code" className="text-xs font-medium text-slate-500">
+                  {t("prof.deviceEnterCode")}
+                </label>
+                <input
+                  id="prof-device-code"
+                  value={deviceCode}
+                  onChange={(e) => {
+                    setDeviceCode(e.target.value);
+                    // Editing the field invalidates the whole last answer — the
+                    // card AND the problem — and strands any lookup already in
+                    // flight for the code that was there a keystroke ago. A "not
+                    // valid" left under a corrected code reads as if the new one
+                    // had already been refused, and a card for the old code is a
+                    // claim about a code the field no longer holds.
+                    beginLookup(deviceSeq.current);
+                    setDevice(clearedDevice());
+                  }}
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  spellCheck={false}
+                  autoCapitalize="characters"
+                  placeholder="KX9M-X5BS"
+                  aria-describedby="prof-device-help"
+                  className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 font-mono text-sm tracking-widest"
+                />
+                {/* No size/opacity utilities here: `.jf-btn-ghost` declares its
+                    own disabled treatment outside any @layer (globals.css), so a
+                    Tailwind utility on the same property can never paint.
+                    src/lib/ghostButtonInk.test.ts enforces that. */}
+                <button
+                  type="submit"
+                  disabled={deviceBusy || deviceLookup === "checking"}
+                  className="jf-btn-ghost"
+                >
+                  {deviceLookup === "checking" ? t("prof.deviceChecking") : t("prof.deviceCheck")}
+                </button>
+              </form>
+              {/* The answer to a lookup, announced to a screen reader. One of:
+                  nothing yet (the empty state above is the whole story), the
+                  code is not usable, or the consent details + the decision. */}
+              <div aria-live="polite">
+                {/* Card t_762ada65: `!deviceConsent` is the render half of the
+                    fix. The problem and the card are the two answers to the same
+                    question, so only one of them may ever be on screen — the bug
+                    was a red "not valid or has expired" banner painted above a
+                    fully rendered consent card with Approve/Deny on it. */}
+                {deviceErr && !deviceConsent && (
+                  <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {deviceErr}
+                  </p>
+                )}
                 {deviceConsent && deviceConsent.state === "pending" && (
                   <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-white p-3">
                     <p className="text-sm">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceClient")}: </span>
                       {deviceConsent.client}
+                    </p>
+                    {/* Card t_762ada65: the card names the code it belongs to, in
+                        the same words the authorisation email uses, so a person
+                        holding two mails can tell which one is on screen. */}
+                    <p className="mt-1 text-xs text-slate-600">
+                      <span className="text-[var(--jf-muted)]">{t("prof.deviceYourCode")}: </span>
+                      <span className="font-mono tracking-widest">{deviceConsent.user_code}</span>
                     </p>
                     {/* Card t_cf45b84c: the access level is the PERSON'S choice,
                         preselected to what the client asked for, and changeable
@@ -1257,16 +1369,20 @@ export default function ProfilePage() {
                   </div>
                 )}
                 {deviceConsent && deviceConsent.state !== "pending" && (
-                  <p className="mt-2 text-xs text-slate-600">
+                  <p className="mt-3 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
                     {deviceConsent.state === "approved"
                       ? t("prof.deviceApproved")
                       : deviceConsent.state === "denied"
                         ? t("prof.deviceDenied")
-                        : t("prof.deviceNotFound")}
+                        : deviceConsent.state === "expired"
+                          ? t("prof.deviceExpired")
+                          : deviceConsent.state === "used"
+                            ? t("prof.deviceUsed")
+                            : t("prof.deviceNotFound")}
                   </p>
                 )}
               </div>
-            )}
+            </div>
 
             {/* Issue #426: server URL in a dedicated, copyable code box
                 (full-width, wraps cleanly) instead of inline in a paragraph. */}

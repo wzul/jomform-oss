@@ -2236,6 +2236,59 @@ gr_record_final() {
   gr_record_now
 }
 
+# preflight_artefact_guard — a run may not execute a gate that READS a build
+# artefact this tree does not have (card t_7ad889f7).
+#
+# WHY THE RUNNER NEEDS ITS OWN NET. The consumer (scripts/preflight_reuse.sh) now
+# moves a remembered `web` pass into PREFLIGHT_RERUN whenever the tree has no
+# web/.next, and the fold in the --reuse-record block below refuses to reuse it even
+# when it IS selected — so the two documented paths are repaired. What is left is the
+# shape where a lane asks for a browser gate with the record, and neither the
+# consumer's list nor `--only` names `web`: a hand-copied PREFLIGHT_RERUN, a narrower
+# PREFLIGHT_ONLY, an older lane's argv. Then `next start` fails in six seconds and the
+# ONLY signal a reader gets is Next.js's own line —
+#
+#   [WebServer] Error: Could not find a production build in the '.next' directory
+#
+# — attributed to the browser gate, which is the misreading this removes: the gate
+# never ran a product assertion. This says what is actually wrong and how to fix
+# it, and it changes no verdict (a consumer with no build cannot pass anyway).
+#
+# IT IS REUSE-ONLY, deliberately. A plain `--only a11y` on a tree with no build is
+# the same six-second red today, but it is NOT caused by a record — and turning it
+# into a pre-run refusal would also refuse the self-test's and the port-claim
+# harness's stubbed browser runs, which start the suite against a fixture instead
+# of a build. The defect this card is about is reuse, so the net covers reuse.
+preflight_artefact_guard() {
+  [ "${REUSE_RECORD:-0}" = "1" ] || return 0
+  local g need=() pos=0 producer_pos=-1 consumer_pos=-1
+  for g in "${GATE_NAMES[@]}"; do
+    selected "$g" || continue
+    [ "$g" = "$GR_ARTEFACT_PRODUCER" ] && [ "$producer_pos" -lt 0 ] && producer_pos=$pos
+    if gr_gate_reads_web_build "$g"; then
+      need+=("$g")
+      [ "$consumer_pos" -lt 0 ] && consumer_pos=$pos
+    fi
+    pos=$((pos+1))
+  done
+  # Nothing in this run reads the artefact, or the producer runs before the first
+  # consumer, or a build is already in the tree: nothing to say.
+  [ ${#need[@]} -gt 0 ] || return 0
+  if [ "$producer_pos" -ge 0 ] && [ "$producer_pos" -lt "$consumer_pos" ]; then return 0; fi
+  gr_web_build_present "$REPO_ROOT" && return 0
+  local why
+  case ",${PREFLIGHT_REUSED:-}," in
+    *",$GR_ARTEFACT_PRODUCER,"*)
+      why="'$GR_ARTEFACT_PRODUCER' was REMEMBERED from the per-tree record: a record vouches for GATE RESULTS on these bytes, never for a build directory, and a re-seeded tree (deploy/cut-release.sh --ship-only) carries only web/node_modules" ;;
+    *)
+      case ",${SKIP:-}," in
+        *",$GR_ARTEFACT_PRODUCER,"*) why="'$GR_ARTEFACT_PRODUCER' is SKIPPED by --only/--skip in this run" ;;
+        *) why="'$GR_ARTEFACT_PRODUCER' is not in this run's selection" ;;
+      esac ;;
+  esac
+  die "gate(s) [${need[*]}] read $GR_ARTEFACT_FILE and this tree has none, so they would fail on the missing build before running a single assertion — and $why. Fix: put '$GR_ARTEFACT_PRODUCER' in the same run (it precedes the browser gates in the inventory order), or build the tree first. Do NOT read this as a product red."
+}
+
 # ---- REUSE: --reuse-record may only skip a gate this tree is KNOWN to pass ---
 # scripts/preflight_reuse.sh (the consumer a lane runs BEFORE queueing) reads the
 # record and hands back the gates it can vouch for. This is where that claim is
@@ -2299,8 +2352,54 @@ if [ "$REUSE_RECORD" = 1 ]; then
       esac
     done
   fi
+  # ---- A REMEMBERED PRODUCER IS NOT A REMEMBERED ARTEFACT (card t_7ad889f7) ---
+  # `web` PRODUCES web/.next; a11y/e2e-builder/e2e-core start `next start` against
+  # it. This fold is the mechanism (it writes SKIP), so without this block asking
+  # for `web` BY NAME on a re-seeded tree — `--only web,a11y --reuse-record`, the
+  # command the consumer now emits for a fresh release tree — would be answered
+  # "reused" and skipped, and the browser gates would die in six seconds on
+  # "[WebServer] Error: Could not find a production build in the '.next'
+  # directory". Measured on the deploy lane, 2026-11-12, after a 533s recovery run.
+  #
+  # The predicate is gr_producer_must_rerun (scripts/gate_result.sh), the same one
+  # the consumer applies, so the two lanes cannot disagree about which gates need a
+  # build. It only ever REMOVES a skip: the gate then runs, which is the safe
+  # direction, and the run says why.
+  if [ ${#_reuse_ok[@]} -gt 0 ]; then
+    # COUNTED BEFORE THE ARTEFACT RULE: "vouches for NO gate" is a question about the
+    # RECORD (does it vouch for anything at all?), and a record whose only pass is the
+    # producer still answers yes — even though the rule below sends that producer back
+    # to the execution list because the artefact it produces is not in this tree.
+    _reuse_vouched=${#_reuse_ok[@]}
+    case " ${_reuse_ok[*]} " in
+      *" $GR_ARTEFACT_PRODUCER "*)
+        _artefact_exec=()
+        for _g in "${GATE_NAMES[@]}"; do
+          selected "$_g" || continue
+          case " ${_reuse_ok[*]} " in *" $_g "*) continue ;; esac
+          _artefact_exec+=("$_g")
+        done
+        if [ ${#_artefact_exec[@]} -gt 0 ] && \
+           gr_producer_must_rerun "$REPO_ROOT" "$GR_ARTEFACT_PRODUCER" "${_artefact_exec[@]}"; then
+          _artefact_kept=()
+          for _g in "${_reuse_ok[@]}"; do
+            [ "$_g" = "$GR_ARTEFACT_PRODUCER" ] && continue
+            _artefact_kept+=("$_g")
+          done
+          _reuse_ok=("${_artefact_kept[@]}")
+          echo "==> NOT REUSING '$GR_ARTEFACT_PRODUCER': this run executes ${_artefact_exec[*]}, which reads $GR_ARTEFACT_FILE, and tree $GR_TREE_SHORT has none." >&2
+          echo "    The record's pass is evidence about the BYTES, not about a build directory — a re-seeded tree (deploy/cut-release.sh --ship-only) carries none." >&2
+          echo "    '$GR_ARTEFACT_PRODUCER' therefore runs in this pass (it precedes the browser gates in the inventory order)." >&2
+        fi
+        ;;
+    esac
+  fi
   # A gate the CALLER skipped is not a reuse, and calling it one would claim a
   # saving this run did not make. Say which, so the ledger stays honest.
+  # `_reuse_carried` is the set that may actually be carried over (the artefact rule
+  # above may have moved the producer out of it), so a message that counts them
+  # cannot include a gate this run is about to execute.
+  _reuse_carried=${#_reuse_ok[@]}
   [ -z "$_reuse_bad" ] || echo "preflight: note — already skipped by --only/--skip, so not counted as reused:$_reuse_bad" >&2
   # ---- "VOUCHES FOR NO GATE" IS A QUESTION ABOUT THE RECORD, NOT THE SELECTION ----
   # This refusal is decided against the gates the RECORD vouches for, BEFORE the
@@ -2323,7 +2422,12 @@ if [ "$REUSE_RECORD" = 1 ]; then
   #   * may THIS RUN claim a saving for it?  -> about the SELECTION (below).
   # A record that vouches for nothing is still a hard refusal, because then the
   # reuse mechanism is contributing nothing and the lane must be told.
-  _reuse_vouched=${#_reuse_ok[@]}
+  # THE COUNT IS THE ONE TAKEN BEFORE THE ARTEFACT RULE (card t_7ad889f7): that rule
+  # can empty this set by sending the producer back to execution, and a record whose
+  # only pass is `web` still vouches for something — refusing it here would turn the
+  # documented recovery argv (`--only web,a11y --reuse-record` on a re-seeded tree)
+  # into "vouches for NO gate" instead of a run that rebuilds and gates.
+  [ -n "${_reuse_vouched:-}" ] || _reuse_vouched=${#_reuse_ok[@]}
   PREFLIGHT_REUSED_LABEL="$_reuse_file"
   if [ "$_reuse_vouched" -eq 0 ]; then
     die "--reuse-record was requested but the record for tree $GR_TREE_SHORT vouches for NO gate ($_reuse_reason) — refusing to run as if it did"
@@ -2354,7 +2458,7 @@ if [ "$REUSE_RECORD" = 1 ]; then
     # and nothing to ledger — it runs exactly what it was asked for. Saying so is
     # the difference between a record read that is honest about its scope and one
     # that reads as if the selection had been vouched for.
-    echo "==> REUSE: $_reuse_vouched recorded pass(es) carried over (not in this run's selection, so NOT ledgered):$_reuse_off"
+    echo "==> REUSE: $_reuse_carried recorded pass(es) carried over (not in this run's selection, so NOT ledgered):$_reuse_off"
     echo "    from $_reuse_file (finished $(gr_read_field "$_reuse_file" finished_at)); tree $GR_TREE_SHORT"
     echo "    this run executes its own selection below; the carried gates were neither run nor reused here."
   fi
@@ -2433,6 +2537,10 @@ if [ "$REUSE_RECORD" = 1 ]; then
     echo "    The summary below counts them as REUSE, never as PASS."
   fi
 fi
+
+# THE ARTEFACT NET (card t_7ad889f7) — after every path that can write SKIP, so it
+# judges the gates this run will REALLY execute.
+preflight_artefact_guard
 
 echo "=============================================================="
 echo "  JomForm preflight — local gate (GitHub Actions is not a gate)"

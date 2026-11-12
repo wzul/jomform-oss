@@ -59,6 +59,7 @@ const SECTIONS: Section[] = [
     body: [
       "A headless harness can skip the browser. JomForm supports the **device authorization grant**, RFC 8628.",
       "The harness asks for a code, JomForm emails it to your account, and you approve it from that email.",
+      "Without the email, type the code at **[Profile → MCP agents](/profile?tab=mcp)** — `kx9mx5bs` and `KX9M-X5BS` both work.",
       "See [OAuth & tokens](/docs/mcp/oauth) for the endpoints, the polling rules and the scope ladder.",
     ],
   },

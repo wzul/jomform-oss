@@ -229,6 +229,21 @@ var catalog = map[Kind]map[string]msg{
 	// from, and what to do if it was not them. Hence the client / access / from
 	// / time block, and hence the explicit "do not share this code" line — the
 	// code is a bearer secret that a token is minted from.
+	//
+	// Card t_4f3ab16e — the SECOND half of the same report ("dalam email tak
+	// dinyatakan code pun"): the code was one line inside the paragraph block, so
+	// a reader scanning for a big code did not find one. It now sits in a block
+	// of its own and the link is a button, via the two line markers the branded
+	// renderer understands (internal/email/branded.go):
+	//
+	//	[[code:VALUE]]          → a large, monospaced, centred code block
+	//	[[button:LABEL|URL]]    → a button (with the URL printed under it)
+	//
+	// The markers are LINE-level and are rendered back to plain text by
+	// PlainTextBody for the multipart fallback, so the text part still reads
+	// "KX9M-X5BS" on its own line and "Approve or deny: https://…" — see
+	// email/device_code_mail_t_4f3ab16e_test.go, which asserts the rendered HTML
+	// carries the ACTUAL code for a fixture, in all five locales.
 	DeviceAuthorization: {
 		En: {Subject: "Approve an AI agent connection to JomForm",
 			Body: "A device is asking to connect to your JomForm account as an AI agent.\n\n" +
@@ -236,45 +251,50 @@ var catalog = map[Kind]map[string]msg{
 				"Access : {scope}\n" +
 				"From   : {where} ({ip})\n" +
 				"Time   : {time}\n\n" +
-				"Your code: {code}\n" +
-				"Approve or deny at {link} — the code expires in 10 minutes.\n\n" +
-				"If this was not you, do not share this code. Deny the request at the link above.\n"},
+				"[[code:{code}]]\n" +
+				"Enter it on jomform.com, or just open the button below.\n\n" +
+				"[[button:Approve or deny|{link}]]\n\n" +
+				"The code expires in 10 minutes. If this was not you, do not share this code — deny the request instead.\n"},
 		Ms: {Subject: "Luluskan sambungan ejen AI ke JomForm",
 			Body: "Sesebuah peranti meminta untuk menyambung ke akaun JomForm anda sebagai ejen AI.\n\n" +
 				"Klien  : {client}\n" +
 				"Akses  : {scope}\n" +
 				"Dari   : {where} ({ip})\n" +
 				"Masa   : {time}\n\n" +
-				"Kod anda: {code}\n" +
-				"Luluskan atau tolak di {link} — kod ini tamat tempoh dalam 10 minit.\n\n" +
-				"Jika ini bukan anda, jangan kongsi kod ini. Tolak permintaan di pautan di atas.\n"},
+				"[[code:{code}]]\n" +
+				"Masukkannya di jomform.com, atau buka butang di bawah.\n\n" +
+				"[[button:Luluskan atau tolak|{link}]]\n\n" +
+				"Kod ini tamat tempoh dalam 10 minit. Jika ini bukan anda, jangan kongsi kod ini — tolak permintaan itu.\n"},
 		Zh: {Subject: "批准 AI 代理连接到 JomForm",
 			Body: "有设备请求以 AI 代理身份连接到您的 JomForm 账户。\n\n" +
 				"客户端：{client}\n" +
 				"权限：{scope}\n" +
 				"来源：{where}（{ip}）\n" +
 				"时间：{time}\n\n" +
-				"您的代码：{code}\n" +
-				"在 {link} 批准或拒绝 — 代码将在 10 分钟后失效。\n\n" +
-				"如果这不是您本人操作，请勿分享此代码。请在上面的链接中拒绝该请求。\n"},
+				"[[code:{code}]]\n" +
+				"在 jomform.com 输入此代码，或直接打开下面的按钮。\n\n" +
+				"[[button:批准或拒绝|{link}]]\n\n" +
+				"代码将在 10 分钟后失效。如果这不是您本人操作，请勿分享此代码 — 请拒绝该请求。\n"},
 		Ta: {Subject: "JomForm க்கு AI முகவர் இணைப்பை அனுமதிக்கவும்",
 			Body: "ஒரு சாதனம் AI முகவராக உங்கள் JomForm கணக்குடன் இணைக்கக் கோருகிறது.\n\n" +
 				"கிளையன்ட்: {client}\n" +
 				"அணுகல்: {scope}\n" +
 				"இருப்பிடம்: {where} ({ip})\n" +
 				"நேரம்: {time}\n\n" +
-				"உங்கள் குறியீடு: {code}\n" +
-				"{link} இல் அனுமதிக்கவும் அல்லது நிராகரிக்கவும் — குறியீடு 10 நிமிடங்களில் காலாவதியாகும்.\n\n" +
-				"இது நீங்கள் இல்லை என்றால், இந்தக் குறியீட்டைப் பகிர வேண்டாம். மேலே உள்ள இணைப்பில் கோரிக்கையை நிராகரிக்கவும்.\n"},
+				"[[code:{code}]]\n" +
+				"jomform.com இல் இதை உள்ளிடவும், அல்லது கீழே உள்ள பொத்தானைத் திறக்கவும்.\n\n" +
+				"[[button:அனுமதிக்கவும் அல்லது நிராகரிக்கவும்|{link}]]\n\n" +
+				"குறியீடு 10 நிமிடங்களில் காலாவதியாகும். இது நீங்கள் இல்லை என்றால், இந்தக் குறியீட்டைப் பகிர வேண்டாம் — கோரிக்கையை நிராகரிக்கவும்.\n"},
 		Ar: {Subject: "الموافقة على اتصال وكيل ذكاء اصطناعي بـ JomForm",
 			Body: "جهاز يطلب الاتصال بحساب JomForm الخاص بك كوكيل ذكاء اصطناعي.\n\n" +
 				"العميل: {client}\n" +
 				"الوصول: {scope}\n" +
 				"من: {where} ({ip})\n" +
 				"الوقت: {time}\n\n" +
-				"رمزك: {code}\n" +
-				"وافق أو ارفض على {link} — ينتهي الرمز خلال 10 دقائق.\n\n" +
-				"إذا لم تكن أنت، فلا تشارك هذا الرمز. ارفض الطلب من الرابط أعلاه.\n"},
+				"[[code:{code}]]\n" +
+				"أدخله في jomform.com، أو افتح الزر أدناه.\n\n" +
+				"[[button:الموافقة أو الرفض|{link}]]\n\n" +
+				"ينتهي الرمز خلال 10 دقائق. إذا لم تكن أنت، فلا تشارك هذا الرمز — ارفض الطلب بدلاً من ذلك.\n"},
 	},
 
 	WorkspaceInvite: {

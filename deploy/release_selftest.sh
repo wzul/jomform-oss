@@ -622,6 +622,16 @@ grep -q 'release rules selftest: passed' <<<"$OUT" \
 ! grep -q 'was inherited by the release selftest' <<<"$OUT" \
   && ok "O3 …and none of the caller's release settings reached it" \
   || bad "O3 the caller's release environment leaked into the release selftest"
+# THE DURATION ON THAT LINE IS A CONTRACT (card t_87d48a3e). This stage is the deploy's
+# largest FIXED cost and it is CPU-bound, so what it costs is whatever the HOST gives it
+# (measured 112.78s at load 47.7 against a nominal ~21s). deploy/biteproof_build_and_ship_gate.sh
+# case A times the WHOLE deploy — a reuse cannot remove this stage — and asserts its ceiling
+# NET of the stage, which it can only do from this number; without it the harness is back to
+# an absolute ceiling that false-reds a correct tree on a busy host. So the line must carry it,
+# and losing it must be loud here rather than a surprise in an on-demand harness.
+grep -qE 'release rules selftest: passed \([0-9]+ checks in [0-9]+s\)' <<<"$OUT" \
+  && ok "O3 …and reports the stage's own duration (biteproof case A times the reuse exit net of it)" \
+  || bad "O3 the selftest line carries NO duration — deploy/biteproof_build_and_ship_gate.sh case A can no longer time the reuse exit net of this load-sensitive stage"
 
 echo "== O4. the section-O helper scrubs the release environment too"
 # The sandbox helper is the suite's own boundary: a case that exports the release environment

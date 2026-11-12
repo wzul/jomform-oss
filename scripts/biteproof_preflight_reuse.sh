@@ -139,6 +139,27 @@
 #       cannot be satisfied by "always 1"), and cases 10 and 11 below, which remove
 #       the propagation and the verdict branch's return one at a time.
 #
+#   52. A REMEMBERED PASS IS NOT A REMEMBERED ARTEFACT (card t_7ad889f7). `web`
+#       (`cd web && npm run build`) is not only a check: it PRODUCES `web/.next`,
+#       and a11y/e2e-builder/e2e-core start `next start` against it. The record is
+#       keyed on the TREE plus the environment key, so a remembered `web` pass
+#       vouches for a GATE RESULT on those bytes — never for a build directory
+#       being present. `deploy/cut-release.sh --ship-only` re-seeds a FRESH release
+#       tree (new temp dir, only `web/node_modules` carried across) whose tree sha
+#       is IDENTICAL, so on a recovery run nothing rebuilt and both browser gates
+#       died in six seconds on `[WebServer] Error: Could not find a production
+#       build in the '.next' directory` — no product assertion behind either red,
+#       ship aborted, and the only workaround was moving the record aside for a
+#       ~45-minute re-gate (measured twice on 2026-11-12, tree `47e1057`). Guard:
+#       `gr_producer_must_rerun` in scripts/gate_result.sh — the consumer stops
+#       remembering `web` (it moves to PREFLIGHT_RERUN) and the runner stops folding
+#       its recorded pass, both exactly when web/.next/BUILD_ID is absent AND a gate
+#       that reads it is going to run; a run that would execute a browser gate with
+#       no build and no producer refuses up front naming the artefact. `selftest`
+#       check 52 pins all of it with two controls (build present, and no consumer in
+#       the run) so the rule cannot degrade into "never remember web". Case 13 below
+#       deletes exactly that predicate and requires check 52 to red naming it.
+#
 # Run:  ./scripts/biteproof_preflight_reuse.sh
 # Exit: 0 if every case BITES, 1 otherwise.
 #
@@ -1004,6 +1025,61 @@ else
           "check 42" \
           "with the explicit-tree guard removed, an unusable \`--tree\` is answered as a refusal about the WORKING tree again and check 42 reds naming exactly that"
       fi
+    fi
+  fi
+fi
+restore_and_verify
+
+# --- case 13: THE ARTEFACT RULE REMOVED (card t_7ad889f7). The pre-fix shape: a
+# remembered `web` pass stands in for running `web` regardless of whether the
+# artefact it PRODUCES is in the tree, so a re-seeded release tree (same tree sha,
+# no web/.next — deploy/cut-release.sh --ship-only) reads the browser gates' 6s
+# "Could not find a production build in the '.next' directory" as their verdict.
+# The mutation makes gr_producer_must_rerun answer "nothing to do" — the rule is
+# gone, the rest of the reader is untouched — so the CONSUMER keeps `web` in
+# PREFLIGHT_SKIP and the RUNNER keeps folding it, and check 52 must red.
+#
+# ONE LINE, inserted as the function's first statement: the whole rule lives behind
+# gr_producer_must_rerun, so a case that rewrote more would not be surgical. The
+# mutation is asserted BY VALUE in both directions before it spends a selftest run:
+# the shipped function must answer 0 for (a tree with no build, the producer, a
+# consumer) and the mutant must answer 1, while the artefact predicate itself still
+# answers correctly.
+echo "== case 13: the artefact rule removed (a remembered web pass skips the build) =="
+if ! grep -q '^gr_producer_must_rerun() {' "$RESULT"; then
+  bad "case 13 cannot run: gr_producer_must_rerun() is not in $RESULT, so the rule this case exists to delete does not exist"
+else
+  s13_nobuild="$WORK/s13-nobuild"
+  s13_withbuild="$WORK/s13-withbuild"
+  rm -rf "$s13_nobuild" "$s13_withbuild"
+  mkdir -p "$s13_nobuild/web" "$s13_withbuild/web/.next"
+  printf 'x\n' > "$s13_withbuild/web/.next/BUILD_ID"
+  s13_ship="$( ( . "$RESULT"; if gr_producer_must_rerun "$s13_nobuild" web a11y; then echo yes; else echo no; fi ) )"
+  s13_ship_present="$( ( . "$RESULT"; if gr_producer_must_rerun "$s13_withbuild" web a11y; then echo yes; else echo no; fi ) )"
+  if [ "$s13_ship" != yes ] || [ "$s13_ship_present" != no ]; then
+    bad "case 13 premise broken: the SHIPPED rule must answer 'rerun' for a tree with no build ($s13_ship) and 'reuse' for the same tree WITH one ($s13_ship_present) — it does not, so a red below could not be attributed to removing it"
+  else
+    sed -i '/^gr_producer_must_rerun() {$/a\  return 1  # S13 MUTANT: the artefact rule removed (the pre-fix shape)' "$RESULT"
+    chmod "$MODE_RESULT" "$RESULT"
+    s13_landed="$(sed -n '/^gr_producer_must_rerun() {/{n;p;q;}' "$RESULT")"
+    if [ -z "$s13_landed" ] || [ "${s13_landed#*S13 MUTANT}" = "$s13_landed" ]; then
+      bad "case 13 — the sabotage did not land: the function's first statement is [${s13_landed:-<none>}], so the arm that must FAIL was never built"
+    elif ! bash -n "$RESULT"; then
+      bad "case 13 — the mutation left gate_result.sh syntactically invalid, so any red below would be a parse error rather than the rule under test"
+    elif [ "$( ( . "$RESULT"; if gr_producer_must_rerun "$s13_nobuild" web a11y; then echo yes; else echo no; fi ) )" != no ]; then
+      bad "case 13 — the mutant STILL asks for the producer to be re-run, so the rule was never removed and this case proves nothing"
+    elif [ "$( ( . "$RESULT"; gr_web_build_present "$s13_nobuild" && echo present || echo absent ) )" != present ] \
+      || [ "$( ( . "$RESULT"; gr_gate_reads_web_build a11y && echo reads || echo blind ) )" != reads ]; then
+      bad "case 13 — the mutation broke the artefact PREDICATES as well as the rule, so a red below could be about either"
+    else
+      rc13=0
+      selftest_run "$WORK/case13.log" || rc13=$?
+      # ONLY check 52 can fire: it is the one check that asks the consumer and the
+      # runner to account for the artefact, and the legs that prove the other reuse
+      # properties answer from records and selections the rule never touches.
+      verdict "case 13" "$WORK/case13.log" "$rc13" \
+        "check 52" \
+        "with the artefact rule removed, a remembered \`web\` pass is reused past a missing web/.next again and check 52 reds naming exactly that"
     fi
   fi
 fi

@@ -376,6 +376,31 @@ failure.
    key and reporting `verdict: green, passed: 5`, with every carried entry
    relabelled `reused: false` one flush later.
 
+10. **A remembered PASS is not a remembered ARTEFACT.** Some gates are not only
+    checks: `web` (`cd web && npm run build`) *produces* `web/.next`, and the
+    browser gates (`a11y`, `e2e-builder`, `e2e-core`) start `next start` against
+    that directory. A record vouches for a gate RESULT on these bytes under this
+    fingerprint — never for a build directory being present, which is not part of
+    the tree sha. `deploy/cut-release.sh --ship-only` re-seeds a FRESH release tree
+    (new temp dir, only `web/node_modules` carried across) with the SAME tree sha,
+    so a remembered `web` pass left both browser gates red in six seconds on
+    `[WebServer] Error: Could not find a production build in the '.next' directory`
+    — no product assertion behind either red, and the ship aborted (measured twice
+    on 2026-11-12, tree `47e1057`, card `t_7ad889f7`). The rule: a recorded pass
+    for the producer is **not** reused when `web/.next/BUILD_ID` is absent from the
+    tree AND this run executes a gate that reads it. Then `web` lands in
+    `PREFLIGHT_RERUN` (and the evidence line says `NOT remembering …`), so the
+    caller rebuilds before the browser gates. When no consumer will run — a partial
+    record whose only failure is `lint`, say — the pass still stands: a fresh tree
+    must not pay for a build nothing reads. The runner applies the same rule when
+    it folds recorded passes into `SKIP`, so `--only web,a11y --reuse-record`
+    cannot skip the produce; and a run that would execute a browser gate with no
+    build and no producer refuses UP FRONT, naming `web/.next` and the cause,
+    instead of leaving Next.js's line to be read as the gate's verdict. The table
+    and the predicate live in `scripts/gate_result.sh`
+    (`gr_producer_must_rerun`), because both the consumer and the runner have to
+    answer this identically; `selftest` check 52 pins them.
+
 ## Layout
 
 | Path | Role |

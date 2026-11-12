@@ -236,6 +236,17 @@ const HOST_ONLY: Array<{ file: string; literal: string; mechanism: RegExp; why: 
       "through imageBuildSkipReasonAt() while the other five legs (pages, public assets, " +
       "dimensions, the rendered <img> count, the marker sweep) still run against the image",
   },
+  {
+    file: join(WEB_DIR, "src/lib/guidesCheckCoverage.test.ts"),
+    literal: "../../../docs/guides",
+    mechanism: /function imageBuildSkipReasonAt\(/,
+    why:
+      "the same repo-root guide SOURCE the leg above reads, copied into that test's OWN scratch " +
+      "tree to drive `npm run guides:sync`/`guides:check` against an edited README — web/Dockerfile " +
+      "does not copy docs/, so only that one leg skips itself there through imageBuildSkipReasonAt() " +
+      "and the wiring + committed-index legs still run against the image (measured: the webimage " +
+      "gate went red with ENOENT /repo/docs/guides before this skip existed)",
+  },
 ];
 
 /**

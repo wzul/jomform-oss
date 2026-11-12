@@ -187,10 +187,16 @@ test("the page wires to this module instead of re-implementing it", () => {
 
   // The selection is seeded from the REQUESTED scope on every checked code.
   // Hardcoding "read" here — the defect — leaves this regex unmatched.
+  //
+  // The subject is a QUALIFIED name, not the bare `d`: card t_762ada65 made the
+  // lookup's answer one value, so the consent the radios are seeded from is
+  // `next.consent` (or whatever the page calls it) rather than a local `d`. What
+  // this arm is about is unchanged — every checked code must seed the picker from
+  // THAT consent's `scopes`.
   assert.match(
     PAGE,
-    /setDeviceScope\(\s*defaultDeviceScope\(\s*d\.scopes\s*\)\s*\)/,
-    "checkDevice must seed the radio from defaultDeviceScope(d.scopes)",
+    /setDeviceScope\(\s*defaultDeviceScope\(\s*(?:\w+\.)*scopes\s*\)\s*\)/,
+    "checkDevice must seed the radio from defaultDeviceScope(<the consent>.scopes)",
   );
 
   // One radio per option the server allows, checked from the selection.
@@ -231,11 +237,29 @@ test("the page wires to this module instead of re-implementing it", () => {
     );
   }
 
-  // The approve call carries the choice through the shared body builder.
+  // The approve call carries the choice through the shared body builder, and its
+  // FIRST argument is the code of the row ON SCREEN (card t_4f3ab16e: the field
+  // stays editable after a lookup, so approving must act on the authorisation
+  // the card describes, never on whatever happens to be in the box now). Those
+  // two rules meet in this one call, which is why the first argument is an
+  // expression instead of the bare `deviceCode` this assertion used to require.
+  const decisionBody = PAGE.match(
+    /body:\s*JSON\.stringify\(\s*deviceDecisionBody\(([\s\S]*?)\),\s*\)/,
+  );
+  assert.ok(
+    decisionBody,
+    "decideDevice must post through deviceDecisionBody(...), the shared body builder",
+  );
+  const decisionArgs = decisionBody[1].replace(/\s+/g, " ");
   assert.match(
-    PAGE,
-    /body:\s*JSON\.stringify\(\s*deviceDecisionBody\(\s*deviceCode,\s*decision,\s*deviceScope\s*\)\s*\)/,
-    "decideDevice must post deviceDecisionBody(deviceCode, decision, deviceScope)",
+    decisionArgs,
+    /^.*,\s*decision,\s*deviceScope,?\s*$/,
+    "decideDevice must post deviceDecisionBody(<code>, decision, deviceScope) — the person's pick, not the client's request",
+  );
+  assert.match(
+    decisionArgs,
+    /deviceConsent\?\.user_code \?\? normalizeDeviceCode\(deviceCode\)/,
+    "the code posted must be the row on screen, falling back to the typed field",
   );
 
   // The old shape — the request printed as text, with no choice at all — must be

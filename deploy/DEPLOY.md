@@ -313,7 +313,13 @@ Images owed: API + Web (the diff touches web/).
    gates the record could not vouch for (`--only <PREFLIGHT_RERUN> --reuse-record`),
    and anything else runs the full gate. The script prints which gates were
    REMEMBERED rather than run, and a remembered gate is never counted as passed —
-   see `docs/PREFLIGHT-REUSE.md`. The gate is:
+   see `docs/PREFLIGHT-REUSE.md`. One exception a release lane will meet: `web`
+   PRODUCES `web/.next`, which `a11y`/`e2e-*` read, and `--ship-only` re-seeds a
+   fresh tree with the same tree sha and no build — so a remembered `web` pass is
+   NOT reused when the tree has no `web/.next` and a browser gate is going to run.
+   `web` then appears in `PREFLIGHT_RERUN` (`NOT remembering web …` on the evidence
+   line) and is rebuilt before the browser gates, instead of both of them dying in
+   six seconds on `Could not find a production build in the '.next' directory`. The gate is:
    ```bash
    source ${JOMFORM_ENV:-$HOME/.config/jomform/test-env.sh}   # JOMFORM_TEST_DATABASE_URL + JOMFORM_TEST_VALKEY_URL
    ./scripts/preflight.sh --list   # the gate inventory (authoritative)

@@ -40,7 +40,144 @@ import (
 const (
 	brandIndigo = "#5e6ad2"
 	brandDeep   = "#4338ca"
+	// codeSurface is the tinted block a device code is printed on (card
+	// t_4f3ab16e). It is the shell's page background, so the block reads as a
+	// panel rather than as another line of prose.
+	codeSurface = "#f4f5fb"
 )
+
+// ── Line markers: the one exception to "the body is plain text" ─────────────
+//
+// A transactional body is PLAIN TEXT that the dictionary owns (one string per
+// locale, api/internal/emailtext/catalog.go) and it is sent twice: as the
+// multipart text part, and escaped into the body cell of this branded shell. That
+// is the right shape for a receipt and the wrong shape for a security code the
+// reader has to FIND and RETYPE. The device-authorisation mail was the proof:
+// "Your code: KX9M-X5BS" was one line inside the paragraph block, and a reader
+// scanning for a big code did not see one (card t_4f3ab16e, the second half of
+// Wan's report: "dalam email tak dinyatakan code pun").
+//
+// So a body may carry two LINE-level markers, and this file is the only place
+// that decides what they look like:
+//
+//	[[code:VALUE]]         a large, monospaced, centred block on a tinted panel
+//	[[button:LABEL|URL]]   a button, with the URL printed underneath it
+//
+// This is not a general mark-up. Only a line whose whole content is one marker is
+// expanded, every value is HTML-escaped, an unrecognised or malformed marker is
+// left as text (never half-rendered), and a body without markers renders
+// byte-for-byte as it did before — TestBrandedHTML pins that, because every other
+// transactional email goes through this function.
+//
+// The plain-text part gets the same lines rendered back to their plain meaning by
+// plainTextBody ("  VALUE" and "LABEL: URL"), so no marker ever reaches an inbox
+// and a client that shows only text still sees the code on a line of its own.
+const (
+	markerOpen  = "[["
+	markerClose = "]]"
+)
+
+// markerArg returns the argument of `[[name:ARG]]` when line is exactly that
+// marker, and ok=false for anything else (including a line that merely starts
+// with one — a half-expanded marker is a bug, not a rendering decision).
+func markerArg(line, name string) (string, bool) {
+	prefix := markerOpen + name + ":"
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, markerClose) {
+		return "", false
+	}
+	arg := strings.TrimSpace(line[len(prefix) : len(line)-len(markerClose)])
+	if arg == "" || strings.Contains(arg, markerOpen) {
+		return "", false
+	}
+	return arg, true
+}
+
+// buttonParts parses `[[button:LABEL|URL]]`. ok is false for any other line; a
+// marker that parses but carries no usable http(s) URL also reports false, so the
+// caller can degrade to plain text rather than emit a dead control.
+func buttonParts(line string) (label, url string, ok bool) {
+	inner, ok := markerArg(line, "button")
+	if !ok {
+		return "", "", false
+	}
+	i := strings.IndexByte(inner, '|')
+	if i <= 0 || i == len(inner)-1 {
+		return "", "", false
+	}
+	label = strings.TrimSpace(inner[:i])
+	url = strings.TrimSpace(inner[i+1:])
+	if label == "" || !(strings.HasPrefix(url, "https://") || strings.HasPrefix(url, "http://")) {
+		return "", "", false
+	}
+	return label, url, true
+}
+
+// codeBlockHTML is the block the reader cannot miss: >=22px, monospaced,
+// letter-spaced, centred, on the tinted surface, and in a table so email clients
+// that ignore `div` styling still stack it as its own row.
+func codeBlockHTML(code string) string {
+	return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 12px 0;">` +
+		`<tr><td align="center" style="background-color:` + codeSurface + `;border:1px solid #e5e7eb;border-radius:10px;padding:20px 12px;">` +
+		`<span style="font-family:'Courier New',Courier,monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#111827;">` +
+		html.EscapeString(code) +
+		`</span></td></tr></table>`
+}
+
+// buttonHTML renders the action as a button and prints the URL underneath it, so
+// a client that strips the link (or a reader who wants to check where it goes)
+// still has the destination. No prose is emitted here: this package holds no
+// copy, so anything a reader must READ comes from the dictionary.
+func buttonHTML(label, url string) string {
+	esc := html.EscapeString(url)
+	return `<div style="margin:0 0 12px 0;">` +
+		`<a href="` + esc + `" style="display:inline-block;background-color:` + brandIndigo + `;color:#ffffff;` +
+		`font-size:16px;font-weight:700;line-height:1;text-decoration:none;padding:14px 28px;border-radius:8px;">` +
+		html.EscapeString(label) +
+		`</a>` +
+		`<div style="margin-top:8px;font-size:12px;line-height:1.5;color:#6b7280;word-break:break-all;">` + esc + `</div>` +
+		`</div>`
+}
+
+// renderBodyHTML escapes the body line by line and expands the two markers.
+func renderBodyHTML(body string) string {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if code, ok := markerArg(trimmed, "code"); ok {
+			b.WriteString(codeBlockHTML(code))
+			continue
+		}
+		if label, url, ok := buttonParts(trimmed); ok {
+			b.WriteString(buttonHTML(label, url))
+			continue
+		}
+		b.WriteString(html.EscapeString(line))
+		if i < len(lines)-1 {
+			b.WriteString("<br/>")
+		}
+	}
+	return b.String()
+}
+
+// plainTextBody is the multipart fallback: the same body with the markers reduced
+// to what they mean in plain text, so the code stays on a line of its own and the
+// link is still an address the reader can copy.
+func plainTextBody(body string) string {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if code, ok := markerArg(trimmed, "code"); ok {
+			lines[i] = "  " + code
+			continue
+		}
+		if label, url, ok := buttonParts(trimmed); ok {
+			lines[i] = label + ": " + url
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // BrandedHTML wraps a plain-text email body in the shared JomForm corporate
 // HTML layout. The body is HTML-escaped and newlines are converted to <br> so
@@ -53,9 +190,7 @@ const (
 // the language it declares.
 func BrandedHTML(lang, title, body string) string {
 	l := emailtext.NormalizeLang(lang)
-	escaped := html.EscapeString(body)
-	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
-	escaped = strings.ReplaceAll(escaped, "\n", "<br/>")
+	escaped := renderBodyHTML(body)
 	dir := ""
 	if emailtext.IsRTL(l) {
 		dir = ` dir="rtl"`

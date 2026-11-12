@@ -5928,6 +5928,227 @@ sys.exit(0 if json.loads("\"" + sys.argv[1] + "\"") == sys.argv[2] else 1)' "$s5
   rm -rf "$s51_pr"
 fi
 
+# 52. A REMEMBERED `web` PASS IS NOT A REMEMBERED BUILD (card t_7ad889f7).
+#
+#     THE DEFECT, measured on the deploy lane 2026-11-12. The record is keyed on the
+#     TREE plus the environment fingerprint, which is the right key for a gate that
+#     only READS. `web` also PRODUCES web/.next, and a11y/e2e-builder/e2e-core start
+#     `next start` against it (the runner says so at the a11y gate: "Needs web/build
+#     to have produced .next"). deploy/cut-release.sh --ship-only re-seeds a FRESH
+#     release tree with the SAME tree sha and only web/node_modules carried over, so
+#     on a recovery run the record said `web: pass`, nothing rebuilt, and both
+#     browser gates died in 6s on
+#         [WebServer] Error: Could not find a production build in the '.next'
+#         directory
+#     — two reds with no product assertion behind them, and the ship aborted (exit 5).
+#
+#     THE PROPERTY: a remembered producer pass is not reused when its ARTEFACT is
+#     absent and a gate that reads it is going to run, and it IS still reused when
+#     either condition does not hold. Six legs, every one on a REAL record written
+#     for the sandbox tree and read by the REAL consumer / the REAL runner:
+#       (a) consumer, no build, a browser gate in the rerun set -> `web` moves from
+#           PREFLIGHT_SKIP to PREFLIGHT_RERUN and the evidence says why;
+#       (b) CONTROL, same record and same selection with web/.next/BUILD_ID present
+#           -> `web` stays remembered (a rule that never remembers web would be a
+#           silent 90s tax on every fresh release tree);
+#       (c) CONTROL, no build but NO consumer in the run (only `lint` failed, so
+#           only `lint` + `web` are asked for) -> `web` stays remembered;
+#       (d) runner, no build: the SAME record with `--only web,a11y,e2e-core
+#           --reuse-record` must NOT fold the recorded `web` pass into SKIP — it
+#           must try to run `web`, which the sandbox refuses on web's OWN missing
+#           prerequisite, not on a11y's;
+#       (e) CONTROL for (d): the same argv with web/.next/BUILD_ID present folds
+#           `web` (REUSED names it) and the refusal is a11y's prerequisite;
+#       (f) the runner's own net: a reuse run that asks for a browser gate WITHOUT
+#           `web` and without a build refuses UP FRONT, naming web/.next and the
+#           gate — instead of letting Next.js's line be the only signal.
+#     (d)/(e) discriminate on the FOLD (`==> REUSED`, `==> NOT REUSING 'web'`, and the
+#     `STILL SKIPPED AND NOT REUSED` line), not on which prerequisite the sandbox
+#     trips: a11y sets need_web=1 too, so both arms end on the same next-binary
+#     refusal and that text cannot tell them apart. No gate body is executed either
+#     way — the routing is what is being measured.
+s52_gates=" $(printf '%s' "$GATES" | tr '\n' ' ') "
+s52_missing=""
+for s52_g in $GR_ARTEFACT_PRODUCER $GR_ARTEFACT_CONSUMERS; do
+  case "$s52_gates" in
+    *" ${s52_g} "*) ;;
+    *) s52_missing="$s52_missing $s52_g" ;;
+  esac
+done
+s52_web_call="$(sed -n "s/^run $GR_ARTEFACT_PRODUCER \"\\(.*\\)\".*/\\1/p" "$PREFLIGHT" | sed -n 1p)"
+s52_pw_start="$(sed -n 's/.*"start": *"\([^"]*\)".*/\1/p' "$LIVE_ROOT/web/package.json" 2>/dev/null | sed -n 1p)"
+s52_pw_server="$(grep -c 'npm run start' "$LIVE_ROOT/web/playwright.config.ts" 2>/dev/null)"
+if [ -n "$s52_missing" ]; then
+  bad "check 52 — the artefact table names gate(s) that \`--list\` does not advertise:${s52_missing}. A renamed gate leaves the rule pointing at nothing, so the browser gates would again be remembered past a missing build without any check noticing"
+elif [ -z "$s52_web_call" ] || [ "${s52_web_call#*npm run build}" = "$s52_web_call" ]; then
+  bad "check 52 — \`run $GR_ARTEFACT_PRODUCER\` is no longer a BUILD call site (read [$s52_web_call] from $PREFLIGHT), so the gate the rule protects is not the one that produces web/.next any more — re-read the rule rather than leaving it aimed at the wrong gate"
+elif [ "$s52_pw_start" != "next start" ]; then
+  bad "check 52 — web/package.json's 'start' script is [$s52_pw_start], not 'next start', so the server the browser gates boot is not the Next production server the artefact table reasons about"
+elif [ "${s52_pw_server:-0}" -lt 1 ]; then
+  bad "check 52 — web/playwright.config.ts no longer starts the app's own server (\`npm run start\` not found), so a11y/e2e-builder/e2e-core may not read web/.next at all and the table needs re-deriving"
+else
+  # s52_fixture <tree> <"gate=pass gate=fail ..."> — a record the REAL reader accepts
+  # under the CURRENT key. Statuses not named are `skip` (never observed), which is
+  # exactly what a partial record holds.
+  s52_fixture() {
+    local tree="$1" spec=" $2 " rec g st sec first=1
+    rec="$(gr_file "$tree")"
+    mkdir -p "$RECORD_DIR"
+    {
+      printf '{\n  "format": 1,\n  "tree": "%s",\n  "key": "%s",\n  "key_parts": "%s",\n  "gates": {\n' \
+        "$tree" "$(PREFLIGHT_KEY_EXTRA=probe52 gr_key "$SB")" \
+        "$(gr_json_escape "$(PREFLIGHT_KEY_EXTRA=probe52 gr_key_parts "$SB")")"
+      for g in $GATES; do
+        st=skip; sec=0
+        case "$spec" in
+          *" $g=pass "*) st=pass; sec=42 ;;
+          *" $g=fail "*) st=fail; sec=7 ;;
+        esac
+        [ "$first" = 1 ] || printf ',\n'
+        printf '    "%s": { "status": "%s", "seconds": %s, "at": "2026-01-01T00:00:00Z", "reused": false }' "$g" "$st" "$sec"
+        first=0
+      done
+      printf '\n  },\n  "runs": 1,\n  "verdict": "red",\n  "complete": true,\n  "log": "",\n  "finished_at": "%s"\n}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$rec"
+  }
+  # s52_kv <output> <VAR> — the decide path prints VAR=value lines.
+  s52_kv() { sed -n "s/^$2=//p" <<<"$1" | sed -n 1p; }
+  # s52_has <csv> <name> — "is this gate in the list", with commas, not substrings.
+  s52_has() { case ",${1:-}," in *",$2,"*) return 0 ;; esac; return 1; }
+
+  s52_dir="$SB_STATE/s52"
+  rm -rf "$s52_dir"; mkdir -p "$s52_dir"
+  # web/.next must not already be there (an earlier state of the sandbox must not
+  # decide the premise of legs (a)/(c)).
+  rm -rf "$SB/web/.next"
+
+  # ---- (a) no build + a consumer in the rerun set -> web is NOT remembered ------
+  s52_tree_a="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_a" "web=pass a11y=fail e2e-builder=pass e2e-core=fail lint=pass"
+  s52_sel="web,a11y,e2e-builder,e2e-core,lint"
+  s52_rec_a="$(gr_file "$s52_tree_a")"
+  s52_usable="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 gr_record_usable "$s52_tree_a" 2>&1) )" && s52_ok_a=yes || s52_ok_a=no
+  dec52a="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 PREFLIGHT_ONLY="$s52_sel" ./scripts/preflight_reuse.sh 2>&1) )"
+  rc52a=$?
+  s52a_skip="$(s52_kv "$dec52a" PREFLIGHT_SKIP)"
+  s52a_rerun="$(s52_kv "$dec52a" PREFLIGHT_RERUN)"
+  s52a_dec="$(s52_kv "$dec52a" PREFLIGHT_DECISION)"
+  if [ "$s52_ok_a" != yes ]; then
+    bad "check 52 premise broken — the fixture record for tree $s52_tree_a is not usable under the current key ([$s52_usable]), so no decision below could be about it"
+  elif [ "$rc52a" -ne 0 ] || [ "$s52a_dec" != "partial" ]; then
+    bad "check 52 (a) — the consumer must decide from this record (rc=$rc52a, decision=[$s52a_dec]): [$(printf '%s' "$dec52a" | tr '\n' ' ')]"
+  elif s52_has "$s52a_skip" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (a) — \`$GR_ARTEFACT_PRODUCER\` is REMEMBERED (PREFLIGHT_SKIP=$s52a_skip) although the tree has no $GR_ARTEFACT_FILE and a11y/e2e-core (PREFLIGHT_RERUN=$s52a_rerun) are about to start the production server: this is the measured defect — the record's pass is evidence about the BYTES, not about a build directory"
+  elif ! s52_has "$s52a_rerun" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (a) — \`$GR_ARTEFACT_PRODUCER\` is not in PREFLIGHT_RERUN=[$s52a_rerun], so nothing in this pass would build the artefact the browser gates are about to read"
+  elif ! s52_has "$s52a_rerun" "a11y" || ! s52_has "$s52a_skip" "lint"; then
+    bad "check 52 (a) — the rest of the decision is wrong (SKIP=[$s52a_skip] RERUN=[$s52a_rerun]): the recorded passes that have no artefact to produce must still be remembered"
+  elif ! grep -qF 'NOT remembering' <<<"$dec52a"; then
+    bad "check 52 (a) — the evidence line does not say the producer's pass was NOT reused, so a reader sees a rebuild in PREFLIGHT_RERUN with no reason attached: [$(printf '%s' "$dec52a" | tr '\n' ' ')]"
+  else
+    ok "check 52 (a) — a remembered \`$GR_ARTEFACT_PRODUCER\` pass is NOT reused when the tree has no $GR_ARTEFACT_FILE and a11y is about to run: SKIP=[$s52a_skip] RERUN=[$s52a_rerun], and the evidence names the rebuild"
+  fi
+
+  # ---- (b) CONTROL: the build IS there -> web stays remembered ------------------
+  mkdir -p "$SB/web/.next" && printf 's52\n' > "$SB/web/.next/BUILD_ID"
+  s52_tree_b="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_b" "web=pass a11y=fail e2e-builder=pass e2e-core=fail lint=pass"
+  dec52b="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 PREFLIGHT_ONLY="$s52_sel" ./scripts/preflight_reuse.sh 2>&1) )"
+  rc52b=$?
+  s52b_skip="$(s52_kv "$dec52b" PREFLIGHT_SKIP)"
+  s52b_rerun="$(s52_kv "$dec52b" PREFLIGHT_RERUN)"
+  if [ "$s52_tree_b" = "$s52_tree_a" ]; then
+    bad "check 52 (b) — creating web/.next/BUILD_ID did not change the sandbox tree sha, so this control is the same tree as (a) and its record could not be the 'build present' shape"
+  elif [ "$rc52b" -ne 0 ] || ! s52_has "$s52b_skip" "$GR_ARTEFACT_PRODUCER" || s52_has "$s52b_rerun" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (b) CONTROL lost — with $GR_ARTEFACT_FILE PRESENT the recorded \`$GR_ARTEFACT_PRODUCER\` pass must still be reused (rc=$rc52b SKIP=[$s52b_skip] RERUN=[$s52b_rerun]); a rule that never remembers it would add a full web build to every release recovery for nothing"
+  else
+    ok "check 52 (b) — CONTROL: with $GR_ARTEFACT_FILE present the same record and selection still REMEMBER \`$GR_ARTEFACT_PRODUCER\` (SKIP=[$s52b_skip] RERUN=[$s52b_rerun]), so the rule only rebuilds when the artefact is really missing"
+  fi
+  rm -rf "$SB/web/.next"
+
+  # ---- (c) CONTROL: no consumer will run -> web stays remembered ---------------
+  s52_tree_c="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_c" "web=pass lint=fail"
+  dec52c="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 PREFLIGHT_ONLY="web,lint" ./scripts/preflight_reuse.sh 2>&1) )"
+  rc52c=$?
+  s52c_skip="$(s52_kv "$dec52c" PREFLIGHT_SKIP)"
+  s52c_rerun="$(s52_kv "$dec52c" PREFLIGHT_RERUN)"
+  if [ "$rc52c" -ne 0 ] || ! s52_has "$s52c_skip" "$GR_ARTEFACT_PRODUCER" || s52_has "$s52c_rerun" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (c) CONTROL lost — with NO browser gate in this run (PREFLIGHT_ONLY=web,lint) the recorded \`$GR_ARTEFACT_PRODUCER\` pass must be reused (rc=$rc52c SKIP=[$s52c_skip] RERUN=[$s52c_rerun]): rebuilding a build nobody reads is cost without coverage"
+  else
+    ok "check 52 (c) — CONTROL: when no gate reads the artefact the recorded \`$GR_ARTEFACT_PRODUCER\` pass is still reused (SKIP=[$s52c_skip] RERUN=[$s52c_rerun]), so a fresh release tree is not charged a build it does not need"
+  fi
+
+  # ---- (d) the RUNNER must not fold the recorded web pass ----------------------
+  # The record is rewritten for this tree with a11y FAILING so the pre-pool
+  # whole-selection exit cannot answer for it: this run really reaches the per-gate
+  # fold, which is the mechanism under test.
+  s52_tree_d="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_d" "web=pass a11y=fail e2e-core=pass"
+  out52d="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 ./scripts/preflight.sh --only "web,a11y,e2e-core" --reuse-record 2>&1) )"
+  rc52d=$?
+  s52d_reused="$(sed -n 's/^==> REUSED (not re-run, recorded pass on THESE bytes): //p' <<<"$out52d" | sed -n 1p)"
+  s52d_skipped="$(sed -n 's/^    STILL SKIPPED AND NOT REUSED (no recorded pass): //p' <<<"$out52d" | sed -n 1p)"
+  # The routing is read off the FOLD, not off which prerequisite the run trips: the
+  # sandbox has no web/node_modules, and a11y's own prerequisite (need_web=1) refuses
+  # with the SAME next-binary message, so the refusal text cannot discriminate the two
+  # arms — the REUSED line can, and so can "STILL SKIPPED AND NOT REUSED".
+  if [ "$rc52d" -eq 0 ]; then
+    bad "check 52 (d) — the reuse run exited 0 in a sandbox where web/a11y have no node_modules, so this leg measured nothing: [$(printf '%s' "$out52d" | tail -n 2 | tr '\n' ' ')]"
+  elif ! grep -qF "NOT REUSING '$GR_ARTEFACT_PRODUCER'" <<<"$out52d"; then
+    bad "check 52 (d) — the runner did not refuse to reuse \`$GR_ARTEFACT_PRODUCER\` (no 'NOT REUSING' line) although $GR_ARTEFACT_FILE is absent and a11y is in the same run: [$(printf '%s' "$out52d" | grep -E 'REUSED|NOT REUSING|PREFLIGHT FAIL' | tr '\n' ' ')]"
+  elif s52_has "$s52d_reused" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (d) — the runner folded the recorded \`$GR_ARTEFACT_PRODUCER\` pass into SKIP (REUSED=[$s52d_reused]) although $GR_ARTEFACT_FILE is absent and a11y is in the same run: asking for web BY NAME would not build it, which is the second half of the measured defect"
+  elif s52_has "$s52d_skipped" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (d) — \`$GR_ARTEFACT_PRODUCER\` is still on the SKIPPED line [$s52d_skipped], so it was skipped for having no recorded pass rather than executed: nothing would build the artefact"
+  else
+    ok "check 52 (d) — the RUNNER re-runs \`$GR_ARTEFACT_PRODUCER\` instead of folding its recorded pass: asked for web,a11y,e2e-core on a tree with no build it refuses to reuse web ('NOT REUSING'), folds only e2e-core (REUSED=[${s52d_reused:-none}]) and executes web — which is where the sandbox stops it, on web's own missing prerequisite"
+  fi
+
+  # ---- (e) CONTROL for (d): with the build present web IS folded ---------------
+  mkdir -p "$SB/web/.next" && printf 's52\n' > "$SB/web/.next/BUILD_ID"
+  s52_tree_e="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_e" "web=pass a11y=fail e2e-core=pass"
+  out52e="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 ./scripts/preflight.sh --only "web,a11y,e2e-core" --reuse-record 2>&1) )"
+  rc52e=$?
+  s52e_reused="$(sed -n 's/^==> REUSED (not re-run, recorded pass on THESE bytes): //p' <<<"$out52e" | sed -n 1p)"
+  if [ "$s52_tree_e" = "$s52_tree_d" ]; then
+    bad "check 52 (e) — the tree sha did not move when web/.next appeared, so this control cannot discriminate the two shapes"
+  elif [ "$rc52e" -eq 0 ]; then
+    bad "check 52 (e) — the control run exited 0 where a11y is selected and has no node_modules: [$(printf '%s' "$out52e" | tail -n 2 | tr '\n' ' ')]"
+  elif grep -qF "NOT REUSING '$GR_ARTEFACT_PRODUCER'" <<<"$out52e"; then
+    bad "check 52 (e) CONTROL lost — with $GR_ARTEFACT_FILE PRESENT the recorded \`$GR_ARTEFACT_PRODUCER\` pass must be folded (the build exists), but the run refused to reuse it: a rule that always rebuilds costs a web build on every release recovery"
+  elif ! s52_has "$s52e_reused" "$GR_ARTEFACT_PRODUCER"; then
+    bad "check 52 (e) CONTROL lost — with $GR_ARTEFACT_FILE PRESENT the SAME argv must still fold the recorded pass; REUSED=[${s52e_reused:-none}] does not name \`$GR_ARTEFACT_PRODUCER\`"
+  else
+    ok "check 52 (e) — CONTROL: with $GR_ARTEFACT_FILE present the SAME argv folds the recorded pass (REUSED=[${s52e_reused:-none}], no 'NOT REUSING'), so (d)'s rebuild is caused by the missing artefact and nothing else"
+  fi
+  rm -rf "$SB/web/.next"
+
+  # ---- (f) the runner's own net: reuse + a browser gate + no producer ---------
+  # A hand-copied PREFLIGHT_RERUN (or a narrower PREFLIGHT_ONLY) can ask for a
+  # browser gate without `web`; the consumer cannot fix that argv, so the runner
+  # must refuse UP FRONT and name the artefact instead of letting Next.js's
+  # "Could not find a production build" read as the gate's verdict.
+  s52_tree_f="$(gr_tree_sha "$SB")"
+  s52_fixture "$s52_tree_f" "lint=pass a11y=fail"
+  out52f="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe52 ./scripts/preflight.sh --only "a11y,lint" --reuse-record 2>&1) )"
+  rc52f=$?
+  if [ "$rc52f" -eq 0 ]; then
+    bad "check 52 (f) — the run exited 0 with a11y selected and no build in the tree, so the net did not fire: [$(printf '%s' "$out52f" | tail -n 2 | tr '\n' ' ')]"
+  elif ! grep -qF "$GR_ARTEFACT_FILE" <<<"$out52f"; then
+    bad "check 52 (f) — a reuse run that executes a11y with no build must NAME $GR_ARTEFACT_FILE and the cause; instead it failed with [$(grep -E 'PREFLIGHT FAIL' <<<"$out52f" | sed -n 1p)] — an operator cannot tell that from a product red"
+  elif ! grep -qF 'a11y' <<<"$out52f" || ! grep -qF 'not in this run' <<<"$out52f"; then
+    bad "check 52 (f) — the refusal must name the gate that needs the build and why \`$GR_ARTEFACT_PRODUCER\` is not in the run: [$(grep -E 'PREFLIGHT FAIL' <<<"$out52f" | sed -n 1p)]"
+  elif grep -qF '==> gate [' <<<"$out52f"; then
+    bad "check 52 (f) — the run STARTED a gate before refusing, so a suite was launched against a tree with no build: [$(grep -E '==> gate \[' <<<"$out52f" | tr '\n' ' ')]"
+  else
+    ok "check 52 (f) — a reuse run that would execute a11y without a build refuses before any gate, naming $GR_ARTEFACT_FILE and that \`$GR_ARTEFACT_PRODUCER\` is not in the run (rc=$rc52f) — not a product red"
+  fi
+  rm -rf "$s52_dir"
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

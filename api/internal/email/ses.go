@@ -244,7 +244,7 @@ func (s *Sender) SendReceipt(to, subject, body, lang string) (string, error) {
 			Simple: &types.Message{
 				Subject: &types.Content{Data: aws.String(subject)},
 				Body: &types.Body{
-					Text: &types.Content{Data: aws.String(body)},
+					Text: &types.Content{Data: aws.String(plainTextBody(body))},
 					Html: &types.Content{Data: aws.String(BrandedHTML(lang, subject, body))},
 				},
 			},
@@ -341,7 +341,7 @@ func buildMultipart(from, to string, replyTo []string, subject, body, lang, file
 
 	b.WriteString("--" + altBoundary + "\r\n")
 	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n\r\n")
-	b.WriteString(body + "\r\n")
+	b.WriteString(plainTextBody(body) + "\r\n")
 
 	b.WriteString("--" + altBoundary + "\r\n")
 	b.WriteString("Content-Type: text/html; charset=\"utf-8\"\r\n")

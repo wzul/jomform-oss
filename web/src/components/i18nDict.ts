@@ -1497,8 +1497,16 @@ export const DICT = {
   "prof.deviceApproved": { en: "Approved. Return to your AI harness: it picks up the connection on its next check.", ms: "Diluluskan. Kembali ke harness AI anda — ia akan mengambil sambungan pada pemeriksaan seterusnya.", zh: "已批准。回到您的 AI 工具 — 它会在下次检查时取得连接。", ta: "அனுமதிக்கப்பட்டது. உங்கள் AI கருவிக்குத் திரும்புங்கள் — அடுத்த சரிபார்ப்பில் இணைப்பைப் பெறும்.", ar: "تمت الموافقة. عُد إلى أداتك — ستلتقط الاتصال في فحصها التالي." },
   "prof.deviceDenied": { en: "Denied. The agent cannot connect.", ms: "Ditolak. Agent tidak boleh bersambung.", zh: "已拒绝。代理无法连接。", ta: "நிராகரிக்கப்பட்டது. முகவர் இணைக்க முடியாது.", ar: "تم الرفض. لا يمكن للوكيل الاتصال." },
   "prof.deviceEnterCode": { en: "Code from the email", ms: "Kod dari emel", zh: "邮件中的代码", ta: "மின்னஞ்சலில் உள்ள குறியீடு", ar: "الرمز من البريد" },
+  "prof.deviceEmptyHint": { en: "An agent asked to connect? Enter the code it showed you.", ms: "Ada ejen meminta untuk bersambung? Masukkan kod yang ditunjukkannya.", zh: "有代理请求连接？输入它显示的代码。", ta: "ஒரு முகவர் இணைக்கக் கேட்டதா? அது காட்டிய குறியீட்டை உள்ளிடவும்.", ar: "هل طلب وكيل الاتصال؟ أدخل الرمز الذي عرضه عليك." },
+  "prof.deviceChecking": { en: "Checking…", ms: "Menyemak…", zh: "正在检查…", ta: "சரிபார்க்கிறது…", ar: "جارٍ التحقق…" },
   "prof.deviceCheck": { en: "Check code", ms: "Semak kod", zh: "检查代码", ta: "குறியீட்டைச் சரிபார்", ar: "تحقق من الرمز" },
-  "prof.deviceNotFound": { en: "This code is not valid or has expired.", ms: "Kod ini tidak sah atau sudah tamat tempoh.", zh: "此代码无效或已过期。", ta: "இந்தக் குறியீடு செல்லாதது அல்லது காலாவதியானது.", ar: "هذا الرمز غير صالح أو منتهي." },
+  "prof.deviceNotFound": { en: "This code is not valid or has expired. Ask your agent for a new one.", ms: "Kod ini tidak sah atau sudah tamat tempoh — minta kod baharu daripada ejen anda.", zh: "此代码无效或已过期 — 请向您的代理索取新的代码。", ta: "இந்தக் குறியீடு செல்லாதது அல்லது காலாவதியானது — உங்கள் முகவரிடம் புதிய குறியீட்டைக் கேளுங்கள்.", ar: "هذا الرمز غير صالح أو منتهي — اطلب رمزاً جديداً من وكيلك." },
+  // Card t_3368be9e: the consent card names the code it belongs to, in the same
+  // words the device-authorisation email uses ("Your code: {code}" /
+  // "Kod anda: {code}" — api/internal/emailtext catalog DeviceAuthorization).
+  "prof.deviceYourCode": { en: "Your code", ms: "Kod anda", zh: "您的代码", ta: "உங்கள் குறியீடு", ar: "رمزك" },
+  "prof.deviceExpired": { en: "This code has expired. Ask your agent for a new one.", ms: "Kod ini sudah tamat tempoh — minta kod baharu daripada ejen anda.", zh: "此代码已过期 — 请向您的代理索取新的代码。", ta: "இந்தக் குறியீடு காலாவதியானது — உங்கள் முகவரிடம் புதிய குறியீட்டைக் கேளுங்கள்.", ar: "انتهت صلاحية هذا الرمز — اطلب رمزاً جديداً من وكيلك." },
+  "prof.deviceUsed": { en: "This code has already been approved and used. Ask your agent for a new one.", ms: "Kod ini sudah diluluskan dan digunakan. Minta kod baharu daripada ejen anda.", zh: "此代码已被批准并使用。请向您的代理索取新的代码。", ta: "இந்தக் குறியீடு ஏற்கனவே அனுமதிக்கப்பட்டு பயன்படுத்தப்பட்டது. உங்கள் முகவரிடம் புதிய குறியீட்டைக் கேளுங்கள்.", ar: "تمت الموافقة على هذا الرمز واستخدامه بالفعل. اطلب رمزاً جديداً من وكيلك." },
   // Card t_cf45b84c: the access-level choice on the consent card. The visible
   // labels state the CONSEQUENCE in plain words — no "scope", no "grant" — so
   // the person can tell what they are handing over without knowing OAuth.

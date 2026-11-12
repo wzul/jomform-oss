@@ -5,6 +5,9 @@
 // docs/ tree, so the guide text and its screenshot manifest are materialised at build-prep
 // time. src/lib/guidesContent.test.ts fails when this file drifts from docs/guides.
 //
+// src/lib/docsSearch.gen.json indexes the guide bodies OUT of this module (web/scripts/docsNav.mjs),
+// so it is derived from the same READMEs: `npm run guides:sync` regenerates both files.
+//
 // The screenshots themselves are copied to web/public/guides/<slug>/ (same script) — the
 // URLs the rendered <img> tags use.
 
