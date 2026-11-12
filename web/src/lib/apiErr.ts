@@ -129,6 +129,11 @@ export const API_ERROR_KEYS: Record<string, Key> = {
   "role.manageRequired": "apiErr.manageRequired",
   "role.adminRequired": "apiErr.adminRequired",
   "scope.readonly": "apiErr.scopeReadonly",
+  // Card t_cf45b84c: the consent card refused the access level it was sent.
+  // The two radios cannot produce this, so the only way to see it is a stale
+  // tab or a hand-made request — the person needs to pick again, NOT to conclude
+  // their code has expired (the page's generic sentence for this call).
+  "device.scopeInvalid": "apiErr.deviceScopeInvalid",
 
   // Payments / CHIP / subscriptions.
   "payment.notConfigured": "apiErr.paymentNotConfigured",

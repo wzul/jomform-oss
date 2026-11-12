@@ -130,6 +130,12 @@ const (
 	CodeRoleAdminRequired  = "role.adminRequired"
 	CodeScopeReadonly      = "scope.readonly"
 
+	// The device consent card's access-level refusal (card t_cf45b84c). A 400
+	// with only the class code cannot be told apart from a malformed body, and
+	// the sentence the page shows for "this code is not valid" would be wrong:
+	// the code IS valid and the person may simply pick again.
+	CodeDeviceScopeInvalid = "device.scopeInvalid"
+
 	// Payments / CHIP / subscriptions.
 	CodePaymentNotConfigured  = "payment.notConfigured"
 	CodePaymentInactive       = "payment.inactive"
@@ -364,6 +370,11 @@ var errCodeByMessage = map[string]string{
 	"you need the manage or admin role":       CodeRoleManageRequired,
 	"you need the workspace admin role":       CodeRoleAdminRequired,
 	"insufficient scope (readwrite required)": CodeScopeReadonly,
+
+	// The device consent card's access-level refusal (card t_cf45b84c). Keyed on
+	// the constant oauth_device.go writes, so the wording and this row cannot
+	// drift apart silently.
+	deviceScopeInvalidMessage: CodeDeviceScopeInvalid,
 
 	// The chat lane's ambiguous-scope refusal (t_fb393abe). Keyed on the exact
 	// literal rest_scope.go writes for scopeAmbiguous. Without this entry the

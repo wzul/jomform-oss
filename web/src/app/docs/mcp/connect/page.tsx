@@ -70,20 +70,20 @@ const SECTIONS: Section[] = [
       "Some MCP clients only implement the browser flow. On a machine with no display they cannot finish. The **JomForm CLI** runs the device grant in your terminal instead.",
       {
         steps: [
-          "Build the CLI once: `cd api && go build -o jomform ./cmd/jomform`.",
-          "Run `./jomform mcp login --headless`. Add `--out` for a client other than Cursor, and `--email` to mail the code to a specific address.",
+          "Build it once into a directory on your `PATH`: `go build -o \"$HOME/.local/bin/jomform\" ./cmd/jomform`.",
+          "Run `jomform mcp login --headless`. Add `--out` for a client other than Cursor, and `--email` to mail the code to a specific address.",
           "Open the printed link on any device — a phone is fine — sign in and press **Approve**.",
-          "The command finishes by itself, writes the token and prints the config path.",
+          "The command finishes by itself, stores the grant 0600 and prints the config path.",
         ],
       },
       {
-        code: "$ ./jomform mcp login --headless\nhttps://jomform.com/profile?tab=mcp&user_code=BCDF-GHJK\nBCDF-GHJK\nopen this link and press Approve — you have 10 minutes\n/home/you/.cursor/mcp.json",
+        code: "$ jomform mcp login --headless\nhttps://jomform.com/profile?tab=mcp&user_code=BCDF-GHJK\nBCDF-GHJK\nopen this link and press Approve — you have 10 minutes\n/home/you/.cursor/mcp.json",
         caption: "The link already carries the code; the code is repeated on its own line.",
       },
-      "The entry it writes is the one you would add by hand, with the token in the header:",
+      "The entry it writes launches the CLI, which holds the token and renews it from `~/.config/jomform/token.json`. Nothing secret goes into the config:",
       {
-        code: '{\n  "mcpServers": {\n    "jomform": {\n      "url": "https://mcp.jomform.com/mcp",\n      "headers": { "Authorization": "Bearer <token>" }\n    }\n  }\n}',
-        caption: "Only the jomform entry is written.",
+        code: '{\n  "mcpServers": {\n    "jomform": {\n      "command": "/home/you/.local/bin/jomform",\n      "args": ["mcp", "proxy", "--mcp-url", "https://mcp.jomform.com/mcp"]\n    }\n  }\n}',
+        caption: "Only the jomform entry is written, and it carries no token.",
       },
       {
         note: "Most clients read their config file only at startup. Restart the client after the command finishes, then call a tool to check the connection.",
@@ -114,12 +114,16 @@ const SECTIONS: Section[] = [
     body: [
       {
         list: [
-          "`./jomform mcp status` prints the expiry, the scopes and the account, and exits non-zero when there is no token or it expired.",
-          "`./jomform mcp logout` revokes the refresh token on the server, removes the mcp.json entry and deletes the local copy.",
+          "`jomform mcp status` prints the expiry, the scopes and the account. When the access token has passed, it renews it first.",
+          "`jomform mcp status --out` also says whether the harness file carries the entry.",
+          "`jomform mcp logout` revokes the refresh token on the server, removes the mcp.json entry and deletes the local copy.",
         ],
       },
       {
-        warn: "The entry carries the **access token**, issued for about an hour. When `status` says it expired, run the login command again.",
+        note: "The **proxy** renews the access token a minute before it expires, so a tool call does not meet a 401. The grant lasts 30 days, then sign in again.",
+      },
+      {
+        warn: "Moving or deleting the binary named in the entry breaks the connection. Re-run the login command after an upgrade that changes its path.",
       },
     ],
   },

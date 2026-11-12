@@ -33,6 +33,14 @@
 #   N. --select-test-packages prints that set for <base>..HEAD (the same code path,
 #      no worktree, no gate).
 #
+# The gate's CPU budget, and the attribution it feeds (card t_d1bc5164):
+#   K.  a red batch of ONE names that ref and never says "combination" — the old label named
+#       no culprit at all (two train reds on an unchanged tree were really a11y CPU
+#       starvation at the old 300% cap) — and a red under a sub-400% cap is flagged as
+#       possible contention, while a red at 400% is not.
+#   P.  the quota the gate ACTUALLY receives is CPUQuota=400% (read off the argv a
+#       `systemd-run` stub is handed), and TRAIN_CPU_QUOTA still overrides it.
+#
 # The guard rails on the seam:
 #   Q. preflight REFUSES a package list with no --for-diff, and refuses a token that
 #      is not a package path (a leading '-' would become a `go test` flag); the train
@@ -436,10 +444,79 @@ echo "== K. with no recorded red for the base, a red batch still names its culpr
 OUT=$(TRAIN_GATE_CMD="bash $REDSTUB" run --base "$BASE" train-good1); RC=$?
 printf '%s\n' "$OUT" | sed 's/^/    /'
 [ $RC -eq 1 ] && ok "exit 1 when the base has no recorded red" || bad "expected exit 1, got $RC"
-# A batch of one cannot be narrowed further, so the train names the whole combination.
-grep -qE 'BISECT=(train-good1|combination .*train-good1)' <<<"$OUT" \
-  && ok "the batch's own ref is named (as the combination when there is nothing to narrow)" \
-  || bad "culprit not named"
+# THE DEFECT THIS GUARDS (card t_d1bc5164): a batch of ONE used to fall through the prefix
+# bisect (its loop starts at k=1 and never runs for a single ref) and print
+# `BISECT=combination (eject any one of: <the only ref>)`. That named NO culprit — it sent a
+# rework card after an innocent PR #1722 whose tree was green in isolation — on what was
+# really the gate's CPU starvation. One ref can only ever be itself.
+grep -qx 'merge-train\.sh: BISECT=train-good1 (the batch holds one ref — there is nothing to bisect)' <<<"$OUT" \
+  && ok "names the ONLY ref in a batch of one" \
+  || bad "the single ref is not named: [$(grep 'BISECT' <<<"$OUT")]"
+grep -qi 'combination' <<<"$OUT" \
+  && bad "still calls a batch of one a COMBINATION — the label names no culprit" \
+  || ok "no COMBINATION claim for a batch of one"
+grep -q 'green on its own, the red was the gate' <<<"$OUT" \
+  && ok "says how to tell a red ref from a red gate (re-run the same tree alone)" \
+  || bad "no re-run-alone hint"
+
+echo "== K2. a red under a sub-400% cap says it may be CONTENTION; at 400% it does not"
+# The same defect from the other side: at 300% the three CONCURRENT browser gates this
+# host runs starve, and the red is indistinguishable from a failing suite. A run that
+# cannot see the difference must say so instead of blaming the ref.
+PBIN="$S/pbin"; mkdir -p "$PBIN"
+# A `systemd-run` stub: record the argv the train really builds, then run the gate
+# unwrapped (the selftest never needs a real cgroup, and never touches the host's).
+cat > "$PBIN/systemd-run" <<'FAKESDR'
+#!/bin/sh
+{ printf 'SDR-ARGV:'; printf ' %s' "$@"; printf '\n'; } >> "${SDR_LOG:?SDR_LOG unset}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scope|-q) shift ;;
+    -p) shift 2 ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+FAKESDR
+chmod +x "$PBIN/systemd-run"
+SDRLOG=$S/sdr.log
+: > "$SDRLOG"
+OUT=$(PATH="$PBIN:$PATH" SDR_LOG="$SDRLOG" TRAIN_CPU_QUOTA=300% TRAIN_GATE_CMD="bash $REDSTUB" \
+      run --base "$BASE" train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 1 ] && ok "exit 1 under a 300% cap (a real red is still a red)" || bad "expected exit 1, got $RC"
+grep -q 'CPUQuota=300%' "$SDRLOG" && ok "the cap was really applied to the gate (300%)" \
+  || bad "the gate was not wrapped at 300%: [$(cat "$SDRLOG")]"
+grep -q 'can be CONTENTION' <<<"$OUT" && ok "warns that a red under the cap may be contention" \
+  || bad "no contention warning under a sub-400% cap — the next lane sees only BISECT"
+grep -q 'TRAIN_CPU_QUOTA=400%' <<<"$OUT" && ok "says what to re-run with" || bad "warning names no remedy"
+OUT=$(PATH="$PBIN:$PATH" SDR_LOG="$SDRLOG" TRAIN_CPU_QUOTA=400% TRAIN_GATE_CMD="bash $REDSTUB" \
+      run --base "$BASE" train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 1 ] && ok "exit 1 at 400% too (the gate is not weakened)" || bad "expected exit 1, got $RC"
+grep -q 'can be CONTENTION' <<<"$OUT" \
+  && bad "still blames contention at 400%, where the measurement says the browser group fits" \
+  || ok "no contention warning at 400% — a red there is a real red"
+
+echo "== P. the gate runs under CPUQuota=400% by default (300% starved the browser group)"
+# Asserted where the value is USED, not where it is written: the stub above records the
+# argv the train hands systemd-run. Card t_d1bc5164: at 300% the same unchanged tree redded
+# a11y in 817-1014 s and PASSED in 287 s alone; 400% is the value that landed it.
+: > "$SDRLOG"
+OUT=$(PATH="$PBIN:$PATH" SDR_LOG="$SDRLOG" TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 0 ] && ok "exit 0 with a green gate under the quota wrapper" || bad "expected exit 0, got $RC"
+grep -q 'CPUQuota=400%' "$SDRLOG" \
+  && ok "the default the gate actually receives is CPUQuota=400%" \
+  || bad "the gate's default quota is not 400%: [$(cat "$SDRLOG")]"
+grep -q 'under CPUQuota=400%' <<<"$OUT" && ok "the run states the quota it gated under" \
+  || bad "the run does not say which quota it used"
+: > "$SDRLOG"
+OUT=$(PATH="$PBIN:$PATH" SDR_LOG="$SDRLOG" TRAIN_CPU_QUOTA=500% TRAIN_GATE_CMD="bash $STUB" \
+      run --base "$BASE" train-good1); RC=$?
+[ $RC -eq 0 ] && ok "exit 0 with the quota overridden" || bad "expected exit 0, got $RC"
+grep -q 'CPUQuota=500%' "$SDRLOG" && ok "TRAIN_CPU_QUOTA still overrides the default" \
+  || bad "the override was ignored: [$(cat "$SDRLOG")]"
 
 echo "== L. the author-identity guard BITES on a foreign author"
 # The defect this guards: every squash on main was authored by the personal gmail because

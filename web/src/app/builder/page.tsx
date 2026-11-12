@@ -31,10 +31,12 @@ import {
   publishOutcome,
 } from "../../lib/publishResult";
 // Card t_983425e5: the product picker must be able to DISPLAY the empty state,
-// and the builder must say the buyer sentence when a block is unpointed. Both
-// decisions live in a plain .ts module so the node test runner can prove them;
-// this file only renders what they answer.
-import { productSelectValue, unpointedProductBlocks } from "../../lib/productPick";
+// and the builder must say the buyer sentence when a block is unpointed. Card
+// t_d5112f02: an id that still has a product ROW (archived / in the bin) is a
+// different answer again — a notice, not a refusal. All three decisions live in a
+// plain .ts module so the node test runner can prove them; this file only
+// renders what they answer.
+import { productBlockStates, productSelectValue } from "../../lib/productPick";
 import TemplatePicker from "../../components/TemplatePicker";
 import FormModeControl, { type FormMode } from "../../components/FormModeControl";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
@@ -162,6 +164,44 @@ type Block = {
 };
 
 type Product = { id: string; name: string; price_sen: number; type: string; images?: string[] };
+
+/**
+ * readLiveProductIDs returns the ids of every product ROW the caller's workspace
+ * still has — active, archived (`?include_archived=1`) and in the bin (`/trash`).
+ * That is exactly the set `dbstore.ProductIDsForAccount` hands the API's publish
+ * guard, and it is the ONLY way the builder can tell an ARCHIVED product (whose
+ * block still sells from the form's snapshot, so the form is healthy) from a
+ * PURGED one (whose buyer page refuses) — both are absent from the active-only
+ * picker list.
+ *
+ * Best-effort by design: these two reads only refine one notice, so a failure
+ * returns `undefined` and the builder falls back to its pre-t_d5112f02 reading
+ * (an id it cannot see is treated as gone — a false alarm at worst, never a false
+ * "buyers are fine"). A shape it does not recognise is treated the same way.
+ */
+async function readLiveProductIDs(): Promise<string[] | undefined> {
+  const read = async (url: string): Promise<string[] | null> => {
+    let d: unknown;
+    try {
+      d = await fetchJson<unknown>(workspaceUrl(url));
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(d)) return null;
+    const ids: string[] = [];
+    for (const row of d) {
+      const id = (row as { id?: unknown } | null)?.id;
+      if (typeof id === "string" && id) ids.push(id);
+    }
+    return ids;
+  };
+  const [live, trash] = await Promise.all([
+    read("/api/rest/products?include_archived=1"),
+    read("/api/rest/products/trash"),
+  ]);
+  if (live === null || trash === null) return undefined;
+  return [...new Set([...live, ...trash])];
+}
 
 /* Issue #173: categorized palette. Each group is a Gravity-Forms-style
    section. Items are draggable onto the canvas and click-to-add (mobile). */
@@ -311,6 +351,11 @@ export default function Builder() {
   };
   const typeHint = (bt: BlockType) => t((bt === "textarea" ? "blk.noteHint" : `blk.${bt}Hint`) as import("../../components/i18n").Key);
   const [products, setProducts] = useState<Product[]>([]);
+  // Card t_d5112f02: the ids of every product ROW this workspace still has
+  // (active + archived + in the bin) — the same set the API's publish guard
+  // reads. `undefined` means the read failed and the builder keeps its pre-fix
+  // reading; see readLiveProductIDs.
+  const [liveProductIDs, setLiveProductIDs] = useState<string[] | undefined>(undefined);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [slug, setSlug] = useState("");
   const [title, setTitle] = useState("New form");
@@ -468,6 +513,12 @@ export default function Builder() {
       return;
     }
     setProducts(r.data);
+    // Card t_d5112f02: the row set the archived-vs-purged split needs. AWAITED so
+    // the first render of a saved form already knows it (a late answer would show
+    // the buyer's sentence for an archived product for one frame and then swap
+    // it). A failure is NOT a palette failure: readLiveProductIDs answers
+    // `undefined` and the notice falls back to the pre-fix reading.
+    setLiveProductIDs(await readLiveProductIDs());
   }, [t, goToLogin]);
 
   // Shipping by zone: the workspace's zone sets, so the shipping block's panel
@@ -1983,7 +2034,16 @@ export default function Builder() {
   // banner above the canvas and the publish refusal's link both read this ONE
   // answer, and it is computed before the early return so the hooks above stay
   // unconditional.
-  const unpointedBlockIDs = unpointedProductBlocks(blocks, products);
+  //
+  // Card t_d5112f02: a product that still has a ROW (archived, or in the bin) is
+  // NOT one of them. Its picker shows the placeholder too (the list is
+  // active-only), but the buyer page still sells it from the form's saved
+  // snapshot and the API's `/forms` flags call the form healthy — so it gets the
+  // archived notice, never the buyer's sentence. Both arrays come from one pass
+  // over the same rule (lib/productPick), so a block cannot land in both.
+  const productStates = productBlockStates(blocks, products, liveProductIDs);
+  const unpointedBlockIDs = [...productStates.unset, ...productStates.purged];
+  const retiredBlockIDs = productStates.retired;
 
   if (sessionError) return <SessionFault />;
 
@@ -2197,6 +2257,35 @@ export default function Builder() {
             onClick={(e) => {
               e.preventDefault();
               focusBlock(unpointedBlockIDs[0]);
+            }}
+            className="shrink-0 font-medium text-[var(--jf-primary)] underline"
+          >
+            {t("bld.goToProductBlock")} →
+          </a>
+        </div>
+      )}
+
+      {/* Card t_d5112f02: the SAME picker question, the OPPOSITE answer. A product
+          block bound to an ARCHIVED product (or one in the bin) shows the
+          placeholder — the list is active-only — but the product row still
+          exists, so the buyer page resolves the block from the form's saved
+          snapshot and the form still takes orders. The API says so too
+          (dbstore.PublishWarning reports only a PURGED product, and /forms
+          carries not_accepting_orders=false), so this is a notice, never the
+          buyer's sentence: the refusal banner above and this one are disjoint by
+          construction (lib/productPick.productBlockStates). */}
+      {mode !== "response" && retiredBlockIDs.length > 0 && (
+        <div
+          role="status"
+          data-testid="builder-product-archived"
+          className="flex flex-col gap-2 border-b border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2.5 text-xs text-[var(--jf-text-secondary)] md:flex-row md:items-center md:px-4"
+        >
+          <span className="min-w-0">{t("bld.productArchivedWarn")}</span>
+          <a
+            href={`#jf-block-${retiredBlockIDs[0]}`}
+            onClick={(e) => {
+              e.preventDefault();
+              focusBlock(retiredBlockIDs[0]);
             }}
             className="shrink-0 font-medium text-[var(--jf-primary)] underline"
           >

@@ -3126,6 +3126,11 @@ func writeWorkspaceListing(w http.ResponseWriter, slug, lang string, forms []*db
 type workspaceLandingData struct {
 	Slug string
 	Lp   *dbstore.LandingPage
+	// Theme carries the landing page's two theme COLOURS typed for the CSS
+	// context they are interpolated into (card t_bfd97462). Built by
+	// landingThemeFrom at render time; dbstore.LandingPage keeps plain strings
+	// so the storage model does not depend on html/template.
+	Theme landingThemeView
 	// HasForms reports whether at least one published form exists (used to
 	// decide the "no forms yet" hint behind the hero).
 	HasForms bool
@@ -3133,6 +3138,41 @@ type workspaceLandingData struct {
 	// Only slugs that resolve to a published form in the workspace are included;
 	// unknown/draft/private slugs are dropped server-side so they never render.
 	Embeds []landingEmbedView
+}
+
+// landingThemeView types the landing page's colours for the CSS declarations
+// landingPageTmpl writes them into (card t_bfd97462).
+//
+// Why a type and not an escape: the colours sit in CSS TEXT state, where
+// html/template runs cssValueFilter over anything that is not template.CSS.
+// That filter rejects `(`, so `rgb(180, 83, 9)` — a colour the dashboard and
+// MCP write paths accept — was replaced by the `ZgotmplZ` sentinel: the page
+// still returned 200, the row still held the merchant's colour, nothing
+// logged, and `.cta` fell back to the template's indigo while the hero and
+// embed headings fell back to near-black. A hex value passes the same filter,
+// which is why a hex theme never showed the defect.
+//
+// The typing lives HERE, in the httpapi view, and not on dbstore.LandingPage:
+// the same split as blockThemeView (render_blocks.go:744), so the storage model
+// never imports html/template. themeCSSValue carries the `<style` breakout
+// guard that verbatim emission requires.
+type landingThemeView struct {
+	PrimaryColor    template.CSS
+	BackgroundColor template.CSS
+}
+
+// landingThemeFrom builds the typed view for one landing page. A nil config or
+// an unset colour yields the empty template.CSS, which the template's `{{if}}`
+// reads as false and replaces with its own default — the same behaviour the
+// plain strings had.
+func landingThemeFrom(lp *dbstore.LandingPage) landingThemeView {
+	if lp == nil {
+		return landingThemeView{}
+	}
+	return landingThemeView{
+		PrimaryColor:    themeCSSValue(lp.PrimaryColor),
+		BackgroundColor: themeCSSValue(lp.BackgroundColor),
+	}
 }
 
 // landingEmbedView is one inline-embedded form on the landing page (issue
@@ -3158,11 +3198,11 @@ var landingPageTmpl = template.Must(template.New("workspace-landing").Parse(`<!d
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-         background:{{.Lp.BackgroundColor}}; color:#17181c; min-height:100vh; }
+         background:{{.Theme.BackgroundColor}}; color:#17181c; min-height:100vh; }
   .wrap { max-width:860px; margin:0 auto; padding:48px 24px 72px; }
   .hero { padding:24px 0 8px; }
   .hero h1 { margin:0 0 10px; font-size:40px; line-height:1.15; letter-spacing:-.02em;
-             color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#17181c{{end}}; }
+             color:{{if .Theme.PrimaryColor}}{{.Theme.PrimaryColor}}{{else}}#17181c{{end}}; }
   .hero .sub { margin:0; font-size:18px; color:#6b7280; }
   .logo { max-width:120px; max-height:80px; object-fit:contain; margin-bottom:16px;
           display:{{if .Lp.LogoURL}}block{{else}}none{{end}}; }
@@ -3171,7 +3211,7 @@ var landingPageTmpl = template.Must(template.New("workspace-landing").Parse(`<!d
   .body { margin-top:28px; font-size:17px; line-height:1.7; color:#3f434a;
           white-space:pre-wrap; }
   .ctas { display:flex; flex-wrap:wrap; gap:12px; margin-top:28px; }
-  .cta { background:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#4f46e5{{end}}; color:#fff;
+  .cta { background:{{if .Theme.PrimaryColor}}{{.Theme.PrimaryColor}}{{else}}#4f46e5{{end}}; color:#fff;
          font-weight:600; text-decoration:none; padding:14px 26px; border-radius:12px;
          display:inline-block; transition:opacity .15s ease, transform .15s ease; }
   .cta:hover { opacity:.9; transform:translateY(-1px); }
@@ -3179,7 +3219,7 @@ var landingPageTmpl = template.Must(template.New("workspace-landing").Parse(`<!d
   /* Issue #362: inline-embedded published forms (e.g. RSVP). */
   .embeds { margin-top:36px; display:flex; flex-direction:column; gap:36px; }
   .embed { display:block; }
-  .embed h2 { margin:0 0 12px; font-size:20px; color:{{if .Lp.PrimaryColor}}{{.Lp.PrimaryColor}}{{else}}#17181c{{end}}; }
+  .embed h2 { margin:0 0 12px; font-size:20px; color:{{if .Theme.PrimaryColor}}{{.Theme.PrimaryColor}}{{else}}#17181c{{end}}; }
   .embed iframe { width:100%; height:720px; border:0; border-radius:16px;
                   background:#ffffff; box-shadow:0 1px 3px rgba(23,24,28,0.08); }
 </style>
@@ -3218,6 +3258,7 @@ func (h *PublicHandlers) renderWorkspaceLanding(w http.ResponseWriter, r *http.R
 	data := workspaceLandingData{
 		Slug:     slug,
 		Lp:       lp,
+		Theme:    landingThemeFrom(lp),
 		HasForms: len(forms) > 0,
 		Embeds:   resolveLandingEmbeds(lp.Forms, forms),
 	}

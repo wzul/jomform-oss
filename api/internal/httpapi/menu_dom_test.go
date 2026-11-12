@@ -889,6 +889,18 @@ const menuDOMShim = `
     };
     var h = target && target.__h;
     if(h){ fireLocal(h, type, ev); }
+    // A real event BUBBLES from the target up to the document, so a listener an
+    // ancestor registered runs after the target's own. Without this, a control
+    // whose handler lives on its <form> (the menu checkout repricing when the
+    // buyer switches payment method) looked dead in the harness while working
+    // in a browser. A submit event is the exception: it does not bubble.
+    if(h && type !== 'submit' && !ev.propagationStopped){
+      for(var n = __parent(h); n; n = __parent(n)){
+        if(!__tag(n)) break; // the document node — its handlers run once, below
+        fireLocal(n, type, ev);
+        if(ev.propagationStopped) break;
+      }
+    }
     var list = docHandlers[type] || [];
     for(var i=0;i<list.length;i++){ list[i].call(g, ev); }
     return ev;

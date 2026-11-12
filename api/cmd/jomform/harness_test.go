@@ -20,9 +20,9 @@ const harnessFixture = `{
 }
 `
 
-func entryFor(t *testing.T, url, token string) json.RawMessage {
+func entryFor(t *testing.T, mcpURL, command string) json.RawMessage {
 	t.Helper()
-	entry, err := harnessEntryJSON(url, token)
+	entry, err := harnessEntryJSON(mcpURL, command)
 	if err != nil {
 		t.Fatalf("harnessEntryJSON: %v", err)
 	}
@@ -84,21 +84,26 @@ func TestMergeServerAddsTheContainerWhenTheFileHasNone(t *testing.T) {
 }
 
 func TestMergeServerWritesAFreshFileWhenEmpty(t *testing.T) {
-	entry := entryFor(t, "https://mcp.example.test/mcp", fixtureAccessToken())
+	entry := entryFor(t, "https://mcp.example.test/mcp", "/usr/local/bin/jomform")
 	out, err := mergeServer(nil, "jomform", entry)
 	if err != nil {
 		t.Fatalf("mergeServer: %v", err)
 	}
 	var doc struct {
 		MCPServers map[string]struct {
-			URL string `json:"url"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		t.Fatalf("fresh config is not JSON: %v\n%s", err, out)
 	}
-	if doc.MCPServers["jomform"].URL != "https://mcp.example.test/mcp" {
-		t.Fatalf("fresh config does not point at the MCP endpoint:\n%s", out)
+	got := doc.MCPServers["jomform"]
+	if got.Command != "/usr/local/bin/jomform" {
+		t.Fatalf("fresh config does not launch the CLI (%q):\n%s", got.Command, out)
+	}
+	if strings.Join(got.Args, " ") != "mcp proxy --mcp-url https://mcp.example.test/mcp" {
+		t.Fatalf("fresh config args = %q:\n%s", got.Args, out)
 	}
 }
 

@@ -143,6 +143,39 @@ func DeviceScopes(requested string) ([]string, bool) {
 	return grantedScopesFrom(requested, DeviceDefaultScopes())
 }
 
+// ChosenScope resolves a scope a HUMAN picked at a consent screen: the device
+// consent card lets the person approve a request as `read` or as `readwrite`,
+// in either direction, and this is the one place that value is validated.
+//
+// THE REQUEST IS A DEFAULT, NOT A CEILING. Everywhere else in this package the
+// scope ladder narrows and never widens (a refresh keeps its grant; a token
+// exchange cannot upgrade). Here the grant comes from the person, who is the
+// only authority the request was ever standing in for: a client that asked for
+// `read` can be approved as `readwrite` so the agent never has to be re-granted
+// later, and a client that asked for `readwrite` can be approved as `read` by a
+// cautious user. So the membership test is against ScopesSupported() — the set
+// this deployment can actually ISSUE — and NOT against what the client asked
+// for.
+//
+// WHAT IS STILL REFUSED, LOUDLY. Anything that is not exactly one advertised
+// value: an unknown name, a different case (`READWRITE`), a comma-joined pair,
+// a space-joined pair, an empty string. Callers must answer invalid_scope with
+// a machine code rather than clamp to a neighbouring value — silently granting
+// something other than what was chosen is the failure this function exists to
+// prevent.
+func ChosenScope(chosen string) ([]string, bool) {
+	v := strings.TrimSpace(chosen)
+	if v == "" {
+		return nil, false
+	}
+	for _, s := range ScopesSupported() {
+		if s == v {
+			return []string{s}, true
+		}
+	}
+	return nil, false
+}
+
 // GrantedScopes resolves a requested `scope` parameter (RFC 6749 §3.3: a
 // space-delimited, case-sensitive list) into the exact set to grant.
 //

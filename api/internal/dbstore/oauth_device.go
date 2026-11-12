@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/wzul/jomform/api/internal/oauthmeta"
 )
 
 // DeviceAuthorisation errors. The token endpoint maps them onto the RFC 8628
@@ -36,6 +38,11 @@ var (
 	// ErrDeviceSlowDown: polled faster than interval_s; the interval has been
 	// penalised by 5s for the rest of the authorisation.
 	ErrDeviceSlowDown = errors.New("slow_down")
+	// ErrDeviceScopeUnsupported: the approval named a scope this deployment
+	// cannot issue. Distinct from ErrDeviceCodeInvalid because the code is fine
+	// and the person may simply pick again — answering "this code is not valid"
+	// would tell them to start over for a one-click mistake.
+	ErrDeviceScopeUnsupported = errors.New("the chosen scope is not one this server can issue")
 	// ErrOAuthTokenMissing: no live token row with that id for this user.
 	ErrOAuthTokenMissing = errors.New("oauth token not found")
 )
@@ -146,8 +153,13 @@ func (s *OAuthStore) DeviceCodeByUserCode(ctx context.Context, userCodeHash stri
 // login_hint that matched nobody) is bound to the approving session here —
 // that is the RFC 8628 "type the code at the verification URI" path.
 //
-// `scope` may only NARROW the requested set. Widening is refused by the caller
-// AND re-checked here, because this is the last write before a token exists.
+// `scope` is the HUMAN'S CHOICE, not a narrowing of the client's request. The
+// consent card offers both scopes in either direction (card t_cf45b84c): the
+// request is only the default the card opens on, so an approval may widen as
+// well as narrow. What it may NOT do is name something this deployment cannot
+// issue, and that is re-checked here because this is the last write before a
+// token exists — the caller validating it first is not a reason for the store to
+// trust it.
 func (s *OAuthStore) ApproveDeviceCode(ctx context.Context, userCodeHash, userID, accountID string, scope []string) (*OAuthDeviceCode, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -171,8 +183,8 @@ func (s *OAuthStore) ApproveDeviceCode(ctx context.Context, userCodeHash, userID
 	case d.UserID != "" && d.UserID != userID:
 		// Someone else's authorisation: indistinguishable from unknown.
 		return nil, ErrDeviceCodeInvalid
-	case !scopeSubset(scope, d.Scope):
-		return nil, ErrDeviceCodeInvalid
+	case !issuableScope(scope):
+		return nil, ErrDeviceScopeUnsupported
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE oauth_device_codes
@@ -295,15 +307,26 @@ func (s *OAuthStore) PollDeviceCode(ctx context.Context, deviceHash, clientID st
 	return d, nil
 }
 
-// scopeSubset reports whether every scope in `want` is present in `have`.
-// Used to guarantee an approval can only narrow the client's request.
-func scopeSubset(want, have []string) bool {
-	set := make(map[string]bool, len(have))
-	for _, s := range have {
-		set[s] = true
+// issuableScope reports whether `scope` is a set this deployment can issue: one
+// or more advertised values and nothing else. It replaces the old
+// "must be a subset of the client's request" rule, because at the consent card
+// the PERSON decides the scope and the request is only the default the card
+// opens on (card t_cf45b84c) — widening at approval is the point, so the request
+// is no longer a ceiling. The vocabulary check stays here: an approval that
+// names a scope this server cannot honour must fail before anything is written.
+func issuableScope(scope []string) bool {
+	if len(scope) == 0 {
+		return false
 	}
-	for _, s := range want {
-		if !set[s] {
+	for _, s := range scope {
+		ok := false
+		for _, supported := range oauthmeta.ScopesSupported() {
+			if s == supported {
+				ok = true
+				break
+			}
+		}
+		if !ok {
 			return false
 		}
 	}

@@ -15,6 +15,12 @@ import { isValidStepUpCode, stepUpRequired } from "../../lib/stepUp";
 import { apiErr } from "../../lib/apiErr";
 import { panelDomId, tabDomId, tabStop, tablistKeyDown } from "../../lib/tablist";
 import { resolveProfileTab, type ProfileTab } from "../../lib/profileTab";
+import {
+  defaultDeviceScope,
+  deviceDecisionBody,
+  deviceScopeOptions,
+  type DeviceScope,
+} from "../../lib/deviceScopeChoice";
 import { classifyLoadError, fetchJson } from "../../lib/wsfetch";
 import { b64url, fromB64url } from "../../lib/webauthn";
 
@@ -69,7 +75,14 @@ type DeviceConsent = {
   user_code: string;
   client_id: string;
   client: string;
+  /** What the CLIENT asked for in POST /oauth/device_authorization. */
   scopes: string[];
+  /**
+   * The access levels this deployment can issue (oauthmeta.ScopesSupported()),
+   * one radio each. Absent from an API older than card t_cf45b84c, in which
+   * case the card falls back to both — see lib/deviceScopeChoice.ts.
+   */
+  choices?: string[];
   scope_prose: string;
   expires_at: string;
   state: "pending" | "approved" | "denied" | "expired" | "used";
@@ -185,6 +198,11 @@ export default function ProfilePage() {
   const [deviceCode, setDeviceCode] = useState("");
   const [deviceBusy, setDeviceBusy] = useState(false);
   const [deviceConsent, setDeviceConsent] = useState<DeviceConsent | null>(null);
+  // Card t_cf45b84c: the access level the person picked on the consent card.
+  // Seeded from the client's REQUESTED scope by checkDevice below, not by this
+  // initial value — the card is not rendered until a consent exists, and
+  // defaulting to read is the defect this card removes.
+  const [deviceScope, setDeviceScope] = useState<DeviceScope>("read");
 
   // Persist active tab.
   useEffect(() => {
@@ -353,6 +371,10 @@ export default function ProfilePage() {
         if (!r.ok) throw new Error(String(r.status));
         const d = (await r.json()) as DeviceConsent;
         setDeviceConsent(d);
+        // Card t_cf45b84c: the card opens on WHAT THE CLIENT ASKED FOR, never
+        // silently read-only. Resolved per consent, so checking a second code
+        // does not carry the previous card's choice over.
+        setDeviceScope(defaultDeviceScope(d.scopes));
         setErr("");
       } catch {
         setDeviceConsent(null);
@@ -381,7 +403,10 @@ export default function ProfilePage() {
       const r = await fetch("/api/auth/connected-apps/device", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_code: deviceCode, decision }),
+        // Card t_cf45b84c: the radio the person picked is sent as `scope`, so
+        // the credential the harness picks up is exactly that. Omitted on deny
+        // (there is nothing to grant) via lib/deviceScopeChoice.ts.
+        body: JSON.stringify(deviceDecisionBody(deviceCode, decision, deviceScope)),
       });
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
@@ -1153,10 +1178,60 @@ export default function ProfilePage() {
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceClient")}: </span>
                       {deviceConsent.client}
                     </p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      <span className="text-[var(--jf-muted)]">{t("prof.appsScope")}: </span>
-                      {deviceConsent.scope_prose}
-                    </p>
+                    {/* Card t_cf45b84c: the access level is the PERSON'S choice,
+                        preselected to what the client asked for, and changeable
+                        in either direction on this one screen. The old card
+                        printed the request as prose and offered only
+                        Approve / Deny, so a `read` request stayed read-only until
+                        the user re-granted it — which meant the Connected-apps
+                        scope change, which ROTATES the credential. */}
+                    <fieldset className="mt-2">
+                      <legend className="text-xs font-medium text-slate-500">
+                        {t("prof.deviceScopeLegend")}
+                      </legend>
+                      <div className="mt-1.5 space-y-1.5">
+                        {deviceScopeOptions(deviceConsent.choices).map((opt) => (
+                          <label
+                            key={opt.value}
+                            htmlFor={`prof-device-scope-${opt.value}`}
+                            className="flex cursor-pointer items-start gap-2 text-xs text-slate-700"
+                          >
+                            <input
+                              id={`prof-device-scope-${opt.value}`}
+                              type="radio"
+                              name="prof-device-scope"
+                              value={opt.value}
+                              checked={deviceScope === opt.value}
+                              onChange={() => setDeviceScope(opt.value)}
+                              className="mt-0.5"
+                            />
+                            <span>
+                              {/* The two keys are written out literally, not read
+                                  off `opt.labelKey`: the i18n call-site scan
+                                  (src/lib/i18nKeys.test.ts) requires a static
+                                  argument and its ceiling is fully spent, and
+                                  these keys are not dynamic anyway — only two
+                                  values can reach here (deviceScopeOptions
+                                  filters to the ones it knows). The module still
+                                  OWNS the mapping, and
+                                  src/lib/deviceScopeChoice.test.ts pins that the
+                                  page renders both literals. */}
+                              <span className="font-medium">
+                                {opt.value === "read"
+                                  ? t("prof.deviceScopeRead")
+                                  : t("prof.deviceScopeReadWrite")}
+                              </span>
+                              {" — "}
+                              <span className="text-slate-600">
+                                {opt.value === "read"
+                                  ? t("prof.deviceScopeReadHelp")
+                                  : t("prof.deviceScopeReadWriteHelp")}
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
                     <p className="mt-1 text-xs text-slate-600">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceExpires")}: </span>
                       {formatDate(deviceConsent.expires_at)}

@@ -541,6 +541,9 @@ test("every string the live panel and the warning use exists in all five locales
     "bld.noProductSelectedWarn",
     "bld.chooseProduct",
     "bld.goToProductBlock",
+    // Card t_d5112f02: the archived-product notice, the other answer to the same
+    // picker question.
+    "bld.productArchivedWarn",
     "bld.dismiss",
   ];
   for (const k of keys) {

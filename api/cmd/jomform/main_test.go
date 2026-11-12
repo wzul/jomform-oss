@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,6 +50,21 @@ type fakeTokenReply struct {
 	body   string
 }
 
+// fakeMCPCall is one request the proxy relayed to the MCP endpoint.
+type fakeMCPCall struct {
+	authorization string
+	contentType   string
+	accept        string
+	body          []byte
+}
+
+// fakeMCPReply is one scripted answer from the MCP endpoint.
+type fakeMCPReply struct {
+	status      int
+	contentType string
+	body        string
+}
+
 // fakeAS is a stand-in authorization server: the four endpoints the CLI talks
 // to, scripted per test. No real network, no real account, no real token.
 type fakeAS struct {
@@ -62,6 +79,16 @@ type fakeAS struct {
 	deviceForm    url.Values
 	tokenForms    []url.Values
 	revokeForm    url.Values
+
+	// refreshScript answers the refresh_token grant. With no script the endpoint
+	// issues a distinct pair per call, so a test can tell renewals apart.
+	refreshScript []fakeTokenReply
+	refreshForms  []url.Values
+
+	// The MCP endpoint the proxy relays to.
+	mcpCalls     []fakeMCPCall
+	mcpScript    []fakeMCPReply
+	acceptTokens map[string]bool
 }
 
 func newFakeAS(t *testing.T) *fakeAS {
@@ -99,20 +126,81 @@ func newFakeAS(t *testing.T) *fakeAS {
 	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		a.mu.Lock()
-		idx := a.tokenCalls
-		a.tokenCalls++
-		a.tokenForms = append(a.tokenForms, r.PostForm)
-		reply := fakeTokenReply{status: http.StatusBadRequest, body: `{"error":"authorization_pending"}`}
-		if len(a.tokenScript) > 0 {
-			if idx >= len(a.tokenScript) {
-				idx = len(a.tokenScript) - 1
+		isRefresh := r.PostForm.Get("grant_type") == "refresh_token"
+		var reply fakeTokenReply
+		if isRefresh {
+			a.refreshForms = append(a.refreshForms, r.PostForm)
+			idx := len(a.refreshForms) - 1
+			reply = refreshedPair(len(a.refreshForms))
+			if len(a.refreshScript) > 0 {
+				if idx >= len(a.refreshScript) {
+					idx = len(a.refreshScript) - 1
+				}
+				reply = a.refreshScript[idx]
 			}
-			reply = a.tokenScript[idx]
+		} else {
+			idx := a.tokenCalls
+			a.tokenCalls++
+			a.tokenForms = append(a.tokenForms, r.PostForm)
+			reply = fakeTokenReply{status: http.StatusBadRequest, body: `{"error":"authorization_pending"}`}
+			if len(a.tokenScript) > 0 {
+				if idx >= len(a.tokenScript) {
+					idx = len(a.tokenScript) - 1
+				}
+				reply = a.tokenScript[idx]
+			}
 		}
 		a.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(reply.status)
 		_, _ = w.Write([]byte(reply.body))
+	})
+	// The remote MCP endpoint. Like the real one it answers with an SSE stream
+	// carrying one JSON-RPC message per event, rejects a credential it does not
+	// accept, and answers a notification with 202 and no body.
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		a.mu.Lock()
+		a.mcpCalls = append(a.mcpCalls, fakeMCPCall{
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			accept:        r.Header.Get("Accept"),
+			body:          raw,
+		})
+		idx := len(a.mcpCalls) - 1
+		var scripted *fakeMCPReply
+		if len(a.mcpScript) > 0 {
+			if idx >= len(a.mcpScript) {
+				idx = len(a.mcpScript) - 1
+			}
+			s := a.mcpScript[idx]
+			scripted = &s
+		}
+		accepted := a.acceptTokens
+		a.mu.Unlock()
+
+		if scripted != nil {
+			if scripted.contentType != "" {
+				w.Header().Set("Content-Type", scripted.contentType)
+			}
+			w.WriteHeader(scripted.status)
+			_, _ = w.Write([]byte(scripted.body))
+			return
+		}
+		if accepted != nil && !accepted[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid token"}`))
+			return
+		}
+		id := idFromRequest(raw)
+		if len(id) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"ok\":true}}\n\n", id)
 	})
 	mux.HandleFunc("/oauth/revoke", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -148,6 +236,70 @@ func tokenErr(code string) fakeTokenReply {
 	return fakeTokenReply{status: http.StatusBadRequest, body: `{"error":"` + code + `","error_description":"scripted"}`}
 }
 
+// refreshedPair is the pair a refresh_token grant issues. Each call is distinct,
+// so a test can tell a renewal from the pair the login stored, and the rotation
+// (a NEW refresh token) is observable.
+func refreshedPair(n int) fakeTokenReply {
+	body, _ := json.Marshal(map[string]any{
+		"access_token":  strings.Repeat(fmt.Sprintf("%02d", n), 32),
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"refresh_token": strings.Repeat(fmt.Sprintf("%02d", n+40), 32),
+		"scope":         "read",
+	})
+	return fakeTokenReply{status: http.StatusOK, body: string(body)}
+}
+
+// refreshedAccess is the access token refreshedPair(n) issues.
+func refreshedAccess(n int) string { return strings.Repeat(fmt.Sprintf("%02d", n), 32) }
+
+// refreshedRefresh is the rotated refresh token refreshedPair(n) issues.
+func refreshedRefresh(n int) string { return strings.Repeat(fmt.Sprintf("%02d", n+40), 32) }
+
+// idFromRequest reads a JSON-RPC id out of a message, without borrowing the
+// production helper (so a blind spot there cannot make the fake agree with it).
+func idFromRequest(raw []byte) json.RawMessage {
+	var env struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil
+	}
+	if len(env.ID) == 0 || string(env.ID) == "null" {
+		return nil
+	}
+	return env.ID
+}
+
+// acceptOnly makes the MCP endpoint reject every credential except these.
+func (a *fakeAS) acceptOnly(tokens ...string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.acceptTokens = map[string]bool{}
+	for _, t := range tokens {
+		a.acceptTokens[t] = true
+	}
+}
+
+// scriptMCP scripts the MCP endpoint's answers in call order.
+func (a *fakeAS) scriptMCP(replies ...fakeMCPReply) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mcpScript = replies
+}
+
+func (a *fakeAS) setRefreshScript(replies ...fakeTokenReply) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refreshScript = replies
+}
+
+func (a *fakeAS) mcpSnapshot() ([]fakeMCPCall, []url.Values) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]fakeMCPCall(nil), a.mcpCalls...), append([]url.Values(nil), a.refreshForms...)
+}
+
 // newTestCLI wires a CLI to a temp home, the fake server's HTTP client, a fake
 // clock and a stubbed account lookup.
 func newTestCLI(t *testing.T, as *fakeAS) (*cli, *bytes.Buffer, *bytes.Buffer, *fakeClock) {
@@ -156,8 +308,13 @@ func newTestCLI(t *testing.T, as *fakeAS) (*cli, *bytes.Buffer, *bytes.Buffer, *
 	c := &cli{
 		stdout: stdout,
 		stderr: stderr,
+		stdin:  strings.NewReader(""),
 		home:   t.TempDir(),
 		http:   as.srv.Client(),
+		stream: as.srv.Client(),
+		// A harness launcher entry carries an absolute path; the tests pin the
+		// one they expect rather than the path of the test binary.
+		executable: func() (string, error) { return "/usr/local/bin/jomform", nil },
 		lookupAccount: func(context.Context, string, string) (accountRef, error) {
 			return accountRef{Name: "Warung ABC", Slug: "warung-abc"}, nil
 		},
@@ -253,7 +410,9 @@ func TestLoginPollsThroughPendingAndSlowDownThenSucceeds(t *testing.T) {
 		t.Fatalf("registration calls = %d, want 1", as.registerCalls)
 	}
 
-	// The harness config: our entry, with the bearer header, mode 0600.
+	// The harness config: a LAUNCHER entry, mode 0600, and no secret in it. This
+	// is the card's core invariant: the file that the harness reads must not
+	// carry a credential, because a harness has no way to renew one.
 	info, err := os.Stat(out)
 	if err != nil {
 		t.Fatalf("stat harness config: %v", err)
@@ -267,6 +426,8 @@ func TestLoginPollsThroughPendingAndSlowDownThenSucceeds(t *testing.T) {
 	}
 	var doc struct {
 		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
 			URL     string            `json:"url"`
 			Headers map[string]string `json:"headers"`
 		} `json:"mcpServers"`
@@ -278,11 +439,23 @@ func TestLoginPollsThroughPendingAndSlowDownThenSucceeds(t *testing.T) {
 	if !ok {
 		t.Fatalf("harness config has no jomform server: %s", raw)
 	}
-	if entry.URL != "https://mcp.example.test/mcp" {
-		t.Fatalf("jomform url = %q, want the MCP endpoint", entry.URL)
+	if entry.URL != "" || len(entry.Headers) != 0 {
+		t.Fatalf("the entry still carries url=%q headers=%v — a static header cannot be renewed and goes 401 after an hour",
+			entry.URL, entry.Headers)
 	}
-	if got := entry.Headers["Authorization"]; got != "Bearer "+fixtureAccessToken() {
-		t.Fatalf("Authorization header = %q, want the bearer token", got)
+	if entry.Command != "/usr/local/bin/jomform" {
+		t.Fatalf("entry command = %q, want the absolute path of the installed binary", entry.Command)
+	}
+	if got, want := strings.Join(entry.Args, " "), "mcp proxy --mcp-url https://mcp.example.test/mcp"; got != want {
+		t.Fatalf("entry args = %q, want %q", got, want)
+	}
+	for name, secret := range map[string]string{
+		"access token":  fixtureAccessToken(),
+		"refresh token": fixtureRefreshToken(),
+	} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("the %s was written into the harness config — the config must never carry a credential:\n%s", name, raw)
+		}
 	}
 
 	// The CLI's own copy, 0600, with the refresh token for logout.
@@ -538,10 +711,10 @@ func TestLoginReusesARegisteredClient(t *testing.T) {
 
 // ─── status ─────────────────────────────────────────────────────────────────
 
-func storedFixture(t *testing.T, c *cli, expires time.Time, account string) {
+func storedFixture(t *testing.T, as *fakeAS, c *cli, expires time.Time, account string) {
 	t.Helper()
 	if err := c.saveToken(storedToken{
-		Server: "https://as.example.test", MCPURL: "https://mcp.example.test/mcp",
+		Server: as.srv.URL, MCPURL: "https://mcp.example.test/mcp",
 		ClientID: "jfc_cli_fixture", AccessToken: fixtureAccessToken(), RefreshToken: fixtureRefreshToken(),
 		TokenType: "Bearer", Scope: "read readwrite", ExpiresAt: expires,
 		AccountName: account, AccountSlug: "warung-abc",
@@ -554,7 +727,7 @@ func storedFixture(t *testing.T, c *cli, expires time.Time, account string) {
 func TestStatusPrintsExpiryScopesAndAccount(t *testing.T) {
 	as := newFakeAS(t)
 	c, stdout, _, clock := newTestCLI(t, as)
-	storedFixture(t, c, clock.now().Add(time.Hour), "Warung ABC")
+	storedFixture(t, as, c, clock.now().Add(time.Hour), "Warung ABC")
 
 	if err := c.run([]string{"mcp", "status"}); err != nil {
 		t.Fatalf("status: %v", err)
@@ -579,7 +752,7 @@ func TestStatusPrintsExpiryScopesAndAccount(t *testing.T) {
 func TestStatusWithOutReportsTheHarnessEntry(t *testing.T) {
 	as := newFakeAS(t)
 	c, stdout, _, clock := newTestCLI(t, as)
-	storedFixture(t, c, clock.now().Add(time.Hour), "Warung ABC")
+	storedFixture(t, as, c, clock.now().Add(time.Hour), "Warung ABC")
 	out := cursorConfig(t, c)
 	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -616,7 +789,7 @@ func TestStatusWithOutReportsTheHarnessEntry(t *testing.T) {
 func TestLogoutRefusesAnUnlistedOutPath(t *testing.T) {
 	as := newFakeAS(t)
 	c, _, _, clock := newTestCLI(t, as)
-	storedFixture(t, c, clock.now().Add(time.Hour), "Warung ABC")
+	storedFixture(t, as, c, clock.now().Add(time.Hour), "Warung ABC")
 	tok, err := c.loadToken()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -670,26 +843,76 @@ func TestLogoutFollowsThePathALoginWasForcedToWrite(t *testing.T) {
 	}
 }
 
-// TestStatusFailsWhenMissingOrExpired keeps the exit-code contract honest.
-func TestStatusFailsWhenMissingOrExpired(t *testing.T) {
+// TestStatusFailsWithoutAToken keeps the failure honest when there is nothing to
+// renew from.
+func TestStatusFailsWithoutAToken(t *testing.T) {
 	as := newFakeAS(t)
-	c, stdout, _, clock := newTestCLI(t, as)
+	c, _, _, _ := newTestCLI(t, as)
 
 	if err := c.run([]string{"mcp", "status"}); err == nil {
 		t.Fatal("status succeeded with no stored token")
 	}
+}
 
-	storedFixture(t, c, clock.now().Add(-time.Minute), "Warung ABC")
+// TestStatusRenewsAnExpiredAccessToken is this card's symptom, fixed.
+//
+// An expired access token used to end `status` with a non-zero exit and "run
+// login again", while a perfectly good 30-day refresh token sat on disk unused.
+// It now renews, persists the rotated pair and reports the expiry the harness's
+// launcher entry will actually see.
+func TestStatusRenewsAnExpiredAccessToken(t *testing.T) {
+	as := newFakeAS(t)
+	c, stdout, _, clock := newTestCLI(t, as)
+	storedFixture(t, as, c, clock.now().Add(-time.Minute), "Warung ABC")
+
+	if err := c.run([]string{"mcp", "status"}); err != nil {
+		t.Fatalf("status on an expired access token: %v (a refresh token is stored, so this is renewable)", err)
+	}
+	_, refreshes := as.mcpSnapshot()
+	if len(refreshes) != 1 {
+		t.Fatalf("renewals = %d, want exactly 1", len(refreshes))
+	}
+	if got := refreshes[0].Get("grant_type"); got != "refresh_token" {
+		t.Fatalf("grant_type = %q, want refresh_token", got)
+	}
+	if got := refreshes[0].Get("refresh_token"); got != fixtureRefreshToken() {
+		t.Fatalf("the renewal presented %q, want the stored refresh token", got)
+	}
+	if !strings.Contains(stdout.String(), "account: Warung ABC") {
+		t.Fatalf("status printed %q, want the account line", stdout.String())
+	}
+	tok, err := c.loadToken()
+	if err != nil {
+		t.Fatalf("load token: %v", err)
+	}
+	if tok.AccessToken != refreshedAccess(1) {
+		t.Fatalf("the stored access token was not replaced by the renewal")
+	}
+	if tok.RefreshToken != refreshedRefresh(1) {
+		t.Fatalf("the ROTATED refresh token was not persisted — the next renewal would present a dead one")
+	}
+	if tok.AccountName != "Warung ABC" {
+		t.Fatalf("the renewal dropped the account name (%q)", tok.AccountName)
+	}
+}
+
+// TestStatusReportsADeadGrant: when the server refuses the renewal, status is a
+// failure and says the one thing that helps.
+func TestStatusReportsADeadGrant(t *testing.T) {
+	as := newFakeAS(t)
+	as.setRefreshScript(tokenErr("invalid_grant"))
+	c, stdout, _, clock := newTestCLI(t, as)
+	storedFixture(t, as, c, clock.now().Add(-time.Minute), "Warung ABC")
+
 	err := c.run([]string{"mcp", "status"})
 	if err == nil {
-		t.Fatal("status succeeded with an expired token")
+		t.Fatal("status succeeded although the grant can no longer be renewed")
 	}
-	if !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("error %q does not say the token expired", err)
+	if !strings.Contains(err.Error(), "login") {
+		t.Fatalf("error %q does not point at a fresh login", err)
 	}
-	// It still reports what it knows before failing.
 	if !strings.Contains(stdout.String(), "account: Warung ABC") {
-		t.Fatalf("status printed %q, want the expiry/scopes/account lines before the failure", stdout.String())
+		t.Fatalf("status printed %q, want the lines it does know before the failure", stdout.String())
 	}
 }
 
@@ -764,7 +987,7 @@ func TestLogoutWithoutAStoredTokenFails(t *testing.T) {
 func TestLogoutKeepsTheLocalCopyWhenRevocationFails(t *testing.T) {
 	as := newFakeAS(t)
 	c, _, _, clock := newTestCLI(t, as)
-	storedFixture(t, c, clock.now().Add(time.Hour), "Warung ABC")
+	storedFixture(t, as, c, clock.now().Add(time.Hour), "Warung ABC")
 	// Point the stored server at a port nothing listens on.
 	tok, _ := c.loadToken()
 	tok.Server = "http://127.0.0.1:1"

@@ -17,15 +17,23 @@ const serverName = "jomform"
 // errNotJSON marks a harness config that would be damaged by a merge.
 var errNotJSON = errors.New("the file is not valid JSON")
 
-// harnessEntryJSON builds the mcpServers member: the remote endpoint plus the
-// bearer header the client sends on every call.
-func harnessEntryJSON(mcpURL, accessToken string) (json.RawMessage, error) {
+// harnessEntryJSON builds the mcpServers member: a launcher for the stdio proxy,
+// never a credential.
+//
+// This used to write `{"url": ..., "headers": {"Authorization": "Bearer <token>"}}`,
+// which works for exactly as long as the access token lives (an hour by default) and
+// then goes dark: a harness reading a static header has no way to renew it, and the
+// only remedy was to approve a whole new device grant on a phone. The entry below
+// carries the endpoint and the command that renews the token on the harness's behalf
+// (see proxy.go); nothing in this file is secret, so the config can be read, copied
+// and committed without leaking a grant.
+func harnessEntryJSON(mcpURL, command string) (json.RawMessage, error) {
 	entry := struct {
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
 	}{
-		URL:     mcpURL,
-		Headers: map[string]string{"Authorization": "Bearer " + accessToken},
+		Command: command,
+		Args:    []string{"mcp", "proxy", "--mcp-url", mcpURL},
 	}
 	return json.Marshal(entry)
 }

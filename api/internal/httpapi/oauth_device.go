@@ -362,6 +362,13 @@ func (o *OAuthHandlers) tokenDevice(w http.ResponseWriter, r *http.Request) {
 // live on AuthHandlers because they need the browser session; the OAuth
 // handler set has no notion of one.
 
+// deviceScopeInvalidMessage is the wire wording for a refused access level on
+// the consent card. It is a named constant because errcode.go's table is keyed
+// on this exact string (see errCodeByMessage): the refusal carries the machine
+// code device.scopeInvalid so a dashboard can translate it instead of printing
+// this prose.
+const deviceScopeInvalidMessage = "the access level must be 'read' or 'readwrite'"
+
 // deviceConsentOut is what the consent card renders.
 type deviceConsentOut struct {
 	UserCode  string   `json:"user_code"`
@@ -371,6 +378,14 @@ type deviceConsentOut struct {
 	Scope     string   `json:"scope_prose"`
 	ExpiresAt string   `json:"expires_at"`
 	State     string   `json:"state"` // pending | approved | denied | expired | used
+	// Choices is the set of scopes the PERSON may approve this request as, in
+	// the order the card should show them. It is oauthmeta.ScopesSupported() —
+	// the same list the server advertises and can mint — so a card cannot offer
+	// a value this deployment would then refuse, and cannot drift from the
+	// server's vocabulary. The card renders one radio per entry (card
+	// t_cf45b84c); `scopes` above is what the CLIENT asked for, which is only
+	// the default the card opens on.
+	Choices []string `json:"choices"`
 }
 
 // getDeviceConsent resolves a user_code for the signed-in person, for display.
@@ -402,6 +417,7 @@ func (a *AuthHandlers) getDeviceConsent(w http.ResponseWriter, r *http.Request) 
 	out := deviceConsentOut{
 		UserCode: code, ClientID: d.ClientID, Client: d.ClientID, Scopes: d.Scope,
 		ExpiresAt: d.ExpiresAt.UTC().Format(time.RFC3339),
+		Choices:   oauthmeta.ScopesSupported(),
 	}
 	lang := emailtext.En
 	if u, uerr := a.Users.ByID(r.Context(), userID); uerr == nil && u != nil {
@@ -442,6 +458,11 @@ func (a *AuthHandlers) postDeviceConsent(w http.ResponseWriter, r *http.Request)
 	var in struct {
 		UserCode string `json:"user_code"`
 		Decision string `json:"decision"`
+		// Scope is the access level the PERSON picked on the consent card
+		// (card t_cf45b84c). Omitted means "whatever the client asked for",
+		// which is exactly what every dashboard before this card sent, so an
+		// older build keeps working unchanged.
+		Scope string `json:"scope"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON")
@@ -476,20 +497,35 @@ func (a *AuthHandlers) postDeviceConsent(w http.ResponseWriter, r *http.Request)
 				accountID = accs[0].ID
 			}
 		}
-		// Scope is APPROVED AS REQUESTED — the card cannot widen it, and the
-		// store re-checks that whatever is passed is a subset of the request.
 		pre, err := a.OAuth.DeviceCodeByUserCode(r.Context(), hashToken(code))
 		if err != nil {
 			writeErr(w, http.StatusNotFound, "this code is not valid")
 			return
 		}
-		d, err := a.OAuth.ApproveDeviceCode(r.Context(), hashToken(code), userID, accountID, pre.Scope)
+		// The scope to grant. Absent = the client's request, which is what every
+		// dashboard before this card sent (backwards compatible); present = the
+		// person's choice, in EITHER direction. Validated against the scopes this
+		// deployment can issue, and refused with a machine code rather than
+		// clamped: silently granting something other than the radio the user
+		// picked is the defect this card exists to close.
+		chosen := pre.Scope
+		if strings.TrimSpace(in.Scope) != "" {
+			s, ok := oauthmeta.ChosenScope(in.Scope)
+			if !ok {
+				writeErr(w, http.StatusBadRequest, deviceScopeInvalidMessage)
+				return
+			}
+			chosen = s
+		}
+		d, err := a.OAuth.ApproveDeviceCode(r.Context(), hashToken(code), userID, accountID, chosen)
 		if err != nil {
 			switch {
 			case errors.Is(err, dbstore.ErrDeviceDenied):
 				writeErr(w, http.StatusConflict, "this request was already denied")
 			case errors.Is(err, dbstore.ErrDeviceExpired):
 				writeErr(w, http.StatusGone, "this code has expired")
+			case errors.Is(err, dbstore.ErrDeviceScopeUnsupported):
+				writeErr(w, http.StatusBadRequest, deviceScopeInvalidMessage)
 			default:
 				writeErr(w, http.StatusNotFound, "this code is not valid")
 			}
@@ -501,6 +537,10 @@ func (a *AuthHandlers) postDeviceConsent(w http.ResponseWriter, r *http.Request)
 		a.rotateOnUpgrade(r, userID, d.ClientID, accountID, d.Scope, "device")
 		a.recordAuthEvent(r, accountID, userID, "oauth.device_approved", map[string]any{
 			"client_id": d.ClientID, "scope": dbstore.ScopeString(d.Scope),
+			// The request is recorded separately from the grant: at this card the
+			// two can differ in either direction, and an operator reading the
+			// audit needs to see that a person WIDENED (or narrowed) it.
+			"requested": dbstore.ScopeString(pre.Scope),
 		})
 		writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 	default:

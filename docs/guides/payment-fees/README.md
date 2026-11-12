@@ -66,6 +66,10 @@ Payment fees shows it in the amber **Legacy rate, kept for one release** box: th
 an amount field, and **Move … to a platform fee**. Set the amount, click Move, then **Save** once —
 the row becomes a flat fee and the percentage stops.
 
+The restaurant menu's basket shows the same breakdown before its **Checkout** button — subtotal, the
+fee for the method the buyer ticks, and the total — and re-prices all three when the buyer switches
+method. The button and the sticky basket bar carry that total, never the bare subtotal.
+
 ## Notes
 
 - The amount is snapshotted on each sale, so a later change does not alter past sales or receipts.

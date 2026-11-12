@@ -198,3 +198,46 @@ func TestDefaultScopesIsReadWriteTheFullGrant(t *testing.T) {
 		t.Errorf("GrantedScopes(\"\") = %v ok=%v, want DefaultScopes() %v", got, ok, DefaultScopes())
 	}
 }
+
+// TestChosenScopeIsTheHumanChoiceNotTheRequest guards the resolver behind the
+// device consent card (card t_cf45b84c): the scope a PERSON picks is validated
+// against what this deployment can ISSUE, not against what the client asked for.
+//
+// THE DEFECT IT PINS. Before this card the card could only approve the client's
+// request verbatim, so a harness that asked for `read` stayed read-only until it
+// was re-granted — and the only way to widen it afterwards rotated the
+// credential. The person is the consent authority, so an approval may widen
+// (`read` asked, `readwrite` chosen) as well as narrow.
+func TestChosenScopeIsTheHumanChoiceNotTheRequest(t *testing.T) {
+	for _, want := range ScopesSupported() {
+		got, ok := ChosenScope(want)
+		if !ok || len(got) != 1 || got[0] != want {
+			t.Fatalf("ChosenScope(%q) = %v ok=%v, want exactly [%s]", want, got, ok, want)
+		}
+		// Whitespace around a single value is a transport artefact, not a choice.
+		if got, ok := ChosenScope("  " + want + "\n"); !ok || got[0] != want {
+			t.Fatalf("ChosenScope(%q padded) = %v ok=%v, want [%s]", want, got, ok, want)
+		}
+	}
+
+	// Everything else is REFUSED, never clamped to a neighbouring value: an
+	// approval that silently granted something other than the radio the person
+	// picked is the failure this function exists to prevent.
+	for _, bad := range []string{
+		"",                // omitted — the caller resolves that to the request
+		"   ",             // whitespace only
+		"admin",           // not a scope this deployment advertises
+		"READWRITE",       // RFC 6749 §3.3 is case-sensitive
+		"Read",            //
+		"read,readwrite",  // comma-joined
+		"read readwrite",  // both at once: not a radio, and not one value
+		"readw",           // prefix — membership is exact, never prefix-matched
+		"readwrite admin", // one good, one bad
+		"scope.readonly",  // the API-KEY vocabulary, not this one
+		"urn:jomform:rw",  // a URN-shaped guess
+	} {
+		if got, ok := ChosenScope(bad); ok {
+			t.Errorf("ChosenScope(%q) = %v ok=true, want refused", bad, got)
+		}
+	}
+}

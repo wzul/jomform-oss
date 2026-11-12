@@ -4184,8 +4184,10 @@ run_browser_group
 # CPU: nothing in this gate caps itself, and it does not need to — the DISCIPLINE is
 # the one the whole preflight already runs under. deploy/build-and-ship.sh wraps this
 # script in `systemd-run -p CPUQuota=$GATE_CPU_QUOTA` (default 300% = 3 cores) and
-# deploy/merge-train.sh wraps it the same way, so `menufixture` is inside that budget
-# like every other gate. Its own measured CPU footprint is small: the browser step is
+# deploy/merge-train.sh wraps it the same way under ITS OWN `TRAIN_CPU_QUOTA` (400%
+# since card t_d1bc5164: the three CONCURRENT browser gates above need more than 300%
+# on this host and redded a11y on an unchanged tree without it), so `menufixture` is
+# inside that budget like every other gate. Its own measured CPU footprint is small: the browser step is
 # 3 tests / ~4-7s, and the rest is one `go build` of api/cmd/menu-fixture.
 menufixture_run() {
   cd "$REPO_ROOT" || return 1

@@ -196,9 +196,19 @@ type menuTheme struct {
 	// Subtitle is the optional location line (workspace contact address).
 	Subtitle string
 	// PrimaryColor is the accent (hex, e.g. "#4f46e5"). Empty = default.
-	PrimaryColor string
-	// BackgroundColor is the page background (hex). Empty = default.
-	BackgroundColor string
+	//
+	// Typed template.CSS, not string, because it is interpolated as a CSS VALUE
+	// inside the page's <style> block. In CSS text state html/template runs
+	// cssValueFilter over any plain string, which percent-encoded `#4f46e5` to
+	// `%234f46e5` — not a declaration, so the browser DROPPED every themed rule
+	// and the Pay button lost its background (card t_2fdbde0d); an `rgb(...)`
+	// value was replaced by the ZgotmplZ sentinel. themeCSSValue() is the same
+	// helper the block renderer uses, and it carries the `</style` breakout
+	// guard that verbatim emission requires.
+	PrimaryColor template.CSS
+	// BackgroundColor is the page background (hex). Empty = default. Same CSS
+	// context and same typing as PrimaryColor.
+	BackgroundColor template.CSS
 	// LogoURL is an optional brand logo.
 	LogoURL string
 }
@@ -259,6 +269,36 @@ type workspaceMenuData struct {
 	// this checkout offers no group JomForm can label, so no picker renders and
 	// the order posts no pay_method (CHIP's own page asks, as before).
 	PayChoices []payMethodChoiceView
+	// FeeRows reports whether the checkout sheet renders the buyer-borne
+	// processing-fee breakdown (a fee line and the grossed-up total).
+	// t_c7515d28: the order core adds the fee for the method the buyer picked,
+	// so a page that paints only the cart subtotal charges more than its button
+	// said. It is true when at least one picker row carries a stored rate —
+	// that is the ONLY shape this page can price, because the numbers ride on
+	// the row the buyer checks.
+	//
+	// A checkout with NO picker posts no pay_method; the order core then applies
+	// a single stored rate if there is exactly one. The page cannot show a
+	// method it cannot render, so that shape is caught by the other half of this
+	// card instead: the page always echoes the total it displayed as
+	// expected_total_sen, and the server refuses (400) rather than charging the
+	// difference.
+	FeeRows bool
+}
+
+// menuFeeShown reports whether the checkout sheet must render the processing-fee
+// breakdown: true when a picker row carries a stored rate.
+//
+// A row with no rate (and every row, when the workspace has no active fee) adds
+// nothing to the charge, so there is nothing to disclose and the sheet keeps its
+// single subtotal line — byte-identical to the pre-fee page.
+func menuFeeShown(choices []payMethodChoiceView) bool {
+	for _, c := range choices {
+		if c.FixedSen > 0 || c.PercentBP > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // langStringsForCode returns the buyer-facing dictionary for a language code,
@@ -474,7 +514,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
      <select> (a select cannot legally live inside a <button>), so the card
      keeps its own wrapper for the quantity badge and the selector sits under
      it, full width.
-     The class names are MENU-OWNED (mvar*/mvarstock), never the bare
+     The class names are MENU-OWNED (mvar… and mvarstock), never the bare
      select.v/.varwrap the ordinary form block renderer uses: both scripts
      match on a class, so a shared name makes each script see the other's
      selectors when the two surfaces ever share one document (an embed or
@@ -534,6 +574,7 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
                border-top:1px solid #f0f1f4; }
   .subrow { display:flex; justify-content:space-between; gap:12px; font-size:14px; padding:3px 0; }
   .subrow.total { font-weight:700; font-size:16px; }
+  .subrow small { color:#6b7280; font-weight:400; }
   .clearbtn { margin-top:6px; border:0; background:transparent; color:#9ca3af; font-size:13px;
               cursor:pointer; padding:4px 0; }
   .clearbtn:hover { color:#6b7280; }
@@ -748,7 +789,18 @@ var menuPageTmpl = template.Must(template.New("workspace-menu").
         <p class="sheetempty" id="menuEmpty" hidden>{{.Ls.MenuBasketEmpty}}</p>
       </div>
       <div class="sheetfoot">
-        <div class="subrow total"><span>{{.Ls.MenuSubtotal}}</span><span id="menuSubtotal">RM 0.00</span></div>
+        <div class="subrow{{if not .FeeRows}} total{{end}}"><span>{{.Ls.MenuSubtotal}}</span><span id="menuSubtotal">RM 0.00</span></div>
+        {{/* t_c7515d28: the buyer bears the CHIP processing fee for the method
+             they pick, so the sheet must show it BEFORE the Pay button and its
+             total must be the amount charged. The rate rides on the picker row
+             (data-fixed/data-bp) and the script mirrors payments.GrossUp. The
+             rows stay hidden until the basket is non-empty: an empty basket is
+             not a zero-priced order and must not paint a method's fixed charge
+             as payable (the t_c19c095f rule on the block checkout). */}}
+        {{if .FeeRows}}
+        <div class="subrow" id="menuFeeRow" hidden><span>{{.Ls.FeeLine}} <small id="menuFeeRate"></small></span><span id="menuFeeAmt">RM 0.00</span></div>
+        <div class="subrow total" id="menuTotalRow" hidden><span>{{.Ls.Total}}</span><span id="menuTotal">RM 0.00</span></div>
+        {{end}}
         {{if .Table}}<div class="subrow"><span>{{.Ls.MenuTable}}</span><span>{{.Table}}</span></div>{{end}}
         <button class="clearbtn" type="button" id="menuClear">{{.Ls.MenuClear}}</button>
         <form id="menuCheckout" novalidate>
@@ -869,6 +921,13 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   var payBtn=document.getElementById('menuPay');
   var payLabel=document.getElementById('menuPayLabel');
   var payVia=document.getElementById('menuPayVia');
+  // t_c7515d28: the processing-fee breakdown. Absent when the page resolved no
+  // buyer-borne rate (then the sheet keeps its single subtotal line).
+  var feeRow=document.getElementById('menuFeeRow');
+  var feeRate=document.getElementById('menuFeeRate');
+  var feeAmt=document.getElementById('menuFeeAmt');
+  var totalRow=document.getElementById('menuTotalRow');
+  var totalEl=document.getElementById('menuTotal');
   var sheetClose=document.getElementById('menuSheetClose');
   var sheetBack=document.getElementById('menuSheetBack');
 
@@ -915,6 +974,60 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   function count(){ var c=0; for(var i=0;i<cart.length;i++){ c+=cart[i].qty; } return c; }
   function totalSen(){ var t=0; for(var i=0;i<cart.length;i++){ t+=cart[i].price*cart[i].qty; } return t; }
   function rm(sen){ return 'RM '+(Math.round(sen)/100).toFixed(2); }
+
+  // t_c7515d28: the buyer bears the CHIP processing fee for the method they
+  // pick, and a price shown is the price paid. The rate rides on the CHECKED
+  // picker row (data-fixed/data-bp — the same numbers the order core prices
+  // with), and this mirror is payments.GrossUp to the sen:
+  //   fee(F) = fixed + floor((F*bp + 5000)/10000)          [round half up]
+  //   F = smallest integer with F - fee(F) >= base
+  // The naive base + base*rate is short by the fee charged on the fee itself.
+  // The block checkout carries the same mirror (render_blocks.go upd()).
+  function feePick(){
+    var pick=chosenPay();
+    if(!pick) return null;
+    return {fixed:Number(pick.getAttribute('data-fixed')||0),
+            bp:Number(pick.getAttribute('data-bp')||0),
+            name:pick.getAttribute('data-name')||''};
+  }
+  function grossed(){
+    var base=totalSen();
+    // An EMPTY basket is not a zero-priced order: the fixed part of a rate is
+    // priced only once the buyer has put something in the basket (the
+    // t_c19c095f rule on the block checkout). A zero-priced ITEM still grosses
+    // up, because the fixed charge is exactly what the server takes for it.
+    if(count()===0) return {base:0,total:0,fee:0,name:''};
+    var p=feePick();
+    if(!p) return {base:base,total:base,fee:0,name:''};
+    if(p.fixed<=0&&p.bp<=0) return {base:base,total:base,fee:0,name:p.name};
+    function feeOf(v){ return p.fixed+Math.floor((v*p.bp+5000)/10000); }
+    var f=Math.ceil((base+p.fixed)*10000/Math.max(1,10000-p.bp));
+    if(!isFinite(f)||f<base) f=base;
+    while(f-feeOf(f)<base) f++;
+    while(f>base&&(f-1)-feeOf(f-1)>=base) f--;
+    return {base:base,total:f,fee:f-base,name:p.name};
+  }
+  // jfTotal is the total this page DISPLAYED. It is echoed as
+  // expected_total_sen so the server refuses to charge a different amount if a
+  // price or a rate moved while the buyer was filling the basket.
+  var jfTotal=0;
+  function paintTotals(){
+    var g=grossed();
+    subEl.textContent=rm(g.base);
+    // The sticky bar shows the amount this buyer will actually be charged for
+    // the chosen method, not just the sum of the dishes — the same number the
+    // Pay button and the sheet's Total carry.
+    barTotal.textContent=rm(g.total);
+    if(feeRow){
+      var show=count()>0;
+      feeRow.hidden=!show;
+      feeAmt.textContent=rm(g.fee);
+      feeRate.textContent=g.name?'— '+g.name:'';
+      if(totalRow){ totalRow.hidden=!show; }
+      if(totalEl){ totalEl.textContent=rm(g.total); }
+    }
+    jfTotal=g.total;
+  }
 
   // Issue #493: collect the merchant-configured extra fields from the attached
   // form. The inputs are rendered server-side from the form's field blocks
@@ -1005,12 +1118,11 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
     renderBadges();
     renderLines();
     emptyEl.hidden=n>0;
-    subEl.textContent=rm(totalSen());
     barCount.textContent=String(n);
-    barTotal.textContent=rm(totalSen());
     bar.hidden=n===0;
     if(n===0) closeSheet();
     document.body.classList.toggle('has-cart',n>0);
+    paintTotals();
     paintPay();
   }
   // Card t_453489b9: the Pay button says WHAT it will charge and HOW
@@ -1023,7 +1135,7 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
   function paintPay(){
     if(!payLabel||!payVia) return;
     var n=count();
-    payLabel.textContent=attr('data-lbl-checkout')+(n>0?' '+rm(totalSen()):'');
+    payLabel.textContent=attr('data-lbl-checkout')+(n>0?' '+rm(grossed().total):'');
     var pick=chosenPay();
     if(pick){
       payVia.textContent=attr('data-lbl-payvia')+' '+pick.getAttribute('data-name');
@@ -1032,9 +1144,11 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       payVia.hidden=true;
     }
   }
+  // Picking another method re-prices the fee (each row carries its own rate) and
+  // so re-prices the total: repaint both BEFORE the buyer can commit.
   if(payForm) payForm.addEventListener('change',function(e){
     var t=e.target;
-    if(t&&t.name==='pay_method') paintPay();
+    if(t&&t.name==='pay_method'){ paintTotals(); paintPay(); }
   });
   function openSheet(){ sheet.hidden=false; errEl.hidden=true; sheetClose.focus(); }
   function closeSheet(){ sheet.hidden=true; }
@@ -1340,6 +1454,14 @@ document.querySelectorAll('img[data-base]').forEach(function(im){
       client:{full_name:name,email:email},
       items:cart.map(function(it){ return {product_id:it.id,variation_id:it.vid||'',quantity:it.qty}; }),
       payment_method:'chip',
+      // t_c7515d28: the total this page displayed, fee included. The server
+      // re-resolves the rate and recomputes the total, and refuses (400) when
+      // they disagree — a price or a rate that moved while the basket sat open
+      // is never charged silently. Echoing it is also what catches a fee this
+      // page could not price (a stored rate with no method picker to show it
+      // on): that order is refused instead of being grossed up behind the
+      // button.
+      expected_total_sen:jfTotal,
       table_number:table||'',
       affiliate_code:aff||'',
       fields:fields
@@ -1610,6 +1732,9 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 
+	// The checkout's method picker, resolved once: the rows the buyer sees and
+	// the fee-disclosure decision read the same resolution.
+	payChoices := h.payMethodChoices(r.Context(), f.AccountID, f.ID, ls)
 	data := workspaceMenuData{
 		Slug:        f.Slug,
 		Menu:        menu,
@@ -1626,7 +1751,10 @@ func (h *PublicHandlers) renderFormMenu(w http.ResponseWriter, r *http.Request, 
 		// Card t_453489b9: the checkout's method picker, resolved from THIS
 		// form's effective whitelist (its own CHIP override, else the
 		// account's), i.e. the same list the order route validates against.
-		PayChoices: h.payMethodChoices(r.Context(), f.AccountID, f.ID, ls),
+		PayChoices: payChoices,
+		// t_c7515d28: the same resolve decides whether the sheet has a
+		// buyer-borne processing fee to disclose — a row with a stored rate.
+		FeeRows: menuFeeShown(payChoices),
 	}
 	if st != nil {
 		data.ContactAddress = st.ContactAddress
@@ -1828,10 +1956,10 @@ func (h *PublicHandlers) formMenuTheme(f *dbstore.Form, st *dbstore.WorkspaceSet
 	if f != nil {
 		th.Hero = f.Title
 		if v, ok := f.Theme["primary"].(string); ok {
-			th.PrimaryColor = strings.TrimSpace(v)
+			th.PrimaryColor = themeCSSValue(v)
 		}
 		if v, ok := f.Theme["background"].(string); ok {
-			th.BackgroundColor = strings.TrimSpace(v)
+			th.BackgroundColor = themeCSSValue(v)
 		}
 		if v, ok := f.Theme["logo_url"].(string); ok {
 			th.LogoURL = strings.TrimSpace(v)

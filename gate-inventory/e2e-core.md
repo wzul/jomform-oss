@@ -14,9 +14,25 @@ every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (
 `a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
 gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
 `testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
-**322 tests in 61 files**: sales, chat, forms, form settings, settings/workspaces,
+**327 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
 products, media, templates, deliveries, activity, landing, login, session, profile,
 docs and the cross-page presentation specs.
+
+The 322 in 61 → 327 in 62 growth is card `t_cf45b84c`, which adds ONE spec FILE,
+`web/e2e/device-consent-scope.spec.ts` with 5 arms on the RFC 8628 consent card
+(`/profile?tab=mcp&user_code=…`): the card offers `read` and `readwrite` as a real
+radio group preselected to WHAT THE CLIENT ASKED FOR (readwrite asked → readwrite
+checked, read asked → read checked), both directions are pickable, the approve call
+carries the picked value on the wire (the request body is intercepted, not inferred
+from the UI), and a response WITHOUT `choices` — an API older than the card, i.e. a
+rolling deploy — still renders both levels instead of collapsing to read. Measured
+on this tree with `cd web && ./node_modules/.bin/playwright test --project=feature-core
+--list`, which reads **327 in 62**; the same command reads 322 in 61 on this tree with
+that one file removed, so the delta is exactly it. Its `areas.tsv` row maps it to
+`web/src/app/profile/**`, `web/src/lib/deviceScopeChoice.ts` and
+`web/src/components/i18nDict.ts`.
+
+The figure before it was **322 tests in 61 files**.
 
 The 63 → 61 FILE and 325 → 322 test drop is the MERGE of two PRs that each deleted one
 spec and its `web/e2e/areas.tsv` row, and nothing else moved. Card `t_9efc5ed7`

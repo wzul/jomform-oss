@@ -29,7 +29,8 @@
 //
 // WHY THE COUNT IS THE MEASURED KNEE, NOT `GOMAXPROCS-2`. Both gated paths run
 // the preflight under a CPU quota (`deploy/merge-train.sh` TRAIN_CPU_QUOTA and
-// `deploy/build-and-ship.sh` GATE_CPU_QUOTA, 300% each), and Go 1.27 reads
+// `deploy/build-and-ship.sh` GATE_CPU_QUOTA — 300% each when this was measured; the
+// train is 400% since card t_d1bc5164), and Go 1.27 reads
 // cgroup v2's cpu.max, so inside that scope runtime.GOMAXPROCS(0) is 3 on this
 // 6-core host — measured 6 uncapped, 3 at CPUQuota=300%, 4 at CPUQuota=400%. A
 // `GOMAXPROCS-2` derivation therefore returned 1 under exactly the quota this

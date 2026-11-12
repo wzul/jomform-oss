@@ -25,7 +25,7 @@ func TestWorkspaceLandingPageTemplateRenders(t *testing.T) {
 			{Label: "Hotel info", FormSlug: "hotel"},
 		},
 	}
-	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, Theme: landingThemeFrom(lp), HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -58,7 +58,7 @@ func TestWorkspaceLandingPageTemplateRenders(t *testing.T) {
 // as a landing page — the fallthrough in handleWorkspaceRoot serves the listing.
 func TestWorkspaceLandingPageTemplateDisabledShowsNoFormsHint(t *testing.T) {
 	lp := &dbstore.LandingPage{Enabled: true, Hero: "Only hero"}
-	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: false}
+	data := workspaceLandingData{Slug: "s", Lp: lp, Theme: landingThemeFrom(lp), HasForms: false}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -79,7 +79,7 @@ func TestWorkspaceLandingPageTemplateEscapesBody(t *testing.T) {
 		Hero:    "<script>alert(1)</script>",
 		Body:    "<img src=x onerror=alert(2)>",
 	}
-	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "s", Lp: lp, Theme: landingThemeFrom(lp), HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -116,7 +116,7 @@ func TestWorkspaceLandingPageEmbedsPublishedForms(t *testing.T) {
 	if len(embeds) != 2 {
 		t.Fatalf("expected 2 embeds (rsvp + dinner), got %d", len(embeds))
 	}
-	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, HasForms: true, Embeds: embeds}
+	data := workspaceLandingData{Slug: "ali-siti", Lp: lp, Theme: landingThemeFrom(lp), HasForms: true, Embeds: embeds}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -153,7 +153,7 @@ func TestResolveLandingEmbedsDropsUnknownSlugs(t *testing.T) {
 		t.Fatalf("expected only the published 'rsvp' embed, got %+v", embeds)
 	}
 	// Rendering must not include the dropped block.
-	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true, Embeds: embeds}
+	data := workspaceLandingData{Slug: "s", Lp: lp, Theme: landingThemeFrom(lp), HasForms: true, Embeds: embeds}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)
@@ -166,7 +166,7 @@ func TestResolveLandingEmbedsDropsUnknownSlugs(t *testing.T) {
 // Issue #362: with no embedded forms configured, no embed section is rendered.
 func TestWorkspaceLandingPageNoEmbedSectionWhenNoneConfigured(t *testing.T) {
 	lp := &dbstore.LandingPage{Enabled: true, Hero: "Only hero"}
-	data := workspaceLandingData{Slug: "s", Lp: lp, HasForms: true}
+	data := workspaceLandingData{Slug: "s", Lp: lp, Theme: landingThemeFrom(lp), HasForms: true}
 	var buf bytes.Buffer
 	if err := landingPageTmpl.Execute(&buf, data); err != nil {
 		t.Fatalf("landingPageTmpl.Execute: %v", err)

@@ -368,11 +368,33 @@ git rev-parse --verify --quiet "$BASE" >/dev/null || die "base ref not found: $B
 BASE_SHA=$(git rev-parse "$BASE")
 BASE_TREE=$(git rev-parse "$BASE^{tree}")
 
-# Wan's standing rule: no stage may draw more than 300% CPU (3 of the 6 cores), so half
-# the host stays free for other apps. Same knob name the release script uses.
-# systemd's CPUQuota counts CORES; `nice` would not help (it changes who runs, not how
-# many threads stay runnable, so the load average is untouched).
-TRAIN_CPU_QUOTA="${TRAIN_CPU_QUOTA:-300%}"
+# THE GATE'S CPU BUDGET, AND WHY THIS SCRIPT'S IS 400% (card t_d1bc5164).
+#
+# 300% is enough for one suite. It is NOT enough for the three browser gates this
+# script runs CONCURRENTLY when the diff maps to them (scripts/preflight.sh's
+# `run_browser_group` starts a11y, e2e-builder and e2e-core at once, each with its own
+# `next start` plus playwright workers) — and the shortfall does not look like
+# contention, it looks like a FAILED SUITE. Measured on this 6-core host, on ONE
+# unchanged candidate tree (7670267d7, PR #1722):
+#
+#   CPUQuota=300%  train: a11y FAIL 1014 s, re-run FAIL 817 s -> RED on the batch,
+#                          BISECT=combination, nothing landed
+#   a11y alone     PASS 287 s        (scripts/preflight.sh --only a11y)
+#   all three suites concurrent, UNCAPPED: a11y 220/220 PASS, 9.6 min
+#   CPUQuota=400%  GREEN: a11y 604 s, e2e-builder 606 s, e2e-core 655 s -> landed
+#
+# A 287 s suite that takes 817-1014 s and reds is starvation, not assertions; every
+# such red costs a whole train run and names an innocent ref. 400% is the value
+# AGENTS.md documents for a gated run on this host, so the train uses it too.
+#
+# The release's GATE_CPU_QUOTA is a SEPARATE knob (deploy/build-and-ship.sh, 300% since
+# #1551, where it also bounds BUILD_CPU_QUOTA); this variable is the train's alone.
+#
+# The cap still leaves cores for other lanes (400% of 6 cores = 4); an empty value runs
+# UNCAPPED and is the wrong default on a shared host. systemd's CPUQuota counts CORES;
+# `nice` would not help (it changes who runs, not how many threads stay runnable, so
+# the load average is untouched).
+TRAIN_CPU_QUOTA="${TRAIN_CPU_QUOTA:-400%}"
 LAUNCH=()
 if [ -n "$TRAIN_CPU_QUOTA" ]; then
   if command -v systemd-run >/dev/null 2>&1; then
@@ -674,6 +696,24 @@ else
     exit 5
   fi
   if [ "$BISECT_MODE" = none ]; then exit 1; fi
+  # A cap below 400% is the one measured way this host turns a 287 s suite into an
+  # 817-1014 s red (see the CPU-budget note at the top of this file), so say it on every
+  # red: the next lane reads the BISECT line and little else.
+  _quota_pct=${TRAIN_CPU_QUOTA%\%}
+  case "${_quota_pct:-x}" in ''|*[!0-9]*) _quota_pct="" ;; esac
+  if [ -n "$_quota_pct" ] && [ "$_quota_pct" -lt 400 ]; then
+    say "note: this gate ran under CPUQuota=$TRAIN_CPU_QUOTA; the three concurrent browser gates need >=400% on this host, so a red here can be CONTENTION — re-run the SAME tree at TRAIN_CPU_QUOTA=400% before blaming a ref"
+  fi
+  # A batch of ONE cannot be a COMBINATION: with a single ref there is no second ref to
+  # combine with, so `BISECT=combination` named NO culprit at all and sent a rework card
+  # after bytes that pass on their own (card t_d1bc5164: that is exactly what the 300%
+  # run printed for an innocent PR #1722). The red is either that ref's own tree or the
+  # gate's environment; naming the ref is the most this run can honestly say.
+  if [ "${#REFS[@]}" -eq 1 ]; then
+    say "BISECT=${REFS[0]} (the batch holds one ref — there is nothing to bisect)"
+    say "  if this ref is green on its own, the red was the gate's environment, not its tree"
+    exit 1
+  fi
   # Prefix bisect: smallest prefix that reds names the culprit (refs are in queue order).
   local_bad=""
   for (( k = 1; k < ${#REFS[@]}; k++ )); do

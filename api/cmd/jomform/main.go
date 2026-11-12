@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,6 +44,9 @@ const (
 	// defaultScope is the narrowest grant the ladder offers. A harness onboarding
 	// starts read-only; widening is a separate, deliberate command.
 	defaultScope = "read"
+	// binaryName is what the launcher entry says when this process cannot report
+	// its own path. It is also the installed name the docs tell the user to use.
+	binaryName = "jomform"
 )
 
 // cli carries the process-wide dependencies. Tests substitute every one of them
@@ -51,10 +55,24 @@ const (
 type cli struct {
 	stdout io.Writer
 	stderr io.Writer
+	stdin  io.Reader
 	home   string
 	now    func() time.Time
 	sleep  func(time.Duration)
 	http   *http.Client
+
+	// stream carries MCP requests. It is a separate client from http because a
+	// tool call may legitimately run for minutes, while every OAuth call this
+	// CLI makes must fail fast.
+	stream *http.Client
+
+	// executable resolves the binary a harness launcher entry will run. Tests
+	// substitute it; a GUI harness inherits a minimal PATH, so the entry carries
+	// an absolute path rather than the bare name.
+	executable func() (string, error)
+
+	// mu guards stderr, which the proxy writes from several goroutines.
+	mu sync.Mutex
 
 	// lookupAccount reads the account name behind a freshly issued token. It is
 	// best effort: the credential is already valid when it runs, so a failure
@@ -67,10 +85,13 @@ func newCLI(stdout, stderr io.Writer) *cli {
 	return &cli{
 		stdout:        stdout,
 		stderr:        stderr,
+		stdin:         os.Stdin,
 		home:          home,
 		now:           time.Now,
 		sleep:         time.Sleep,
 		http:          &http.Client{Timeout: 30 * time.Second},
+		stream:        &http.Client{},
+		executable:    os.Executable,
 		lookupAccount: lookupAccount,
 	}
 }
@@ -95,6 +116,7 @@ var errUsage = errors.New("usage")
 const usageText = `usage:
   jomform mcp login --headless [--server URL] [--client-name NAME] [--scope read|readwrite]
                              [--email ADDRESS] [--out PATH] [--mcp-url URL] [--force]
+  jomform mcp proxy [--mcp-url URL]     (what the harness entry runs; reads stdin)
   jomform mcp status [--out PATH]
   jomform mcp logout [--out PATH] [--force]
 `
@@ -109,11 +131,13 @@ func (c *cli) run(args []string) error {
 		return nil
 	case "mcp":
 		if len(args) < 2 {
-			return fmt.Errorf("%w: mcp needs one of login, status or logout", errUsage)
+			return fmt.Errorf("%w: mcp needs one of login, proxy, status or logout", errUsage)
 		}
 		switch args[1] {
 		case "login":
 			return c.cmdLogin(args[2:])
+		case "proxy":
+			return c.cmdProxy(args[2:])
 		case "status":
 			return c.cmdStatus(args[2:])
 		case "logout":
@@ -233,7 +257,7 @@ func (c *cli) login(server, mcpURL, out string, o loginOptions) error {
 		return fmt.Errorf("the token was issued but could not be stored: %w", err)
 	}
 
-	entry, err := harnessEntryJSON(mcpURL, tok.AccessToken)
+	entry, err := harnessEntryJSON(mcpURL, c.selfCommand())
 	if err != nil {
 		return err
 	}
@@ -266,6 +290,18 @@ func (c *cli) cmdStatus(args []string) error {
 	if err != nil {
 		return errors.New("not signed in on this machine — run `jomform mcp login --headless`")
 	}
+	// An access token that has passed is not a dead connection any more: the
+	// stored refresh token can renew it, and the harness's launcher entry does
+	// that on its own. Renew here so `status` reports the state the harness will
+	// see, and so its advice is only "log in again" when that is actually true.
+	var renewErr error
+	if !c.now().Before(tok.ExpiresAt) {
+		if renewed, rerr := c.accessToken(context.Background(), ""); rerr == nil {
+			tok = renewed
+		} else {
+			renewErr = rerr
+		}
+	}
 	expired := !c.now().Before(tok.ExpiresAt)
 	fmt.Fprintf(c.stdout, "expires: %s\n", tok.ExpiresAt.Local().Format("2006-01-02 15:04 MST"))
 	fmt.Fprintf(c.stdout, "scopes: %s\n", displayScope(tok.Scope))
@@ -286,7 +322,10 @@ func (c *cli) cmdStatus(args []string) error {
 		fmt.Fprintf(c.stdout, "harness: %s (%s)\n", path, state)
 	}
 	if expired {
-		return fmt.Errorf("the access token expired at %s — run `jomform mcp login --headless` again",
+		if renewErr != nil {
+			return renewErr
+		}
+		return fmt.Errorf("the access token expired at %s and could not be renewed — run `jomform mcp login --headless` again",
 			tok.ExpiresAt.Local().Format("2006-01-02 15:04 MST"))
 	}
 	return nil
@@ -372,6 +411,37 @@ func displayAccount(name, slug string) string {
 	default:
 		return "(the server did not report one)"
 	}
+}
+
+// warnf writes a diagnostic to stderr. It is serialised because the proxy calls
+// it from several goroutines at once, and nothing written here ever carries a
+// token, a device code or a client secret.
+func (c *cli) warnf(format string, args ...any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fmt.Fprintf(c.stderr, "jomform: "+format+"\n", args...)
+}
+
+// selfCommand is the absolute path the harness launcher entry will run.
+//
+// A GUI harness does not inherit a login shell's PATH, so the bare name "jomform"
+// is not enough. os.Executable already resolves through /proc on Linux; the
+// EvalSymlinks step covers a macOS install that is a link into a versioned
+// directory.
+func (c *cli) selfCommand() string {
+	if c.executable != nil {
+		if p, err := c.executable(); err == nil && strings.TrimSpace(p) != "" {
+			if real, rerr := filepath.EvalSymlinks(p); rerr == nil {
+				return real
+			}
+			if abs, aerr := filepath.Abs(p); aerr == nil {
+				return abs
+			}
+			return p
+		}
+	}
+	c.warnf("could not resolve the path of this binary; the harness entry will say `%s`, which may not be on the harness's PATH", binaryName)
+	return binaryName
 }
 
 // expiryWords turns expires_in into the phrase the third stdout line carries.
