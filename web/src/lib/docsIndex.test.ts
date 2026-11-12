@@ -581,7 +581,7 @@ const ORIGINAL_TITLES = [
   // Card t_135c3c72: the buyer-borne processing fee. It is a live destination —
   // Settings → Payment fees and this entry point at /docs/payment-fees — so it is
   // part of the contract like the entries above.
-  "Processing fees paid by the buyer",
+  "Platform fees paid by the buyer",
   "MCP (AI agents)",
   "Design → AI agent → MCP customization",
   "Embed on your site",

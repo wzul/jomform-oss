@@ -78,7 +78,7 @@ type langStrings struct {
 	// the fee gets its own labelled row above the total — never folded into an
 	// item price and never revealed only on the CHIP page.
 	FeeSubtotal string // "Subtotal" — the goods + shipping, before the fee
-	FeeLine     string // "Processing fee"
+	FeeLine     string // "Platform fee" — JomForm's own charge, never the acquirer's (card t_1a17d22d)
 	FeeChoose   string // chooser heading when more than one method is active
 	FeeIncl     string // suffix on the fee row: the method + frozen rate
 	// Shipping by zone (managed rate source). ShipFallback is the suffix of the
@@ -191,7 +191,7 @@ var formLangs = map[string]langStrings{
 	"en": {
 		Lang: "en", EmailLabel: "Email",
 		Total: "Total", Submit: "Proceed to Payment", ErrorAlert: "Error",
-		FeeSubtotal: "Subtotal", FeeLine: "Processing fee",
+		FeeSubtotal: "Subtotal", FeeLine: "Platform fee",
 		FeeChoose: "How would you like to pay?", FeeIncl: "incl.",
 		NoProductAlert:  "Please select at least one product",
 		SelectVariation: "Select an option", SelectVariationAlert: "Please choose a variation for each product", InStock: "in stock",
@@ -264,7 +264,7 @@ var formLangs = map[string]langStrings{
 	"ms": {
 		Lang: "ms", EmailLabel: "Emel",
 		Total: "Jumlah", Submit: "Teruskan ke Pembayaran", ErrorAlert: "Ralat",
-		FeeSubtotal: "Jumlah kecil", FeeLine: "Caj pemprosesan",
+		FeeSubtotal: "Jumlah kecil", FeeLine: "Caj platform",
 		FeeChoose: "Bagaimana anda mahu bayar?", FeeIncl: "termasuk",
 		NoProductAlert:  "Pilih sekurang-kurangnya satu produk",
 		SelectVariation: "Pilih variasi", SelectVariationAlert: "Sila pilih variasi untuk setiap produk", InStock: "stok",
@@ -336,7 +336,7 @@ var formLangs = map[string]langStrings{
 	"zh": {
 		Lang: "zh", EmailLabel: "电子邮件",
 		Total: "总计", Submit: "前往付款", ErrorAlert: "错误",
-		FeeSubtotal: "小计", FeeLine: "手续费",
+		FeeSubtotal: "小计", FeeLine: "平台费",
 		FeeChoose: "您想如何付款？", FeeIncl: "包含",
 		NoProductAlert:  "请至少选择一种商品",
 		SelectVariation: "请选择规格", SelectVariationAlert: "请为每件商品选择规格", InStock: "有货",
@@ -405,7 +405,7 @@ var formLangs = map[string]langStrings{
 	"ta": {
 		Lang: "ta", EmailLabel: "மின்னஞ்சல்",
 		Total: "மொத்தம்", Submit: "கட்டணத்திற்குச் செல்லவும்", ErrorAlert: "பிழை",
-		FeeSubtotal: "துணை மொத்தம்", FeeLine: "செயலாக்கக் கட்டணம்",
+		FeeSubtotal: "துணை மொத்தம்", FeeLine: "தளக் கட்டணம்",
 		FeeChoose: "எப்படிப் பணம் செலுத்த விரும்புகிறீர்கள்?", FeeIncl: "உள்ளடங்கும்",
 		NoProductAlert:  "குறைந்தது ஒரு பொருளையாவது தேர்ந்தெடுக்கவும்",
 		SelectVariation: "மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", SelectVariationAlert: "ஒவ்வொரு பொருளுக்கும் மாறுபாட்டைத் தேர்ந்தெடுக்கவும்", InStock: "கையிருப்பு",
@@ -474,7 +474,7 @@ var formLangs = map[string]langStrings{
 	"ar": {
 		Lang: "ar", EmailLabel: "البريد الإلكتروني",
 		Total: "المجموع", Submit: "الانتقال إلى الدفع", ErrorAlert: "خطأ",
-		FeeSubtotal: "المجموع الفرعي", FeeLine: "رسوم المعالجة",
+		FeeSubtotal: "المجموع الفرعي", FeeLine: "رسوم المنصة",
 		FeeChoose: "كيف تريد أن تدفع؟", FeeIncl: "شامل",
 		NoProductAlert:  "يرجى اختيار منتج واحد على الأقل",
 		SelectVariation: "اختر خيارًا", SelectVariationAlert: "يرجى اختيار خيار لكل منتج", InStock: "متوفر",

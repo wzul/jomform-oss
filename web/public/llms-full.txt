@@ -52,6 +52,10 @@ prices, sales, refunds, analytics — without opening a dashboard.
   per CHIP payment method (fixed sen and/or basis points), grossed up so you receive the full
   asking amount (at most 1 sen short), the buyer's pre-payment disclosure, the method lock at the
   CHIP page, the per-form switch-off, and why a refund never returns the fee.
+- [Connect CHIP and set your fee](https://jomform.com/docs/fees) — the setup path: paste the
+  CHIP Brand ID and Secret Key in Settings, switch on the methods you accept (FPX B2C, FPX
+  B2B1, card, e-wallet, DuitNow QR), set a flat platform fee per method in sen, and the worked
+  example showing the fee as its own line (RM100.00 + RM1.00 = RM101.00).
 - [Screenshot guides](https://jomform.com/docs/guides) — step-by-step setup walk-throughs, every
   step with its own screenshot from the running product and the control you touch at that step
   boxed in red.

@@ -1,9 +1,9 @@
 # Payment fees: merchant setup guide
 
-Pass the CHIP processing fee to your buyer in six steps, at the rate you set per payment method.
+Set one flat platform fee per payment method; JomForm adds it to the buyer's price as its own line, so the amount they typed never changes.
 
-**What this does:** JomForm adds your acquirer's fee on top of the price and grosses the total up,
-so you still receive the full asking amount.
+**What this does:** the platform fee is JomForm's own charge, added on top of the price at
+checkout. It is separate from what CHIP charges you, the merchant.
 
 ## 1. Open Settings → Payment fees
 
@@ -12,53 +12,65 @@ so you still receive the full asking amount.
 Settings → **Payment fees**, the tab between *e-Invoice* and *Webhooks*. Only workspace admins and
 owners see it.
 
-## 2. Tick the payment methods you want to charge for
+## 2. Set a platform fee per method
 
-![Payment method rows with the Card checkbox boxed](02-method-rows.png)
+![Platform fee rows with the RM amount fields boxed](02-method-rows.png)
 
-One row per method — **FPX**, **Card**, **e-Wallet**, **DuitNow QR** — and a method with no tick is
-passed through at cost.
+One row per method, each with its own amount in **RM**. Type `1.00` for a RM1.00 fee on every
+purchase of that method. **Leave a row blank for no fee**, and untick a method to stop charging
+it.
 
-## 3. Enter your rate
+## 3. Split FPX B2C and FPX B2B1
 
-![Card row with the Percent field boxed, value 200](03-set-rate.png)
+![FPX B2C and FPX B2B1 rows with two different amounts boxed](03-set-rate.png)
 
-**Fixed (sen)** is a flat fee (`100` = RM1.00) and **Percent (basis points)** is a percentage
-(`200` = 2%); you may use one or both.
+FPX is two CHIP identifiers, and each takes its own amount: **FPX B2C** for personal online
+banking, **FPX B2B1** for corporate. They are two buyer choices too, so the picker always shows
+both rows (when both are enabled) and each carries the amount set for its own product.
 
 ## 4. Acknowledge the disclosure
 
 ![Acknowledgement checkbox boxed](04-acknowledge.png)
 
-Enabling a method requires this tick, which records that the fee is passed to the buyer and who
-acknowledged it.
+Enabling a fee requires this tick. It records that the platform fee is charged to the buyer on top
+of the price and is separate from what CHIP charges you, together with who accepted it and when.
 
 ## 5. Save
 
-![Saved confirmation and the Card 2.00% rate label](05-saved.png)
+![Saved confirmation and the example box boxed](05-saved.png)
 
-Saving is immediate: the green **Payment fees saved.** banner confirms it and the row reads
-**Card 2.00%**.
+Saving is immediate: the green **Payment fees saved.** banner confirms it. The example box shows a
+RM100.00 order and the receipt line side by side — **Platform fee RM1.00**, with no payment-method
+name on it.
 
 ## 6. What your buyer sees
 
-![Buyer page with the payment-method picker boxed](06-buyer-sees-fee.png)
+![Buyer page with the payment-method picker, the Platform fee row and the total boxed](06-buyer-sees-fee.png)
 
 The buyer picks the method above the Pay button, and the fee line, the total and the button follow
-that choice. With FPX and Card both set to 2.00% and RM100.00 on the form:
+that choice. With RM1.00 for FPX B2C and RM100.00 on the form:
 
 | Line | Amount |
 |---|---|
 | Subtotal | RM100.00 |
-| Processing fee — FPX | RM2.04 |
-| **Total** | **RM102.04** |
+| Platform fee | RM1.00 |
+| **Total** | **RM101.00** |
 
-The fee is **RM2.04, not RM2.00**: a flat 2% would leave you with RM99.96 after CHIP takes its 2%,
-so the total is solved backwards and you receive the full RM100.00.
+The item line is exactly what the buyer typed. The fee is its own line, so nothing is grossed up
+and the price never changes.
+
+## Moving over from the old percentage rate
+
+A workspace that stored a percentage keeps charging exactly what it charged before. Settings →
+Payment fees shows it in the amber **Legacy rate, kept for one release** box: the rate in force,
+an amount field, and **Move … to a platform fee**. Set the amount, click Move, then **Save** once —
+the row becomes a flat fee and the percentage stops.
 
 ## Notes
 
-- The rate is snapshotted on each sale, so a later change does not alter past sales or receipts.
-- SST is not added on top of these rates in this version; if your acquirer quotes a rate inclusive
-  of SST, enter the all-in figure.
-- Card acceptance is at your own risk as the merchant, and the acknowledgement in step 4 records it.
+- The amount is snapshotted on each sale, so a later change does not alter past sales or receipts.
+- CHIP's own fee is charged to you, the merchant; it is not part of this line and is never added to
+  the buyer unless your platform fee covers it.
+- The receipt and its PDF print **Platform fee** with the amount only. The payment method is never
+  named on anything the buyer receives.
+- SST is not calculated on this fee in the current version.

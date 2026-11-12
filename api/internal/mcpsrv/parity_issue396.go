@@ -1133,11 +1133,12 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// beside renamed `total` / `refunded` / `outstanding`.
 	//
 	// Card t_8064a965: `fee` and `net` (total − fee) sit beside `total`, because
-	// the buyer's total includes the buyer-borne processing fee, which the
-	// merchant never receives. An agent reconciling from this CSV used to count
-	// the fee as income.
+	// the buyer's total includes the buyer-borne charge, which the merchant never
+	// receives. An agent reconciling from this CSV used to count the fee as
+	// income. Card t_1a17d22d adds `platform_fee`: the flat line JomForm added to
+	// the CHIP purchase (0.00 on a legacy gross-up sale).
 	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"currency", "total", "fee", "net", "created_at", "purchase_id", "table_number",
+		"currency", "total", "fee", "platform_fee", "net", "created_at", "purchase_id", "table_number",
 		"refunded", "outstanding", "refund_status"}
 	keys, haveSubs := recordAnswerKeys(records)
 	if haveSubs {
@@ -1154,6 +1155,7 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 				sl.CurrencyOrMYR(),
 				fmt.Sprintf("%.2f", float64(sl.TotalSen)/100),
 				fmt.Sprintf("%.2f", float64(sl.FeeSen)/100),
+				fmt.Sprintf("%.2f", float64(sl.PlatformFeeSen)/100),
 				// net = total − fee (what the merchant keeps); refunded and
 				// outstanding stay their own columns, as on /sales.
 				fmt.Sprintf("%.2f", float64(sl.TotalSen-sl.FeeSen)/100),
@@ -1181,9 +1183,9 @@ func (s *Server) exportSalesCSV(ctx context.Context, _ *mcp.CallToolRequest, in 
 			csvguard.Cell(subStrField(sub, "full_name")), csvguard.Cell(subStrField(sub, "email")),
 			"", // a response has no money and therefore no currency
 			"0.00",
-			// fee and net: no payment, so both are zero, but the columns stay
-			// present so every row of the file has the same shape.
-			"0.00", "0.00",
+			// fee, platform_fee and net: no payment, so all are zero, but the
+			// columns stay present so every row of the file has the same shape.
+			"0.00", "0.00", "0.00",
 			sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"), "", "",
 			"0.00", "0.00", dbstore.RefundNone,
 		}

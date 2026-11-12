@@ -59,14 +59,19 @@
 #      gate RAN or was REMEMBERED.
 #
 #      ONE DELIBERATE EXCEPTION, and it narrows rule 1 rather than waiving it. The
-#      `selftest` and `monitor` gates read a FIXED SET OF FILES and never the product
-#      tree (preflight.sh's `hcached`), so their observation is keyed by a sha256 of
-#      exactly those files. A hit does NOT set `reused`: in this format that word means
+#      `monitor` gate reads a FIXED SET OF FILES (deploy/monitoring/*) and never the
+#      product tree; `selftest` reads THE WHOLE CHECKOUT (its checks derive gate claims
+#      from api/ web/ scripts/ deploy/, read web/e2e, and sweep every tracked file —
+#      `--gate-deps` reports `selftest: *`). Both are cached by preflight.sh's
+#      `hcached`, keyed by a sha256 of exactly what they read: the declared globs for
+#      `monitor`, and `git ls-files -s` over the tracked tree for `selftest` (the
+#      `:tree:` input, refused outright when the tree is dirty or is not a checkout). A
+#      hit does NOT set `reused`: in this format that word means
 #      "carried over between flushes", and the run did invoke the gate and read a pass
 #      from it. A hit is visible as `seconds: 0`, an `at` that is the OBSERVING run's
 #      time, and the HIT line naming the harness record behind it. Change one of those
 #      bytes and the entry stops matching and the gate re-runs (proved by `selftest`
-#      check 49). Do not extend this to a gate that reads the tree.
+#      check 49). Do not extend this to a gate that reads the tree without `:tree:`.
 #
 # FORMAT — one pretty-printed JSON file per tree:
 #   ${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/<tree-sha>.json

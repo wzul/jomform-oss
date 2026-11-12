@@ -61,6 +61,9 @@ const PAGES = [
   // Card t_135c3c72: the buyer-borne processing fee guide. Every docs page must
   // be scanned by the axe gate, and the GATE-INVENTORY `e2e` count pins this list.
   { name: "docs-payment-fees", path: "/docs/payment-fees" },
+  // Card t_1e4c1bba: the setup page the retired /panduan/surau link 301s to. A docs page
+  // outside PAGES is a page the axe gate never reads.
+  { name: "docs-fees", path: "/docs/fees" },
   { name: "docs-builder", path: "/docs/builder" },
   { name: "docs-workspaces", path: "/docs/workspaces" },
   { name: "docs-sales", path: "/docs/sales" },

@@ -30,27 +30,40 @@ var errPaymentFeesUnavailable = errors.New("processing fee settings not availabl
 
 // errPaymentFeeAckRequired mirrors the REST PUT's refusal: a method may not be
 // enabled without the merchant's pass-on acknowledgement.
-var errPaymentFeeAckRequired = errors.New("tick the disclosure acknowledgement before enabling the processing fee")
+var errPaymentFeeAckRequired = errors.New("tick the disclosure acknowledgement before enabling a fee")
 
-// feeRateIn is one method's rate: basis points (100 = 1%) and integer sen.
+// feeRateIn is one method's stored charge. fpx (FPX B2C, personal) and
+// fpx_b2b1 (FPX B2B1, corporate) are two separate methods (card t_1d0198e3), so
+// a workspace can carry a different amount for each.
 //
-// fpx (FPX B2C, personal) and fpx_b2b1 (FPX B2B1, corporate) are two separate
-// methods (card t_1d0198e3), so a workspace can carry a different rate for each.
+// Two models, one of them the buyer's path: PlatformFeeSen is a flat amount in
+// SEN added to the buyer's price as its OWN purchase line; FixedSen +
+// PercentBP are the LEGACY gross-up kept for one release (100 BP = 1%).
 type feeRateIn struct {
-	Method    string `json:"method" jsonschema:"CHIP method: fpx (FPX B2C), fpx_b2b1 (FPX B2B1), card, ewallet or duitnow_qr"`
-	Enabled   bool   `json:"fee_enabled" jsonschema:"Enable the fee for this method (payer bears the fee)"`
-	FixedSen  int64  `json:"fee_fixed_sen,omitempty" jsonschema:"Fixed fee in SEN (RM1.00 = 100). 0 = no fixed fee"`
-	PercentBP int64  `json:"fee_percent_bp,omitempty" jsonschema:"Percentage fee in BASIS POINTS (100 = 1%). Must be less than 10000 (99.99%)"`
+	Method  string `json:"method" jsonschema:"CHIP method: fpx (FPX B2C), fpx_b2b1 (FPX B2B1), card, ewallet or duitnow_qr"`
+	Enabled bool   `json:"fee_enabled" jsonschema:"Enable the charge for this method (payer pays it)"`
+	// PlatformFeeSen is the model going forward: a flat amount added to the
+	// buyer's price as its OWN line in the CHIP purchase. Ptr on purpose — an
+	// absent field keeps the stored amount, so a client that predates the
+	// platform fee cannot silently zero it.
+	PlatformFeeSen *int64 `json:"platform_fee_sen,omitempty" jsonschema:"PLATFORM FEE in SEN (RM1.00 = 100): a flat amount added on top of the buyer's price as its own purchase line. Omit to keep the stored amount"`
+	FixedSen       int64  `json:"fee_fixed_sen,omitempty" jsonschema:"LEGACY: fixed fee in SEN (RM1.00 = 100) for the old gross-up model. Ignored when platform_fee_sen is set"`
+	PercentBP      int64  `json:"fee_percent_bp,omitempty" jsonschema:"LEGACY: percentage fee in BASIS POINTS (100 = 1%) for the old gross-up model. Must be less than 10000 (99.99%)"`
 }
 
 // feeRateOut is the read shape for one method.
 type feeRateOut struct {
-	Method    string `json:"method"`
-	Enabled   bool   `json:"fee_enabled"`
-	FixedSen  int64  `json:"fee_fixed_sen"`
-	PercentBP int64  `json:"fee_percent_bp"`
-	RateLabel string `json:"rate_label"`
-	UpdatedBy string `json:"updated_by,omitempty"`
+	Method         string `json:"method"`
+	Enabled        bool   `json:"fee_enabled"`
+	PlatformFeeSen int64  `json:"platform_fee_sen"`
+	FixedSen       int64  `json:"fee_fixed_sen"`
+	PercentBP      int64  `json:"fee_percent_bp"`
+	RateLabel      string `json:"rate_label"`
+	// LegacyGrossUp flags a row still priced by the old percentage gross-up
+	// (migration 000090). A merchant reading this knows why the amount moves
+	// with the price instead of being the flat platform amount.
+	LegacyGrossUp bool   `json:"legacy_grossup"`
+	UpdatedBy     string `json:"updated_by,omitempty"`
 }
 
 type paymentFeesOut struct {
@@ -110,19 +123,35 @@ func (s *Server) setPaymentFees(
 	if err != nil {
 		return nil, nil, err
 	}
+	// platform_fee_sen is optional in the payload. An absent field means "keep
+	// the stored amount", so an agent that only knows the legacy rate fields can
+	// still send a rates array without wiping a platform fee set elsewhere.
+	stored, err := s.deps.PaymentFees.List(ctx, wsID)
+	if err != nil {
+		return nil, nil, err
+	}
+	storedPlatform := map[string]int64{}
+	for _, row := range stored {
+		storedPlatform[row.Method] = row.PlatformFeeSen
+	}
 	enabling := false
 	rates := make([]dbstore.PaymentFeeRate, 0, len(in.Rates))
 	for _, r := range in.Rates {
-		if !r.Enabled && r.FixedSen == 0 && r.PercentBP == 0 {
+		platform := storedPlatform[r.Method]
+		if r.PlatformFeeSen != nil {
+			platform = *r.PlatformFeeSen
+		}
+		if !r.Enabled && r.FixedSen == 0 && r.PercentBP == 0 && platform == 0 {
 			continue
 		}
-		if err := dbstore.ValidateFeeRate(r.Method, r.FixedSen, r.PercentBP); err != nil {
+		if err := dbstore.ValidateFeeRate(r.Method, r.FixedSen, r.PercentBP, platform); err != nil {
 			return nil, nil, err
 		}
 		rates = append(rates, dbstore.PaymentFeeRate{
-			Method: r.Method, Enabled: r.Enabled, FixedSen: r.FixedSen, PercentBP: r.PercentBP,
+			Method: r.Method, Enabled: r.Enabled, FixedSen: r.FixedSen,
+			PercentBP: r.PercentBP, PlatformFeeSen: platform,
 		})
-		if r.Enabled && (r.FixedSen > 0 || r.PercentBP > 0) {
+		if r.Enabled && (r.FixedSen > 0 || r.PercentBP > 0 || platform > 0) {
 			enabling = true
 		}
 	}
@@ -184,11 +213,21 @@ func (s *Server) paymentFeesOut(ctx context.Context, accountID string) (*payment
 		rate := feeRateOut{Method: m}
 		if ok {
 			rate.Enabled = row.Enabled
+			rate.PlatformFeeSen = row.PlatformFeeSen
 			rate.FixedSen = row.FixedSen
 			rate.PercentBP = row.PercentBP
+			rate.LegacyGrossUp = row.PercentBP > 0
 			rate.UpdatedBy = row.UpdatedBy
 		}
-		rate.RateLabel = payments.FeeRateLabel(m, rate.FixedSen, rate.PercentBP)
+		if rate.LegacyGrossUp {
+			rate.RateLabel = payments.FeeRateLabel(m, rate.FixedSen, rate.PercentBP)
+		} else {
+			platform := rate.PlatformFeeSen
+			if platform == 0 {
+				platform = rate.FixedSen
+			}
+			rate.RateLabel = payments.FeeRateLabel(m, platform, 0)
+		}
 		out.Rates = append(out.Rates, rate)
 	}
 	ack, err := s.deps.PaymentFees.Acknowledgement(ctx, wsID)

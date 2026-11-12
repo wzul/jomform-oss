@@ -7,6 +7,7 @@ import { useI18n, LANGS_SHOWN, LANG_LABEL } from "../../components/i18n";
 import { endonymLangProps } from "../../lib/endonymLang";
 import { useSession } from "../../components/session";
 import { formatDateTime } from "../../lib/formatDate";
+import { formatPrice, currencyLabel } from "../../lib/money";
 import { activeWorkspaceScope, workspaceQuery } from "../../lib/workspace";
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { MembersTab } from "../../components/MembersTab";
@@ -64,28 +65,56 @@ function isSettingsTab(v: string | null): v is SettingsTab {
   return v === "chip" || v === "domains" || v === "tracking" || v === "einvoice" || v === "fees" || v === "webhooks" || v === "emel" || v === "members" || v === "storefront" || v === "legal" || v === "currency" || v === "affiliates" || v === "workspace";
 }
 
-// FeeRateRow is one CHIP payment method's processing-fee rate as the API stores
-// it (card t_135c3c72). Amounts are integer SEN and the percentage is BASIS
-// POINTS: 100 = 1%. `rate_label` is the server's wording ("Card 2.00%") so the
+// FeeRateRow is one CHIP payment method's stored charge as the API returns it
+// (cards t_135c3c72 and t_1a17d22d). Amounts are integer SEN. `platform_fee_sen`
+// is the flat PLATFORM FEE added to the buyer's price as its own CHIP line;
+// `fee_fixed_sen`/`fee_percent_bp` are the legacy gross-up rate (basis points,
+// 100 = 1%) and `legacy_grossup` says this row is still priced that way.
+// `rate_label` is the server's wording ("Card 2.00%", "FPX RM1.00") so the
 // dashboard cannot drift from the receipt.
 type FeeRateRow = {
   method: string;
   fee_enabled: boolean;
+  platform_fee_sen: number;
   fee_fixed_sen: number;
   fee_percent_bp: number;
+  legacy_grossup?: boolean;
   rate_label?: string;
   updated_by?: string;
 };
 
-// FEE_METHOD_NAMES are the buyer-facing names of the five storable methods. The
-// keys are the API's, never displayed raw to a merchant. fpx and fpx_b2b1 are two
-// rows (card t_1d0198e3): FPX B2C and FPX B2B1 carry different acquirer rates.
+// FEE_METHOD_NAMES are the names the SETTINGS screen shows for the storable
+// methods. The keys are the API's, never displayed raw to a merchant. fpx and
+// fpx_b2b1 are two rows (card t_1d0198e3): FPX B2C and FPX B2B1 carry different
+// rates, and this screen sets an amount for each (card t_69d2dd19).
 const FEE_METHOD_NAMES: Record<string, string> = {
   fpx: "FPX (B2C)",
   fpx_b2b1: "FPX B2B1",
   card: "Card",
   ewallet: "e-Wallet",
   duitnow_qr: "DuitNow QR",
+};
+
+// The per-method help line lives at five LITERAL t() call sites inside the
+// component (see `feeMethodDesc` below), not in a method→key map passed to
+// `t(...)`: a dynamic key is a call site the i18n guard cannot resolve, and it
+// spends one of the 65 it allows.
+
+// feeSenFromRM parses a money draft into integer sen. Blank, unparseable and
+// negative all mean 0 = "no fee for this method", which is the mockup's rule.
+// (The field's unit is the workspace's currency, labelled by lib/money.ts.)
+const feeSenFromRM = (v: string | undefined): number => {
+  const n = Number((v ?? "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
+};
+
+// feeLegacyRateText is the legacy row as the amber box prints it, e.g.
+// "RM0.50 + 0.80%". Percent is stored in basis points (100 = 1%).
+const feeLegacyRateText = (fixedSen: number, percentBp: number, currency: string): string => {
+  const parts: string[] = [];
+  if (fixedSen > 0) parts.push(formatPrice(fixedSen, currency));
+  if (percentBp > 0) parts.push(`${(percentBp / 100).toFixed(2)}%`);
+  return parts.join(" + ");
 };
 
 // The tab the URL names, if any — `/settings#webhooks` (the hash) or
@@ -425,10 +454,19 @@ export default function Settings() {
   // a ref rather than state so a re-render cannot orphan it.
   // Issue #447: per-workspace realtime notification sound toggle (Storefront tab).
   const [sfSoundEnabled, setSfSoundEnabled] = useState(false);
-  // Card t_135c3c72: per-method processing-fee rates (Settings -> Payment fees).
-  // Money is integer SEN, the percentage is BASIS POINTS (100 = 1%) — the same
-  // units the API takes, so nothing is converted in the browser.
+  // Card t_135c3c72: per-method payment-fee settings (Settings -> Payment fees).
+  // Card t_69d2dd19: the editor sets the PLATFORM FEE amount per method, in RM
+  // on screen and integer SEN in state/on the wire. `feeAmountDrafts` holds the
+  // raw text the merchant is typing (keyed by method) so a half-typed "1." is
+  // not rewritten under the cursor; the sen value is parsed at the field's edge.
   const [feeRates, setFeeRates] = useState<FeeRateRow[]>([]);
+  const [feeAmountDrafts, setFeeAmountDrafts] = useState<Record<string, string>>({});
+  // The legacy box stages a move in one save: the input holds the platform
+  // amount the row will carry, pre-filled with its legacy fixed part.
+  const [feeLegacyDrafts, setFeeLegacyDrafts] = useState<Record<string, string>>({});
+  // Which method the example box narrates. Set on focus of a platform row, so
+  // the merchant sees the consequence of the field they are editing.
+  const [feePreviewMethod, setFeePreviewMethod] = useState("");
   const [feeAck, setFeeAck] = useState(false);
   const [feeAckBy, setFeeAckBy] = useState("");
   // Per-workspace AI spam-judge toggle (Storefront tab). Default
@@ -622,7 +660,22 @@ export default function Settings() {
         // An answer for a workspace the merchant has since left must not land.
         if (workspaceQuery() !== q) return;
         if (!b || !Array.isArray(b.rates)) return;
-        setFeeRates(b.rates as FeeRateRow[]);
+        const rows = b.rates as FeeRateRow[];
+        setFeeRates(rows);
+        // A fixed-only legacy row IS a flat platform fee (same arithmetic, the
+        // buyer's amount unchanged), so the platform field shows its fixed
+        // part; a percentage row is legacy and stays in the amber box.
+        setFeeAmountDrafts(
+          Object.fromEntries(
+            rows.map((row) => {
+              const platform = row.platform_fee_sen > 0 ? row.platform_fee_sen : row.legacy_grossup ? 0 : row.fee_fixed_sen;
+              return [row.method, platform > 0 ? (platform / 100).toFixed(2) : ""];
+            }),
+          ),
+        );
+        setFeeLegacyDrafts(
+          Object.fromEntries(rows.map((row) => [row.method, row.fee_fixed_sen > 0 ? (row.fee_fixed_sen / 100).toFixed(2) : ""])),
+        );
         setFeeAck(b.acknowledged === true);
         setFeeAckBy(typeof b.acknowledged_by === "string" ? b.acknowledged_by : "");
       })
@@ -1755,6 +1808,46 @@ export default function Settings() {
   // breaks the hook order.
   const dismissMsg = useCallback(() => setMsg(""), []);
 
+  // Card t_69d2dd19: the fee editor's two halves (platform rows, legacy rows) and
+  // the example box. Derived on every render from the rows + the merchant's
+  // drafts, so the example always narrates the field in front of them.
+  const feePlatformRows = feeRates.filter((r) => !r.legacy_grossup);
+  const feeLegacyRows = feeRates.filter((r) => r.legacy_grossup);
+  const feePreviewRow =
+    feePlatformRows.find((r) => r.method === feePreviewMethod) ||
+    feePlatformRows.find((r) => feeSenFromRM(feeAmountDrafts[r.method]) > 0) ||
+    feePlatformRows[0];
+  const feePreviewSen = feePreviewRow ? feeSenFromRM(feeAmountDrafts[feePreviewRow.method]) : 0;
+  const feePreviewName = feePreviewRow ? FEE_METHOD_NAMES[feePreviewRow.method] || feePreviewRow.method : "—";
+
+  // One literal t() per method: the i18n guard resolves these, so a missing
+  // translation arm fails the build instead of rendering the raw key.
+  const feeMethodDesc: Record<string, string> = {
+    fpx: t("set.feesB2CDesc"),
+    fpx_b2b1: t("set.feesB2B1Desc"),
+    card: t("set.feesCardDesc"),
+    ewallet: t("set.feesEWalletDesc"),
+    duitnow_qr: t("set.feesQRDesc"),
+  };
+
+  // stageLegacyMove turns one legacy percentage row into a platform row in the
+  // editor. It deliberately does NOT save: the merchant sees the new amount in
+  // context and commits every change with the one Save button, so a percentage
+  // workspace moves over in one save and a stray click cannot re-price a buyer.
+  const stageLegacyMove = (row: FeeRateRow) => {
+    const amount = feeSenFromRM(feeLegacyDrafts[row.method]);
+    setFeeRates((rows) =>
+      rows.map((r) =>
+        r.method === row.method
+          ? { ...r, legacy_grossup: false, platform_fee_sen: amount, fee_fixed_sen: 0, fee_percent_bp: 0 }
+          : r,
+      ),
+    );
+    setFeeAmountDrafts((d) => ({ ...d, [row.method]: amount > 0 ? (amount / 100).toFixed(2) : "" }));
+    setFeePreviewMethod(row.method);
+  };
+
+
   return (
     <Shell active="settings">
       <div className="w-full flex-1 px-6 py-8">
@@ -1884,6 +1977,23 @@ export default function Settings() {
           </p>
         )}
         {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
+
+        {/* Card t_69d2dd19 (requirement 6 of t_1a17d22d): a workspace whose rows
+            still price by the legacy percentage must be TOLD, on whatever tab it
+            opens. The amber section inside Payment fees is the same notice with
+            the editor beside it; this one is the pointer to it. */}
+        {feeLegacyRows.length > 0 && activeTab !== "fees" && (
+          <p
+            data-testid="fees-legacy-notice"
+            className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          >
+            <span>{t("set.feesLegacyNotice")}</span>
+            <button type="button" onClick={() => setTab("fees")} className="font-semibold underline">
+              {t("set.feesLegacyNoticeGo")}
+            </button>
+          </p>
+        )}
+
 
         {/* ── CHIP tab ── */}
         {activeTab === "chip" && (
@@ -2638,7 +2748,10 @@ export default function Settings() {
           </section>
         )}
 
-        {/* ── Payment fees tab: buyer-borne CHIP processing fee (card t_135c3c72) ── */}
+        {/* ── Payment fees tab: the platform fee the BUYER pays (cards
+            t_135c3c72 and t_69d2dd19). The amount is JomForm's own charge, flat
+            and per method. The method name is shown HERE and in the merchant's
+            own sale row; it must never reach a buyer's fee line (Wan's rule). ── */}
         {activeTab === "fees" && (
           <section
             className="jf-card mt-6 p-6"
@@ -2647,72 +2760,198 @@ export default function Settings() {
             aria-labelledby={tabDomId("set", "fees")}
             data-testid="settings-fees"
           >
-            <h2 className="text-lg font-semibold">{t("set.feesTitle")}</h2>
-            <p className="mt-1 max-w-2xl text-sm text-[var(--jf-muted)]">{t("set.feesHelp")}</p>
-            <p className="mt-2 max-w-2xl text-xs text-[var(--jf-muted)]">{t("set.feesExample")}</p>
-
-            <div className="mt-4 space-y-3">
-              {feeRates.map((row, i) => (
-                <div
-                  key={row.method}
-                  data-testid={`fee-rate-${row.method}`}
-                  className="grid grid-cols-1 items-end gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-4"
-                >
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
-                    <input
-                      type="checkbox"
-                      data-testid={`fee-enabled-${row.method}`}
-                      checked={row.fee_enabled}
-                      onChange={(e) => {
-                        const next = [...feeRates];
-                        next[i] = { ...row, fee_enabled: e.target.checked };
-                        setFeeRates(next);
-                      }}
-                    />
-                    {FEE_METHOD_NAMES[row.method] || row.method}
-                  </label>
-                  <div>
-                    <label className="text-xs text-slate-500">{t("set.feesFixed")}</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      data-testid={`fee-fixed-${row.method}`}
-                      value={row.fee_fixed_sen}
-                      onChange={(e) => {
-                        const next = [...feeRates];
-                        next[i] = { ...row, fee_fixed_sen: Math.max(0, Math.trunc(Number(e.target.value) || 0)) };
-                        setFeeRates(next);
-                      }}
-                      className="jf-input mt-1"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-500">{t("set.feesPercent")}</label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={9999}
-                      step={1}
-                      data-testid={`fee-bp-${row.method}`}
-                      value={row.fee_percent_bp}
-                      onChange={(e) => {
-                        const next = [...feeRates];
-                        // Clamp to the schema's bound (99.99%): at 100% the fee
-                        // grows as fast as the amount and no total satisfies the
-                        // gross-up, so the store refuses it.
-                        next[i] = { ...row, fee_percent_bp: Math.min(9999, Math.max(0, Math.trunc(Number(e.target.value) || 0))) };
-                        setFeeRates(next);
-                      }}
-                      className="jf-input mt-1"
-                    />
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {row.rate_label ? <span data-testid={`fee-label-${row.method}`}>{row.rate_label}</span> : null}
-                  </div>
-                </div>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">{t("set.feesTitle")}</h2>
+              <span
+                data-testid="fee-model-pill"
+                className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700"
+              >
+                {t("set.feesApplies")}
+              </span>
             </div>
+            <p className="mt-1 max-w-2xl text-sm text-[var(--jf-muted)]">{t("set.feesHelp")}</p>
+
+            <div className="mt-4 space-y-2" data-testid="fee-platform-rows">
+              {feePlatformRows.map((row) => {
+                const name = FEE_METHOD_NAMES[row.method] || row.method;
+                return (
+                  <div
+                    key={row.method}
+                    data-testid={`fee-rate-${row.method}`}
+                    className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        data-testid={`fee-enabled-${row.method}`}
+                        checked={row.fee_enabled}
+                        onChange={(e) => {
+                          const next = [...feeRates];
+                          const i = next.findIndex((x) => x.method === row.method);
+                          if (i >= 0) {
+                            next[i] = { ...next[i], fee_enabled: e.target.checked };
+                            setFeeRates(next);
+                          }
+                        }}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-slate-800">{name}</span>
+                        <span className="block text-xs text-[var(--jf-muted)]">{feeMethodDesc[row.method]}</span>
+                      </span>
+                    </label>
+                    <span className="flex items-center gap-1.5 self-end sm:self-auto">
+                      <label htmlFor={`fee-amount-${row.method}`} className="text-xs font-bold text-[var(--jf-muted)]">{currencyLabel(currency)}</label>
+                      <input
+                        id={`fee-amount-${row.method}`}
+                        data-testid={`fee-amount-${row.method}`}
+                        value={feeAmountDrafts[row.method] ?? ""}
+                        inputMode="decimal"
+                        placeholder="—"
+                        onFocus={() => setFeePreviewMethod(row.method)}
+                        onChange={(e) => setFeeAmountDrafts((d) => ({ ...d, [row.method]: e.target.value }))}
+                        className="jf-input w-24 text-right"
+                      />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-2 max-w-2xl text-xs text-[var(--jf-muted)]" data-testid="fee-hint">
+              {t("set.feesHint", { cur: currencyLabel(currency) })}
+            </p>
+
+            {/* The example box narrates the row last focused, and shows the
+                SETTINGS consequence and the RECEIPT line separately: the receipt
+                carries the amount and never the method (Wan's rule). */}
+            <div
+              className="mt-4 max-w-2xl rounded-lg border border-dashed border-slate-300 bg-[var(--jf-primary-tint)] px-3 py-2 text-xs text-slate-700"
+              data-testid="fee-example"
+            >
+              <p>
+                {t("set.feesPreview", {
+                  amount: formatPrice(10000, currency),
+                  method: feePreviewName,
+                  total: formatPrice(10000 + feePreviewSen, currency),
+                })}
+                <br />
+                {feePreviewSen > 0
+                  ? t("set.feesPreviewLines", { item: formatPrice(10000, currency), fee: formatPrice(feePreviewSen, currency) })
+                  : t("set.feesPreviewNoFee", { item: formatPrice(10000, currency) })}
+              </p>
+              <p className="mt-1.5 border-t border-dashed border-slate-300 pt-1.5">
+                {t("set.feesReceiptLine", {
+                  line:
+                    feePreviewSen > 0
+                      ? t("set.feesReceiptFeeLine", { amount: formatPrice(feePreviewSen, currency) })
+                      : t("set.feesReceiptNone"),
+                })}
+                <span className="text-[var(--jf-muted)]">, {t("set.feesNeverNamed")}</span>
+              </p>
+            </div>
+
+            {/* CHIP's own MDR wording is deliberately NOT touched: this is
+                JomForm's charge, and CHIP's fee is the merchant's separate cost. */}
+            <p className="mt-3 max-w-2xl text-xs text-[var(--jf-muted)]" data-testid="fee-chip-note">
+              {t("set.feesChipNote")}
+            </p>
+
+            {/* Legacy percentage rate (migration 000087): kept for one release so
+                a workspace that never touches this screen keeps charging exactly
+                what it charges today. The move is staged here and committed by
+                the one Save below — a stray click cannot re-price a buyer. */}
+            {feeLegacyRows.length > 0 && (
+              <div
+                className="mt-5 max-w-2xl rounded-lg border border-amber-300 bg-amber-50 p-3"
+                data-testid="fees-legacy"
+              >
+                <p className="text-jf-2xs font-bold uppercase tracking-wide text-amber-700">{t("set.feesLegacyTitle")}</p>
+                {feeLegacyRows.map((row) => {
+                  const name = FEE_METHOD_NAMES[row.method] || row.method;
+                  return (
+                    <div
+                      key={row.method}
+                      data-testid={`fee-legacy-${row.method}`}
+                      className="mt-2 border-t border-amber-200 pt-2 text-xs text-amber-900"
+                    >
+                      <p>
+                        {t("set.feesLegacyBody", {
+                          method: name,
+                          rate: feeLegacyRateText(row.fee_fixed_sen, row.fee_percent_bp, currency),
+                        })}
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-end gap-2">
+                        <label className="text-jf-2xs text-amber-800">
+                          {t("set.feesFixed")}
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            data-testid={`fee-legacy-fixed-${row.method}`}
+                            value={row.fee_fixed_sen}
+                            onChange={(e) => {
+                              const next = [...feeRates];
+                              const i = next.findIndex((x) => x.method === row.method);
+                              if (i >= 0) {
+                                next[i] = { ...next[i], fee_fixed_sen: Math.max(0, Math.trunc(Number(e.target.value) || 0)) };
+                                setFeeRates(next);
+                              }
+                            }}
+                            className="jf-input mt-0.5 block w-24"
+                          />
+                        </label>
+                        <label className="text-jf-2xs text-amber-800">
+                          {t("set.feesPercent")}
+                          <input
+                            type="number"
+                            min={0}
+                            max={9999}
+                            step={1}
+                            data-testid={`fee-legacy-bp-${row.method}`}
+                            value={row.fee_percent_bp}
+                            onChange={(e) => {
+                              const next = [...feeRates];
+                              const i = next.findIndex((x) => x.method === row.method);
+                              if (i >= 0) {
+                                // Clamp to the schema's bound (99.99%): at 100% the
+                                // fee grows as fast as the amount and no total
+                                // satisfies the gross-up, so the store refuses it.
+                                next[i] = {
+                                  ...next[i],
+                                  fee_percent_bp: Math.min(9999, Math.max(0, Math.trunc(Number(e.target.value) || 0))),
+                                };
+                                setFeeRates(next);
+                              }
+                            }}
+                            className="jf-input mt-0.5 block w-24"
+                          />
+                        </label>
+                        <label className="text-jf-2xs text-amber-800">
+                          {t("set.feesLegacyAmount", { cur: currencyLabel(currency) })}
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            data-testid={`fee-legacy-amount-${row.method}`}
+                            value={feeLegacyDrafts[row.method] ?? ""}
+                            placeholder="—"
+                            onChange={(e) => setFeeLegacyDrafts((d) => ({ ...d, [row.method]: e.target.value }))}
+                            className="jf-input mt-0.5 block w-24 text-right"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          data-testid={`fee-legacy-move-${row.method}`}
+                          onClick={() => stageLegacyMove(row)}
+                          className="text-jf-2xs font-bold text-[var(--jf-primary-strong)] underline"
+                        >
+                          {t("set.feesLegacyMove", { method: name })} →
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             <label className="mt-4 flex max-w-2xl items-start gap-2 text-sm text-slate-800">
               <input
@@ -2736,7 +2975,11 @@ export default function Settings() {
                 // Enabling a fee requires the acknowledgement. The server
                 // refuses it too (the API is not a UI); saying so here avoids a
                 // round trip that only returns "tick the acknowledgement".
-                const enabling = feeRates.some((r) => r.fee_enabled && (r.fee_fixed_sen > 0 || r.fee_percent_bp > 0));
+                const enabling = feeRates.some((r) =>
+                  r.legacy_grossup
+                    ? r.fee_enabled && (r.fee_fixed_sen > 0 || r.fee_percent_bp > 0)
+                    : r.fee_enabled && feeSenFromRM(feeAmountDrafts[r.method]) > 0,
+                );
                 if (enabling && !feeAck) {
                   showMsgFail(t("set.feesNeedAck"));
                   return;
@@ -2746,12 +2989,30 @@ export default function Settings() {
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     acknowledged: feeAck,
-                    rates: feeRates.map((x) => ({
-                      method: x.method,
-                      fee_enabled: x.fee_enabled,
-                      fee_fixed_sen: x.fee_fixed_sen,
-                      fee_percent_bp: x.fee_percent_bp,
-                    })),
+                    rates: feeRates.map((x) =>
+                      x.legacy_grossup
+                        ? {
+                            // A legacy row keeps its percentage and its fixed
+                            // part; platform_fee_sen is 0 because the store
+                            // refuses a row that carries both models.
+                            method: x.method,
+                            fee_enabled: x.fee_enabled,
+                            fee_fixed_sen: x.fee_fixed_sen,
+                            fee_percent_bp: x.fee_percent_bp,
+                            platform_fee_sen: 0,
+                          }
+                        : {
+                            // The platform model: one flat amount. The legacy
+                            // columns are written as 0 so a row can never carry
+                            // both a platform amount and a percentage (the store
+                            // refuses ErrFeeModelMixed).
+                            method: x.method,
+                            fee_enabled: x.fee_enabled,
+                            fee_fixed_sen: 0,
+                            fee_percent_bp: 0,
+                            platform_fee_sen: feeSenFromRM(feeAmountDrafts[x.method]),
+                          },
+                    ),
                   }),
                 });
                 (r.ok ? showMsgOk : showMsgFail)(t(r.ok ? "set.feesSaved" : "set.failedSave"));

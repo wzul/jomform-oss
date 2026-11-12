@@ -183,19 +183,40 @@ it is not what a merger needs when it decides to squash.
   `in_progress` while the run that wrote the file has not finished — the field a
   human reads, while `complete: false` is the machine-readable half.
 
-## The harness cache — two gates that do not read the tree
+## The harness cache — one gate on a fixed file set, one on the whole tree
 
-`selftest` (the gate-runner's own suite) and `monitor` (the watchdog's) read a FIXED
-SET of files and never the product tree. Paying them on every card re-learns an
-answer that cannot have changed: measured over 46 full runs, `selftest` alone is
-18% of a run (median 560s) and `monitor` another 2%.
+`monitor` (the watchdog's suite) reads a FIXED SET of files, `deploy/monitoring/*`, and
+never the product tree. Paying it on every card re-learns an answer that cannot have
+changed: measured over 46 full runs, `monitor` is 2% of a run.
 
-`preflight.sh`'s `hcached` keys their pass on a sha256 of exactly the inputs plus the
-bash version, and stores it under `$PREFLIGHT_RESULT_DIR/harness/<gate>.json`. A hit
-prints the observation it stands on, names that file, and records the gate with
-`seconds: 0` and the OBSERVING run's `at`. Change one of those bytes and the key
-stops matching, so the gate re-runs — invalidation is by content, not by a clock.
-`PREFLIGHT_HARNESS_CACHE=0` restores the old behaviour.
+`selftest` (the gate-runner's own suite) used to be cached the same way, on the scripts
+alone. That was wrong: the suite READS THE PRODUCT TREE — its check 15d/15e derive a
+gate's claimed paths by grepping quoted repo-root-relative literals out of
+`api/ web/ scripts/ deploy/`, check 39 reads `web/e2e` and `web/playwright.config.ts`,
+check 12c sweeps every tracked file — and `preflight.sh --gate-deps` already says so,
+reporting `selftest: *` ("reads the whole checkout, cannot narrow"). Measured
+2026-11-11: a tree whose scripts were byte-identical but whose `web/` carried a bare
+`"docs/"` literal — exactly the shape check 15d exists to red — was told `selftest`
+PASS in 2 seconds from a record observed on a different tree. It is now keyed on the
+TREE.
+
+`preflight.sh`'s `hcached` keys a pass on a sha256 of exactly its declared inputs plus
+the bash version, and stores it under `$PREFLIGHT_RESULT_DIR/harness/<gate>.json`. A
+gate that reads the whole checkout declares the `:tree:` input, which puts a sha256 of
+`git ls-files -s` into the key — mode, blob, stage and path, no absolute path, so
+another worktree holding the same bytes still hits. That lookup is not even CONSULTED
+when the tree is not clean (a tracked file differing from the index, or an untracked
+non-ignored file, neither of which the key can describe) or when `REPO_ROOT` is not a
+git checkout: a key must never vouch for bytes the gate did not read. An IGNORED file
+is outside that surface on purpose — hashing `node_modules` would make every worktree
+a miss. Check `49` of the self-test drives both halves of this, including a copy whose
+key drops the tree material and is REQUIRED to serve the stale hit, so a revert is red.
+
+A hit prints the observation it stands on, names that file, and records the gate with
+`seconds: 0` and the OBSERVING run's `at`. Change one of those input bytes — for
+`selftest`, any tracked file — and the key stops matching, so the gate re-runs;
+invalidation is by content, not by a clock. `PREFLIGHT_HARNESS_CACHE=0` restores the old
+behaviour.
 
 Note what `reused` does NOT mean here: in the per-tree record it means "carried over
 between flushes", and a cache hit is still a gate this run invoked, so it stays

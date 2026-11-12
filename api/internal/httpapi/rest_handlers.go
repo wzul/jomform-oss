@@ -2094,13 +2094,17 @@ type saleRow struct {
 	ShippingSourceDetail   string `json:"shipping_source_detail,omitempty"`
 	ShippingFallbackReason string `json:"shipping_fallback_reason,omitempty"`
 	DiscountSen            int64  `json:"discount_sen,omitempty"`
-	// Card t_135c3c72: the processing fee the BUYER bore, and the rate that was
-	// in force when they paid. Frozen on the sale, so a later rate change cannot
-	// rewrite what a past buyer was charged. FeeSen is part of TotalSen.
-	FeeSen       int64  `json:"fee_sen,omitempty"`
-	FeeMethod    string `json:"fee_method,omitempty"`
-	FeeFixedSen  int64  `json:"fee_fixed_sen,omitempty"`
-	FeePercentBp int64  `json:"fee_percent_bp,omitempty"`
+	// Card t_135c3c72: the charge the BUYER bore, and the frozen rate that priced
+	// it. Card t_1a17d22d adds the platform-fee amount and which model priced the
+	// sale: PlatformFeeSen is the flat line JomForm added (0 on a legacy gross-up
+	// sale), and FeeModel says which engine ran ("platform" | "legacy_grossup").
+	// FeeSen is part of TotalSen either way.
+	FeeSen         int64  `json:"fee_sen,omitempty"`
+	FeeMethod      string `json:"fee_method,omitempty"`
+	FeeFixedSen    int64  `json:"fee_fixed_sen,omitempty"`
+	FeePercentBp   int64  `json:"fee_percent_bp,omitempty"`
+	PlatformFeeSen int64  `json:"platform_fee_sen,omitempty"`
+	FeeModel       string `json:"fee_model,omitempty"`
 	// Card t_4ca2da1f: the fee's human label ("FPX 1.00%", "Card 2.00% + RM1.00"),
 	// rendered by the SAME function the buyer's receipt uses
 	// (payments.FeeRateLabel) from the sale's FROZEN rate snapshot. The dashboard
@@ -2217,6 +2221,8 @@ func toSaleRow(s *dbstore.Sale, emailStatus string) saleRow {
 		FeeMethod:      s.FeeMethod,
 		FeeFixedSen:    s.FeeFixedSen,
 		FeePercentBp:   s.FeePercentBp,
+		PlatformFeeSen: s.PlatformFeeSen,
+		FeeModel:       s.FeeModel,
 		Updated:        s.UpdatedAt.UTC().Format(time.RFC3339),
 		TableNumber:    s.TableNumber,
 		RefundedSen:    s.RefundedSen,

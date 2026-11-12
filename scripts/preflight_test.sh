@@ -2417,12 +2417,171 @@ else
   ok "15p BITES the RUNNER: the shipped pw_code_lines keeps \`test: $pwb_live_row\` narrowable on a backtick-MESSAGE fixture, while the value-replaced copy widens it to \`test: *\` — the always-run verdict moves, so the arm's removal is RED"
 fi
 
+# 15q. --test-readers: WHICH PACKAGES read a DATA-ONLY diff (card t_bf9ce4e2).
+#
+#      A diff with no api/ path can still be an input of the `test` gate: api
+#      *_test.go files walk web/src and docs, and api/internal/llm's model-id guard
+#      walks the WHOLE tree. The merge train hands preflight the packages that own
+#      those readers instead of paying `go test ./...` (measured 551-710 s for a
+#      20-screenshot guide). The list must be DERIVED from the same read table the
+#      selection uses — a hand-written list would rot the day a guard is added.
+#
+#      ASSERTED ON A PURPOSE-BUILT REPO, not the live tree: the fixture needs a
+#      KNOWN reader set, and the live tree's changes with every PR. The repo is its
+#      own git root under $SB_STATE, carries a copy of the runner, and has:
+#        api/internal/reader     a *_test.go that resolves ../../../web/src and walks it
+#        api/internal/treewide   a *_test.go that resolves the REPO ROOT and walks it
+#        api/internal/metrics    NO test file at all — it cannot read anything
+#        web/src/page.tsx        the changed DATA file
+#      A package with no test file cannot be a reader, and both real readers must
+#      be there — that is the derivation, not a list of names.
+#      THE BITE: with the repo-root arm of the derivation value-replaced, the
+#      tree-wide reader DISAPPEARS from the answer while the other reader survives.
+#      That is the unsafe direction this check exists to catch — remove a reader and
+#      its guard stops running with nothing to show for it.
+RWQ="$SB_STATE/readers-repo"
+rm -rf "$RWQ"
+mkdir -p "$RWQ/scripts" "$RWQ/api/internal/reader" "$RWQ/api/internal/treewide" \
+         "$RWQ/api/internal/metrics" "$RWQ/web/src"
+cp "$PREFLIGHT" "$RWQ/scripts/preflight.sh"; chmod +x "$RWQ/scripts/preflight.sh"
+printf 'module example.test/api\n\ngo 1.21\n' > "$RWQ/api/go.mod"
+printf '<p>fixture</p>\n' > "$RWQ/web/src/page.tsx"
+printf 'package metrics\n\n// no test file: this package cannot be a reader of anything\n' \
+  > "$RWQ/api/internal/metrics/metrics.go"
+cat > "$RWQ/api/internal/reader/reader_test.go" <<'RWREADER'
+package reader
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
+
+// The shape every api test in this repo uses to reach the web tree.
+func TestReadsWebSrc(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(file), "..", "..", "..", "web", "src")
+	if _, err := os.ReadDir(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+RWREADER
+cat > "$RWQ/api/internal/treewide/walk_test.go" <<'RWTREE'
+package treewide
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
+
+// Resolves the REPO ROOT — the shape the model-id guard in api/internal/llm uses —
+// so every path in the tree is an input of this package's test.
+func repoRoot() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+}
+
+func TestWalksTheWholeTree(t *testing.T) {
+	if _, err := os.Stat(repoRoot()); err != nil {
+		t.Fatal(err)
+	}
+}
+RWTREE
+git_init=("git" "-C" "$RWQ" "-c" "user.email=t@t" "-c" "user.name=t")
+"${git_init[@]}" init -q .
+"${git_init[@]}" add -A
+"${git_init[@]}" commit -q -m init
+RWQ_BASE="$("${git_init[@]}" rev-parse HEAD)"
+# CHANGE THE DATA, not the fixture: an uncommitted edit is exactly what a batch's
+# diff looks like to `--test-readers`.
+printf '<p>changed</p>\n' > "$RWQ/web/src/page.tsx"
+rwq_out="$( (cd "$RWQ" && ./scripts/preflight.sh --test-readers "$RWQ_BASE") 2>"$SB_STATE/rwq.err" )"
+rwq_rc=$?
+rwq_reason="$(sed -n '1p' "$SB_STATE/rwq.err")"
+if [ "$rwq_rc" != 0 ]; then
+  bad "15q --test-readers exited $rwq_rc on a fixture whose readers are known: [$rwq_reason] — a docs-only diff would fall back to 'go test ./...' with no path to the narrowing"
+elif ! grep -qx './internal/reader' <<<"$rwq_out"; then
+  bad "15q the reader that walks web/src is NOT in the derived set — a real reader dropped is a red gate reported green. Got: [$(printf '%s' "$rwq_out" | tr '\n' ' ')]"
+elif ! grep -qx './internal/treewide' <<<"$rwq_out"; then
+  bad "15q the package that resolves the REPO ROOT is NOT in the derived set — it reads every file in the tree, so a docs change can break it. Got: [$(printf '%s' "$rwq_out" | tr '\n' ' ')]"
+elif grep -qx './internal/metrics' <<<"$rwq_out"; then
+  bad "15q a package with NO test file was reported as a reader of the changed data — the derivation is matching something other than the reads: [$(printf '%s' "$rwq_out" | tr '\n' ' ')]"
+elif ! grep -q '^select: 2 of 3 package(s)' <<<"$rwq_reason"; then
+  bad "15q the scope summary does not state the true counts (want 'select: 2 of 3 package(s)'), so the verdict's 'the other N were never run' would be a guess: [$rwq_reason]"
+else
+  ok "15q --test-readers derives the reader PACKAGES of a data-only diff from the reads ($(printf '%s' "$rwq_out" | tr '\n' ' ' | sed 's/ $//')) and names the true 2-of-3 scope; a package with no test file is not one"
+fi
+# The BITE: remove the repo-root arm and the tree-walking reader must vanish.
+# `awk index()` for the same reason 15p uses it: a sed over the clause would need
+# two rounds of escaping and would silently no-op.
+RWQ_NEUTRAL="$SB_STATE/readers-preflight-neutral.sh"
+awk -v from='[ -z "$pw_root" ] && PW_TREERW[$file]=1' '
+  { line=$0; out=""
+    while ((p=index(line, from)) > 0) {
+      out=out substr(line,1,p-1) ": # 15q mutation: repo-root arm removed"; line=substr(line,p+length(from)) }
+    print out line }' "$PREFLIGHT" > "$RWQ_NEUTRAL"
+chmod +x "$RWQ_NEUTRAL"
+rwq_shipped_has_rootarm=0
+grep -qF '[ -z "$pw_root" ] && PW_TREERW[$file]=1' "$PREFLIGHT" && rwq_shipped_has_rootarm=1
+if [ "$rwq_shipped_has_rootarm" != 1 ]; then
+  bad "15q cannot mutate the repo-root arm: the shipped runner no longer carries it, so this check has nothing to bite and the tree-walking reader could be dropped silently"
+else
+  cp "$RWQ_NEUTRAL" "$RWQ/scripts/preflight.sh"; chmod +x "$RWQ/scripts/preflight.sh"
+  rwq_neutral_out="$( (cd "$RWQ" && ./scripts/preflight.sh --test-readers "$RWQ_BASE") 2>/dev/null )"
+  cp "$PREFLIGHT" "$RWQ/scripts/preflight.sh"; chmod +x "$RWQ/scripts/preflight.sh"
+  if grep -qx './internal/treewide' <<<"$rwq_neutral_out"; then
+    bad "15q does NOT bite: with the repo-root arm removed the tree-walking reader is STILL listed, so the arm is not what supplies it and its removal would go unnoticed"
+  elif ! grep -qx './internal/reader' <<<"$rwq_neutral_out"; then
+    bad "15q the mutation removed MORE than the root arm: the web/src reader is gone too, so the two halves of the derivation are not independent and this comparison proves nothing"
+  else
+    ok "15q BITES: with the repo-root arm value-replaced the tree-walking reader disappears from the list and the web/src reader stays — dropping a reader from the derivation is RED, not a silent loss of coverage"
+  fi
+fi
+# An api/ path is NOT this question: a package that never reads the data can still
+# fail to COMPILE against it, and only the import graph knows which. Refuse.
+"${git_init[@]}" checkout -q -- .
+printf 'package metrics\n\n// changed\n' > "$RWQ/api/internal/metrics/metrics.go"
+rwq_api_rc=0
+rwq_api_out="$( (cd "$RWQ" && ./scripts/preflight.sh --test-readers "$RWQ_BASE") 2>&1 )" || rwq_api_rc=$?
+if [ "$rwq_api_rc" = 1 ] && grep -q 'touches api/' <<<"$rwq_api_out"; then
+  ok "15q an api/ path is REFUSED (changed+importers is a different question): the caller keeps 'go test ./...'"
+else
+  bad "15q an api/ change must be refused by --test-readers (rc=1, naming api/), got rc=$rwq_api_rc: [$(sed -n '1p' <<<"$rwq_api_out")]"
+fi
+# A FULL selection must NOT ride a package list: the run says FULL everywhere else, so
+# narrowing `test` inside it would make one gate narrower than the record claims.
+"${git_init[@]}" checkout -q -- .
+printf 'unclaimed\n' > "$RWQ/zz_unclaimed.bin"
+rwq_full_rc=0
+rwq_full_out="$( (cd "$RWQ" && ./scripts/preflight.sh --test-readers "$RWQ_BASE") 2>&1 )" || rwq_full_rc=$?
+if [ "$rwq_full_rc" = 1 ] && grep -q 'FULL inventory' <<<"$rwq_full_out"; then
+  ok "15q a diff whose selection is the FULL inventory (fail-closed) is REFUSED a package list — one gate cannot be narrower than the run"
+else
+  bad "15q a FULL (fail-closed) selection must not be handed a package list (rc=$rwq_full_rc): [$(sed -n '1p' <<<"$rwq_full_out")]"
+fi
+
+# THE LIST RIDES A NARROWED RUN ONLY. This is the same guard the merge train's
+# selftest asserts from the caller's side; it must also hold in the runner itself,
+# because an exported variable in a lane's shell is exactly how a RELEASE would get
+# a narrowed suite while its record says './...'.
+rwq_default_rc=0
+rwq_default_out="$( (cd "$RWQ" && PREFLIGHT_RESULT_DIR="$SB_STATE/rwq-records" \
+  PREFLIGHT_TEST_PACKAGES=./internal/reader ./scripts/preflight.sh) 2>&1 )" || rwq_default_rc=$?
+if [ "$rwq_default_rc" = 1 ] && grep -q 'no narrowing flag' <<<"$rwq_default_out" \
+   && ! grep -q '^gate \[' <<<"$rwq_default_out"; then
+  ok "15q a package list on a DEFAULT run is refused before any gate runs (a narrowed suite cannot be reported as a full inventory)"
+else
+  bad "15q a package list on a no-flag run must be refused before any gate (rc=$rwq_default_rc): [$(sed -n '1,2p' <<<"$rwq_default_out")]"
+fi
+
 # 15g. The default must stay a FULL run. With no selection flag the script must
 #      print no narrowing notice and report no skipped gate, and its banner must
 #      list the whole inventory. Asserted on the LIVE script, far enough into the
 #      run to print its banner and SKIPPED list, and stopped before any gate body
 #      by an unset prerequisite.
-#
 #      THIS CHECK MUST BE ABLE TO GO RED. The first version of it ended every
 #      branch in `ok`, INCLUDING the failure branch, so it printed green while
 #      asserting nothing — a guard with no bite, which is the exact rot this file
@@ -5323,13 +5482,20 @@ fi
 rm -rf "$r48_dir"
 
   # ---------------------------------------------------------------- 49
-  # The harness cache. `selftest` re-runs the gate-runner's own suite and `monitor`
-  # re-runs the watchdog's; neither reads the product tree, so paying them on every
-  # card re-learns an answer that cannot have changed (measured 18% + 2% of a real
-  # 4,819s run, every card). This check pins what makes the cache safe: a hit only
-  # while the scripts under test are byte-identical, a hit that SAYS it is a hit and
-  # leaves the observing run's time where the recorder can read it, a changed byte
-  # forcing a re-run, and a kill switch that restores the old behaviour.
+  # The harness cache. `monitor` re-runs the watchdog's suite, whose inputs are the
+  # files under deploy/monitoring; paying it on every card re-learns an answer that
+  # cannot have changed (measured 2% of a real 4,819s run, every card).
+  # `selftest` ALSO re-runs the gate-runner's own suite — and that suite READS THE
+  # PRODUCT TREE: check 15d/15e derive gates' claimed paths by grepping quoted
+  # repo-root-relative literals out of api/ web/ scripts/ deploy/, check 39 reads
+  # web/e2e specs and web/playwright.config.ts, check 12c sweeps every tracked file
+  # and 15o walks the files of every pw_sources glob. The runner itself classifies it
+  # `selftest: *` ("reads the whole checkout, cannot narrow") — measured 2026-11-11:
+  # a key over the scripts alone told a tree whose web/ carried a bare `"docs/"`
+  # literal (which REDS 15d) that `selftest` was PASS, in 2s, from another tree's
+  # record. So (a)-(f) pin the glob-keyed half, (g) pins the `:tree:` half — a MISS
+  # and a re-run when only web/ changes, with a mutated copy proving that comparison
+  # can go RED — and (h) pins the DECLARATION against the runner's own classifier.
   r49_dir="$(mktemp -d "${TMPDIR:-/tmp}/jf-hcache.XXXXXX")"
   mkdir -p "$r49_dir/repo/scripts" "$r49_dir/results"
   printf '#!/bin/sh\nexit 0\n' > "$r49_dir/repo/scripts/a.sh"
@@ -5389,6 +5555,103 @@ rm -rf "$r48_dir"
     else
       ok "check 49 — harness cache: runs once ($r49_c1) then hits without re-running ($r49_c2), says HIT, leaves the observation time, re-runs when a byte under test changes (run $r49_c3), obeys the kill switch (run $r49_c4), and hits for the same bytes in another absolute path (run $r49_c5)"
     fi
+  fi
+
+  # 49(g). THE TREE INPUT. `selftest` reads the product tree (15d/15e derive claims
+  # from quoted literals under api/ web/ scripts/ deploy/, 39 reads web/e2e and the
+  # playwright config, 12c sweeps every tracked file), so a key over the scripts alone
+  # can vouch for a tree it never observed. THE BITE IS THE SECOND HALF: the same
+  # fixture is driven through a COPY whose key material drops `tree=` — byte-for-byte
+  # the shipped defect — and that copy MUST serve the stale HIT (runs stay put after
+  # only web/ changed). If it stops doing so, this comparison is no longer about
+  # anything and is RED rather than quietly vacuous.
+  r49t="$r49_dir/tree"
+  mkdir -p "$r49t/base/scripts" "$r49t/base/web"
+  printf '#!/bin/sh\nexit 0\n' > "$r49t/base/scripts/a.sh"
+  printf 'export const area = "web/src";\n' > "$r49t/base/web/x.ts"
+  git -C "$r49t/base" init -q 2>/dev/null
+  git -C "$r49t/base" add -A 2>/dev/null
+  sed "/printf 'tree=%s/d" "$r49_dir/hcached.sh" > "$r49_dir/hcached.notree.sh"
+  r49t_ship=$(grep -cF "printf 'tree=%s" "$r49_dir/hcached.sh" 2>/dev/null || true)
+  r49t_mut=$(grep -cF "printf 'tree=%s" "$r49_dir/hcached.notree.sh" 2>/dev/null || true)
+
+  # r49_tree <hcached-file> <variant> -> "<n1>:<n2>:<n3>:<n4>:<n5>|<hit2>|<hit3>|<hit4>|<hit5>"
+  # Each variant gets its OWN copy of the fixture and its own scratch dir, so the two
+  # runs cannot see each other's record (nor leave an untracked file inside the tree,
+  # which would trip the dirty guard and turn both runs into misses).
+  r49_tree() {
+    cp -a "$r49t/base" "$r49t/run-$2" 2>/dev/null
+    mkdir -p "$r49t/scratch-$2" 2>/dev/null
+    REPO_ROOT="$r49t/run-$2" PREFLIGHT_RESULT_DIR="$r49t/scratch-$2/results" bash -c '
+      . "$1"
+      d="$2"; s="$3"; c="$s/count"; : > "$c"
+      _bump() { echo x >> "$c"; }
+      hcached probe :tree: -- _bump >/dev/null 2>&1
+      n1=$(wc -l < "$c")
+      hcached probe :tree: -- _bump > "$s/t2" 2>&1
+      n2=$(wc -l < "$c")
+      # The ONLY change is under web/: the scripts stay byte-identical.
+      printf "export const claim = \"docs/\";\n" >> "$d/web/x.ts"
+      git -C "$d" add -A
+      hcached probe :tree: -- _bump > "$s/t3" 2>&1
+      n3=$(wc -l < "$c")
+      # A working-tree edit that was never staged: the key cannot describe it.
+      printf "\n// a working-tree edit, never staged\n" >> "$d/web/x.ts"
+      hcached probe :tree: -- _bump > "$s/t4" 2>&1
+      n4=$(wc -l < "$c")
+      git -C "$d" checkout -- web/x.ts
+      cp -a "$d" "$4"
+      REPO_ROOT="$4"
+      hcached probe :tree: -- _bump > "$s/t5" 2>&1
+      n5=$(wc -l < "$c")
+      hit2=no; grep -q "harness cache HIT" "$s/t2" && hit2=yes
+      hit3=no; grep -q "harness cache HIT" "$s/t3" && hit3=yes
+      hit4=no; grep -q "harness cache HIT" "$s/t4" && hit4=yes
+      hit5=no; grep -q "harness cache HIT" "$s/t5" && hit5=yes
+      printf "%s:%s:%s:%s:%s|%s|%s|%s|%s\n" "$n1" "$n2" "$n3" "$n4" "$n5" "$hit2" "$hit3" "$hit4" "$hit5"
+    ' _ "$1" "$r49t/run-$2" "$r49t/scratch-$2" "$r49t/other-$2"
+  }
+  if [ "$r49t_ship" != 1 ] || [ "$r49t_mut" != 0 ]; then
+    bad "check 49 (g) cannot run: the stale-key mutation did not land — the \`tree=\` key material appears $r49t_ship time(s) in the shipped hcached and $r49t_mut time(s) in the mutated copy (expected 1 then 0), so the control below would be comparing a copy against itself"
+  else
+    r49t_got=$(r49_tree "$r49_dir/hcached.sh" ship)
+    r49t_bad=$(r49_tree "$r49_dir/hcached.notree.sh" mut)
+    if [ "$r49t_got" != "1:1:2:3:3|yes|no|no|yes" ]; then
+      bad "check 49 (g) — a \`:tree:\`-keyed gate must run once (1), HIT the same tree (1), MISS and RE-RUN when only web/ changes (want runs 2, hit no), refuse the cache on a dirty tree (want runs 3, hit no), and HIT the same bytes under another absolute path (want runs 3, hit yes); got [$r49t_got]"
+    elif [ "$r49t_bad" != "1:1:1:2:2|yes|yes|no|yes" ]; then
+      bad "check 49 (g) does NOT bite: the control copy whose key drops \`tree=\` must serve the STALE HIT when only web/ changed (want 1:1:1:2:2|yes|yes|no|yes), because that is the key shape this check exists to catch; got [$r49t_bad]"
+    else
+      ok "check 49 (g) BITES: a \`:tree:\`-keyed gate MISSES and re-runs when ONLY web/ changes while its scripts are byte-identical (runs 1 -> 2, no HIT), refuses the cache on a dirty tree (run 3), and still HITs the same bytes under another absolute path (run 3); the same fixture through a key without \`tree=\` serves that stale HIT (runs stay 1), so the measured false pass is RED here"
+    fi
+  fi
+
+  # 49(h). THE DECLARATION MUST FOLLOW THE CLASSIFIER — derived, not hand-listed.
+  #      `:tree:` is only safe where the runner itself says the gate reads the whole
+  #      checkout (`<gate>: *` in --gate-deps). A cached gate in that class without
+  #      `:tree:` is the defect; a cache key that can no longer see its `*` gate is
+  #      this pin going vacuous, and both are RED.
+  r49h_calls=0; r49h_star=""; r49h_missing=""
+  while IFS= read -r _line; do
+    _g=$(sed -nE 's/^[[:space:]]*hcached[[:space:]]+([A-Za-z0-9_-]+).*/\1/p' <<<"$_line")
+    [ -n "$_g" ] || continue
+    r49h_calls=$((r49h_calls+1))
+    if grep -qxF "$_g: *" <<<"$deps"; then
+      r49h_star="${r49h_star}${_g} "
+      case "$_line" in
+        *':tree:'*) : ;;
+        *) r49h_missing="${r49h_missing}${_g} " ;;
+      esac
+    fi
+  done < <(grep '^[[:space:]]*hcached[[:space:]]' "$PREFLIGHT")
+  r49h_sel=$(grep -F 'selftest: ' <<<"$deps" | sed -n '1p')
+  if [ "$r49h_calls" -eq 0 ]; then
+    bad "check 49 (h) cannot run: no \`hcached\` call site was found in preflight.sh, so the cache's declaration is untested"
+  elif [ -n "$r49h_missing" ]; then
+    bad "check 49 (h) — a gate the runner classifies \`*\` (reads the whole checkout, so a key over a fixed file set cannot vouch for it) is cached WITHOUT the \`:tree:\` input: [${r49h_missing% }]. Give its hcached call site \`:tree:\`, or the cache can serve a pass for a tree the gate never saw"
+  elif ! grep -qF ' selftest ' <<<" ${r49h_star} "; then
+    bad "check 49 (h) — no cached gate in the \`*\` class is \`selftest\` any more (--gate-deps: [$r49h_sel]), so this pin no longer guards the gate it was written for; re-read whether selftest may narrow now, and update this pin rather than leave it vacuous"
+  else
+    ok "check 49 (h) — every cached gate the runner classifies \`*\` declares \`:tree:\` ([${r49h_star% }] of $r49h_calls hcached call sites; \`monitor\`'s fixed file set stays glob-keyed), checked against --gate-deps rather than a list here"
   fi
   rm -rf "$r49_dir"
 

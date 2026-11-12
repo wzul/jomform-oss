@@ -45,19 +45,26 @@ func toCHIPProducts(items []dbstore.SaleItem) []chip.Product {
 	return out
 }
 
-// chipProductsForSale is toCHIPProducts plus the buyer-borne processing fee as
-// its OWN line item (card t_135c3c72), so the CHIP checkout shows the charge
-// instead of a total that silently exceeds the item sum. The line carries the
-// FROZEN rate wording from the sale's snapshot, never the merchant's current
-// rate — the same rule the receipt follows.
+// chipProductsForSale is toCHIPProducts plus the platform fee as its OWN line
+// item (cards t_135c3c72 and t_1a17d22d), so CHIP's checkout shows the charge as
+// a separate product instead of a total that silently exceeds the item sum:
+//
+//	products: [ {name: "<item>", price: A}, {name: "Platform fee", price: P} ]
+//
+// The buyer's typed amount is untouched: P is added on top, and the line is named
+// "Platform fee" because it is JomForm's charge, not the acquirer's. A legacy
+// gross-up sale (a stored percentage rate, migration 000090) carries the same
+// line with its grossed-up component, so no buyer reads the old
+// "Processing fee — <method> %" wording.
 //
 // The amount CHIP actually charges is purchase.total_override (= sale.TotalSen),
-// which is what makes the fee exactly F even when shipping is also in the total.
+// which is what makes the charged amount exact even when shipping is also in the
+// total.
 func chipProductsForSale(sale *dbstore.Sale) []chip.Product {
 	products := toCHIPProducts(sale.Items)
 	if sale.FeeSen > 0 {
 		products = append(products, chip.Product{
-			Name:     "Processing fee — " + FeeRateLabel(sale.FeeMethod, sale.FeeFixedSen, sale.FeePercentBp),
+			Name:     PlatformFeeLineName,
 			Price:    sale.FeeSen,
 			Quantity: "1",
 		})
@@ -66,11 +73,18 @@ func chipProductsForSale(sale *dbstore.Sale) []chip.Product {
 }
 
 // feeWhitelist is the payment-method whitelist for a sale. A sale that carries a
-// processing fee is restricted to EXACTLY the method the buyer chose, so they
-// cannot switch to a method whose rate differs at the CHIP page after seeing the
-// charge (card t_135c3c72). A sale with no fee keeps the merchant's configured
-// whitelist unchanged.
+// platform fee is restricted to EXACTLY the identifier whose fee was charged, so
+// the buyer cannot switch to a method — or to the other FPX variant — whose fee
+// differs at the CHIP page after seeing the charge.
+//
+// FeeIdentifier is the CHIP identifier (`fpx` vs `fpx_b2b1`); FeeMethod is the
+// buyer-facing group and is used when no identifier was recorded (every legacy
+// gross-up sale, and any sale written before this field existed). With no fee the
+// merchant's configured whitelist is returned unchanged.
 func feeWhitelist(sale *dbstore.Sale, configured []string) []string {
+	if sale.FeeIdentifier != "" {
+		return []string{sale.FeeIdentifier}
+	}
 	if sale.FeeMethod != "" {
 		return []string{sale.FeeMethod}
 	}
@@ -78,8 +92,9 @@ func feeWhitelist(sale *dbstore.Sale, configured []string) []string {
 }
 
 // totalOverride is the amount CHIP must charge for a sale: the sale's own total,
-// which includes shipping and the grossed-up processing fee — neither of which
-// `products` can express exactly.
+// which includes shipping and the platform fee — neither of which `products` can
+// express exactly (shipping has no product line, and a legacy gross-up component
+// is not a flat product either).
 //
 // A non-positive total returns nil rather than 0: CHIP treats
 // `total_override: 0` as the PREAUTHORIZATION scenario (hold funds, charge
@@ -169,8 +184,8 @@ func (s *Service) CreateChipPurchaseForSale(ctx context.Context, sale *dbstore.S
 			SuccessCallback: fmt.Sprintf("%s/v1/payments/chip/callback", s.BaseURL),
 			CreatorAgent:    "JomForm",
 			// Charged amount = the sale total (card t_135c3c72). CHIP computes
-			// the total from `products`, which cannot express shipping or a
-			// grossed-up fee exactly, so the server's own total is the amount.
+			// the total from `products`, which cannot express shipping exactly,
+			// so the server's own total is the amount.
 			TotalOverride: totalOverride(sale),
 		},
 	}

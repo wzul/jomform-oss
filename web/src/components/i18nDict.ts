@@ -254,7 +254,7 @@ export const DICT = {
   // two things; the five strings are pinned against that map in
   // src/lib/dashboardFee.test.ts.
   "dash.collected": { en: "Buyers paid", ms: "Pembeli bayar", zh: "买家支付", ta: "வாங்குபவர் செலுத்தியது", ar: "دفع المشترون" },
-  "dash.fee": { en: "Processing fee", ms: "Caj pemprosesan", zh: "手续费", ta: "செயலாக்கக் கட்டணம்", ar: "رسوم المعالجة" },
+  "dash.fee": { en: "Platform fee", ms: "Caj platform", zh: "平台费", ta: "தளக் கட்டணம்", ar: "رسوم المنصة" },
   "dash.revenueDocs": { en: "What this revenue figure counts", ms: "Apakah yang dikira oleh hasil ini", zh: "此收入数字包含什么", ta: "இந்த வருவாய் எதைக் கணக்கிடுகிறது", ar: "ما الذي تحسبه إيراداتك" },
   "dash.noProdSales": { en: "No product sales yet.", ms: "Belum ada jualan produk.", zh: "暂无商品销售。", ta: "இன்னும் பொருள் விற்பனை இல்லை.", ar: "لا مبيعات منتجات بعد." },
   "dash.pageOf": { en: "page {page} of {total}", ms: "halaman {page} daripada {total}", zh: "第 {page} 页，共 {total} 页", ta: "பக்கம் {page} / {total}", ar: "صفحة {page} من {total}" },
@@ -505,7 +505,7 @@ export const DICT = {
   "prod.maxAmount": { en: "Maximum amount ({cur}, optional)", ms: "Jumlah maksimum ({cur}, pilihan)", zh: "最高金额（{cur}，可选）", ta: "அதிகபட்ச தொகை ({cur}, விருப்பம்)", ar: "الحد الأقصى للمبلغ ({cur}، اختياري)" },
   "prod.suggestedAmount": { en: "Suggested amount ({cur}, optional)", ms: "Jumlah cadangan ({cur}, pilihan)", zh: "建议金额（{cur}，可选）", ta: "பரிந்துரைக்கப்பட்ட தொகை ({cur}, விருப்பம்)", ar: "المبلغ المقترح ({cur}، اختياري)" },
   "prod.amountHint": { en: "The buyer types the amount on the form. The server checks it against these limits before charging. Leave the maximum empty for no upper limit.", ms: "Pembeli menaip jumlah pada borang. Server menyemaknya terhadap had ini sebelum mengecaj — biarkan maksimum kosong untuk tiada had atas.", zh: "买家在表单上输入金额。服务器在收费前会按这些限制校验——最高金额留空表示不设上限。", ta: "வாங்குபவர் படிவத்தில் தொகையைத் தட்டச்சு செய்கிறார். கட்டணம் வசூலிக்கும் முன் சேவையகம் இந்த வரம்புகளுக்கு எதிராகச் சரிபார்க்கும் — உச்ச வரம்பு வேண்டாம் என்றால் அதிகபட்சத்தை காலியாக விடவும்.", ar: "يكتب المشتري المبلغ في النموذج، ويتحقق الخادم منه وفق هذه الحدود قبل التحصيل — اترك الحد الأقصى فارغًا لعدم وجود سقف." },
-  "prod.amountFloor": { en: "Minimum {cur}1.00. Below that the processing fee costs more than the gift.", ms: "Minimum {cur}1.00 — di bawah itu yuran pemprosesan melebihi nilai derma.", zh: "最低 {cur}1.00——低于此数额时手续费会超过捐款本身。", ta: "குறைந்தபட்சம் {cur}1.00 — அதற்குக் கீழே கட்டணம் நன்கொடையை விட அதிகமாகும்.", ar: "الحد الأدنى {cur}1.00 — أقل من ذلك تصبح رسوم المعالجة أكبر من التبرع." },
+  "prod.amountFloor": { en: "Minimum {cur}1.00. Below that, the payment fee costs more than the gift.", ms: "Minimum {cur}1.00 — di bawah itu caj bayaran melebihi nilai derma.", zh: "最低 {cur}1.00——低于此数额时付款费用会超过捐款本身。", ta: "குறைந்தபட்சம் {cur}1.00 — அதற்குக் கீழே கட்டணம் நன்கொடையை விட அதிகமாகும்.", ar: "الحد الأدنى {cur}1.00 — أقل من ذلك تصبح رسوم الدفع أكبر من التبرع." },
   "prod.amountInvalid": { en: "Check the amounts: the minimum must be at least 1.00, and any maximum or suggested amount must not be below the minimum.", ms: "Semak jumlah: minimum mesti sekurang-kurangnya 1.00, dan maksimum atau cadangan tidak boleh di bawah minimum.", zh: "请检查金额：最低金额不得低于 1.00，最高金额或建议金额不得低于最低金额。", ta: "தொகைகளைச் சரிபார்க்கவும்: குறைந்தபட்சம் 1.00 ஆக இருக்க வேண்டும், அதிகபட்சம் அல்லது பரிந்துரை குறைந்தபட்சத்திற்குக் குறைவாக இருக்கக் கூடாது.", ar: "تحقق من المبالغ: يجب ألا يقل الحد الأدنى عن 1.00، ويجب ألا يقل الحد الأقصى أو المبلغ المقترح عن الحد الأدنى." },
   "prod.simpleStock": { en: "Stock (blank = ∞)", ms: "Stok (kosong = ∞)", zh: "库存（留空 = ∞）", ta: "சரக்கு (காலியாக = ∞)", ar: "المخزون (فارغ = ∞)" },
   "prod.simpleImages": { en: "Product images", ms: "Gambar produk", zh: "商品图片", ta: "தயாரிப்பு படங்கள்", ar: "صور المنتج" },
@@ -829,34 +829,120 @@ export const DICT = {
   // payment method). The acknowledgement sentence is deliberately blunt: it is
   // what the merchant agrees to before a fee can reach a buyer.
   "set.tab.fees": { en: "Payment fees", ms: "Caj bayaran", zh: "付款手续费", ta: "கட்டணக் கட்டணங்கள்", ar: "رسوم الدفع" },
-  "set.feesTitle": { en: "Processing fee, paid by the buyer", ms: "Caj pemprosesan — ditanggung pembayar", zh: "手续费 — 由买家承担", ta: "செயலாக்கக் கட்டணம் — வாங்குபவர் செலுத்துவார்", ar: "رسوم المعالجة — يدفعها المشتري" },
+  "set.feesTitle": { en: "Platform fee, paid by the buyer", ms: "Caj platform, ditanggung pembayar", zh: "平台费 — 由买家承担", ta: "தளக் கட்டணம் — வாங்குபவர் செலுத்துவார்", ar: "رسوم المنصة — يدفعها المشتري" },
+  "set.feesApplies": { en: "Applies to new sales", ms: "Terpakai pada jualan baharu", zh: "适用于新销售", ta: "புதிய விற்பனைகளுக்குப் பொருந்தும்", ar: "يسري على المبيعات الجديدة" },
   "set.feesHelp": {
-    en: "Set your own acquirer rate per payment method. The fee is added on top of the price and the total is grossed up, so you receive the full asking amount (at most 1 sen lost to rounding). The buyer sees the fee, the method and the final total before paying.",
-    ms: "Tetapkan kadar acquirer anda sendiri bagi setiap kaedah bayaran. Caj ditambah di atas harga dan jumlah dinaikkan (gross-up), jadi anda menerima jumlah penuh yang diminta (paling banyak 1 sen hilang kerana pembundaran). Pembayar melihat caj, kaedah dan jumlah akhir sebelum membayar.",
-    zh: "为每种付款方式设置您自己的收单费率。手续费会加在价格之上并做总额上调（gross-up），您仍能收到全额（最多损失 1 分钱的四舍五入）。买家在付款前会看到手续费、付款方式和最终总额。",
-    ta: "ஒவ்வொரு கட்டண முறைக்கும் உங்கள் சொந்த வங்கிக் கட்டண விகிதத்தை அமைக்கவும். கட்டணம் விலையின் மேல் சேர்க்கப்பட்டு மொத்தம் மேலேற்றப்படும், எனவே நீங்கள் கேட்ட முழுத் தொகையைப் பெறுவீர்கள் (வட்டமிடுதலில் அதிகபட்சம் 1 சதம் இழப்பு). வாங்குபவர் செலுத்தும் முன் கட்டணம், முறை மற்றும் இறுதித் தொகையைப் பார்ப்பார்.",
-    ar: "حدّد نسبة رسوم البنك الخاصة بك لكل طريقة دفع. تُضاف الرسوم فوق السعر ويُرفع الإجمالي (gross-up) لتحصل على المبلغ الكامل المطلوب (أقصى خسارة سنت واحد بسبب التقريب). يرى المشتري الرسوم وطريقة الدفع والإجمالي النهائي قبل الدفع.",
+    en: "What JomForm adds to the buyer's total. It appears as its own line at checkout and on the receipt, so the item price never changes.",
+    ms: "Apa yang JomForm tambah pada jumlah pembeli. Ia muncul sebagai baris tersendiri semasa pembayaran dan pada resit — harga item tidak berubah.",
+    zh: "JomForm 加在买家总额上的费用。它在结账页和收据上以独立一行显示——商品价格不会改变。",
+    ta: "JomForm வாங்குபவரின் மொத்தத்தில் சேர்ப்பது. இது பணம் செலுத்தும் பக்கத்திலும் ரசீதிலும் தனி வரியாகத் தோன்றும் — பொருளின் விலை மாறாது.",
+    ar: "ما تضيفه JomForm إلى إجمالي المشتري. يظهر سطراً مستقلاً عند الدفع وعلى الإيصال — ولا يتغير سعر الصنف.",
   },
+  "set.feesB2CDesc": { en: "Personal online banking", ms: "Perbankan dalam talian peribadi", zh: "个人网上银行", ta: "தனிநபர் இணைய வங்கி", ar: "الخدمات المصرفية الشخصية عبر الإنترنت" },
+  "set.feesB2B1Desc": { en: "Corporate online banking", ms: "Perbankan dalam talian korporat", zh: "企业网上银行", ta: "நிறுவன இணைய வங்கி", ar: "الخدمات المصرفية للشركات عبر الإنترنت" },
+  "set.feesCardDesc": { en: "Debit / credit", ms: "Debit / kredit", zh: "借记卡 / 信用卡", ta: "டெபிட் / கிரெடிட்", ar: "بطاقة خصم / ائتمان" },
+  "set.feesQRDesc": { en: "Scan to pay", ms: "Imbas untuk bayar", zh: "扫码支付", ta: "பணம் செலுத்த ஸ்கேன் செய்க", ar: "امسح للدفع" },
+  "set.feesEWalletDesc": { en: "GrabPay, Boost", ms: "GrabPay, Boost", zh: "GrabPay、Boost", ta: "GrabPay, Boost", ar: "GrabPay وBoost" },
+  "set.feesHint": {
+    en: "Leave a row blank for no fee. Charged per purchase in {cur}, stored as sen.",
+    ms: "Biarkan baris kosong jika tiada caj. Dicaj setiap pembelian dalam {cur}, disimpan sebagai sen.",
+    zh: "留空表示不收取费用。每次购买以 {cur} 收取，以分存储。",
+    ta: "கட்டணம் இல்லை என்றால் வரிசையை காலியாக விடவும். ஒவ்வொரு வாங்குதலுக்கும் {cur}-இல் வசூலிக்கப்பட்டு, சென்னில் சேமிக்கப்படும்.",
+    ar: "اترك الصف فارغاً لعدم وجود رسوم. تُحتسب لكل عملية شراء بـ {cur} وتُخزَّن بالسنت.",
+  },
+  "set.feesPreview": {
+    en: "A buyer who pays {amount} with {method} is charged {total}.",
+    ms: "Pembeli yang membayar {amount} dengan {method} dikenakan {total}.",
+    zh: "使用 {method} 支付 {amount} 的买家将被收取 {total}。",
+    ta: "{method} மூலம் {amount} செலுத்தும் வாங்குபவரிடம் {total} வசூலிக்கப்படும்.",
+    ar: "المشتري الذي يدفع {amount} باستخدام {method} يُحتسب عليه {total}.",
+  },
+  "set.feesPreviewLines": {
+    en: "{item} item + {fee} platform fee",
+    ms: "{item} item + {fee} caj platform",
+    zh: "{item} 商品 + {fee} 平台费",
+    ta: "{item} பொருள் + {fee} தளக் கட்டணம்",
+    ar: "سلعة بـ {item} + رسوم منصة {fee}",
+  },
+  "set.feesPreviewNoFee": {
+    en: "{item} item, no platform fee",
+    ms: "{item} item, tiada caj platform",
+    zh: "{item} 商品，无平台费",
+    ta: "{item} பொருள், தளக் கட்டணம் இல்லை",
+    ar: "سلعة بـ {item}، دون رسوم منصة",
+  },
+  "set.feesReceiptLine": {
+    en: "Receipt line: {line}",
+    ms: "Baris resit: {line}",
+    zh: "收据行：{line}",
+    ta: "ரசீது வரி: {line}",
+    ar: "سطر الإيصال: {line}",
+  },
+  "set.feesReceiptFeeLine": {
+    en: "Platform fee {amount}",
+    ms: "Caj platform {amount}",
+    zh: "平台费 {amount}",
+    ta: "தளக் கட்டணம் {amount}",
+    ar: "رسوم المنصة {amount}",
+  },
+  "set.feesReceiptNone": { en: "(no fee line)", ms: "— (tiada baris caj)", zh: "—（无费用行）", ta: "— (கட்டண வரி இல்லை)", ar: "— (لا يوجد سطر رسوم)" },
+  "set.feesNeverNamed": {
+    en: "the payment method is never named on it",
+    ms: "nama kaedah bayaran tidak pernah dipaparkan padanya",
+    zh: "其上绝不显示付款方式名称",
+    ta: "அதில் கட்டண முறையின் பெயர் ஒருபோதும் இடம்பெறாது",
+    ar: "لا يُذكر اسم طريقة الدفع عليه أبداً",
+  },
+  "set.feesChipNote": {
+    en: "CHIP's own fee is charged to you, the merchant, separately. It is never added to the buyer unless you set a platform fee that covers it.",
+    ms: "Caj CHIP sendiri dikenakan kepada anda, pedagang, secara berasingan. Ia tidak pernah ditambah kepada pembeli melainkan anda menetapkan caj platform yang menampungnya.",
+    zh: "CHIP 自身的费用另行向您（商家）收取，绝不会加到买家身上，除非您设置了足以覆盖它的平台费。",
+    ta: "CHIP-இன் சொந்தக் கட்டணம் உங்களிடம் (வணிகர்) தனியாக வசூலிக்கப்படும். அதை ஈடுகட்டும் தளக் கட்டணத்தை நீங்கள் அமைத்தால் தவிர, அது வாங்குபவரிடம் சேர்க்கப்படாது.",
+    ar: "رسوم CHIP الخاصة تُحتسب عليك أنت التاجر بشكل منفصل، ولا تُضاف إلى المشتري أبداً إلا إذا حددت رسوم منصة تغطيها.",
+  },
+  "set.feesLegacyTitle": {
+    en: "Legacy rate, kept for one release",
+    ms: "Kadar lama, dikekalkan untuk satu keluaran",
+    zh: "旧版费率 — 保留一个版本",
+    ta: "பழைய விகிதம் — ஒரு வெளியீட்டிற்கு மட்டும்",
+    ar: "السعر القديم — محتفظ به لإصدار واحد",
+  },
+  "set.feesLegacyBody": {
+    en: "This workspace still uses the old percentage model on {method}: {rate}. A buyer is still charged that amount until you move it.",
+    ms: "Ruang kerja ini masih menggunakan model peratus lama pada {method}: {rate}. Pembeli masih dicaj jumlah itu sehingga anda memindahkannya.",
+    zh: "此工作区在 {method} 上仍使用旧的百分比模式：{rate}。在您迁移之前，买家仍会被收取该金额。",
+    ta: "இந்த பணியிடம் {method}-இல் பழைய சதவீத மாதிரியையே பயன்படுத்துகிறது: {rate}. நீங்கள் மாற்றும் வரை வாங்குபவரிடம் அந்தத் தொகை வசூலிக்கப்படும்.",
+    ar: "لا تزال مساحة العمل هذه تستخدم نموذج النسبة المئوية القديم على {method}: {rate}. يظل المشتري يُحتسب عليه ذلك المبلغ حتى تنقله.",
+  },
+  "set.feesLegacyAmount": { en: "Platform amount ({cur})", ms: "Jumlah platform ({cur})", zh: "平台费金额（{cur}）", ta: "தளத் தொகை ({cur})", ar: "مبلغ المنصة ({cur})" },
+  "set.feesLegacyMove": {
+    en: "Move {method} to a platform fee",
+    ms: "Pindahkan {method} ke caj platform",
+    zh: "将 {method} 迁移为平台费",
+    ta: "{method}-ஐ தளக் கட்டணமாக மாற்று",
+    ar: "انقل {method} إلى رسوم منصة",
+  },
+  "set.feesLegacyNotice": {
+    en: "Some payment methods still use the old percentage rate. They keep charging exactly as before until you move them.",
+    ms: "Sesetengah kaedah bayaran masih menggunakan kadar peratus lama. Ia terus dicaj seperti sebelum ini sehingga anda memindahkannya.",
+    zh: "部分付款方式仍使用旧的百分比费率。在您迁移之前，它们继续按原样收费。",
+    ta: "சில கட்டண முறைகள் இன்னும் பழைய சதவீத விகிதத்தையே பயன்படுத்துகின்றன. நீங்கள் மாற்றும் வரை அவை முன்பு போலவே வசூலிக்கும்.",
+    ar: "بعض طرق الدفع لا تزال تستخدم سعر النسبة المئوية القديم. وتستمر في التحصيل كما كانت تماماً حتى تنقلها.",
+  },
+  "set.feesLegacyNoticeGo": { en: "Review payment fees", ms: "Semak caj bayaran", zh: "查看付款手续费", ta: "கட்டணக் கட்டணங்களைப் பார்", ar: "راجع رسوم الدفع" },
   "set.feesMethod": { en: "Payment method", ms: "Kaedah bayaran", zh: "付款方式", ta: "கட்டண முறை", ar: "طريقة الدفع" },
-  "set.feesFixed": { en: "Fixed (sen)", ms: "Tetap (sen)", zh: "固定 (分)", ta: "நிலையான (சென்)", ar: "ثابت (سنت)" },
-  "set.feesPercent": { en: "Percent (basis points, 100 = 1%)", ms: "Peratus (basis point, 100 = 1%)", zh: "百分比（基点，100 = 1%）", ta: "சதவீதம் (அடிப்படை புள்ளி, 100 = 1%)", ar: "النسبة (نقاط أساس، 100 = 1%)" },
+  "set.feesFixed": { en: "Legacy fixed (sen)", ms: "Tetap lama (sen)", zh: "旧版固定额（分）", ta: "பழைய நிலையானது (சென்)", ar: "المبلغ الثابت القديم (سنت)" },
+  "set.feesPercent": { en: "Legacy percent (basis points, 100 = 1%)", ms: "Peratus lama (basis point, 100 = 1%)", zh: "旧版百分比（基点，100 = 1%）", ta: "பழைய சதவீதம் (அடிப்படை புள்ளி, 100 = 1%)", ar: "النسبة القديمة (نقاط أساس، 100 = 1%)" },
   "set.feesAck": {
-    en: "I understand this processing fee is passed on to the buyer and is subject to acquirer/card-issuer rules.",
-    ms: "Saya faham caj pemprosesan ini dipindahkan kepada pembayar dan ia tertakluk kepada peraturan acquirer/pengeluar kad.",
-    zh: "我明白此手续费将转嫁给买家，并受收单机构/发卡机构规则约束。",
-    ta: "இந்தச் செயலாக்கக் கட்டணம் வாங்குபவருக்கு மாற்றப்படுகிறது என்பதையும், அது வங்கி/அட்டை வழங்குநர் விதிகளுக்கு உட்பட்டது என்பதையும் நான் புரிந்துகொள்கிறேன்.",
-    ar: "أفهم أن رسوم المعالجة هذه تُنقل إلى المشتري وتخضع لقواعد البنك المُحصّل/مُصدر البطاقة.",
+    en: "I understand this platform fee is charged to the buyer on top of the price and is separate from the fee CHIP charges me.",
+    ms: "Saya faham caj platform ini dikenakan kepada pembayar di atas harga dan ia berasingan daripada caj CHIP ke atas saya.",
+    zh: "我明白此平台费在价格之上向买家收取，并与 CHIP 向我收取的费用分开。",
+    ta: "இந்தத் தளக் கட்டணம் விலையின் மேல் வாங்குபவரிடம் வசூலிக்கப்படுகிறது என்பதையும், அது CHIP என்னிடம் வசூலிக்கும் கட்டணத்திலிருந்து தனித்தது என்பதையும் நான் புரிந்துகொள்கிறேன்.",
+    ar: "أفهم أن رسوم المنصة هذه تُحتسب على المشتري فوق السعر، وهي منفصلة عن الرسوم التي يحصّلها CHIP مني.",
   },
   "set.feesNeedAck": { en: "Tick the acknowledgement before enabling a fee.", ms: "Tandakan pengakuan sebelum mengaktifkan caj.", zh: "启用手续费前请勾选确认。", ta: "கட்டணத்தை இயக்கும் முன் ஒப்புதலைத் தெரிவுசெய்யவும்.", ar: "حدّد الإقرار قبل تفعيل الرسوم." },
   "set.feesSaved": { en: "Payment fees saved.", ms: "Caj bayaran disimpan.", zh: "手续费已保存。", ta: "கட்டணக் கட்டணங்கள் சேமிக்கப்பட்டன.", ar: "تم حفظ رسوم الدفع." },
   "set.feesSave": { en: "Save payment fees", ms: "Simpan caj bayaran", zh: "保存手续费", ta: "கட்டணங்களைச் சேமி", ar: "حفظ رسوم الدفع" },
-  "set.feesExample": {
-    en: "Example: RM1,000.00 at 1% → buyer pays RM1,010.10, you receive RM1,000.00.",
-    ms: "Contoh: RM1,000.00 pada 1% → pembayar bayar RM1,010.10, anda terima RM1,000.00.",
-    zh: "示例：RM1,000.00 按 1% → 买家支付 RM1,010.10，您收到 RM1,000.00。",
-    ta: "எடுத்துக்காட்டு: RM1,000.00 இல் 1% → வாங்குபவர் RM1,010.10 செலுத்துவார், நீங்கள் RM1,000.00 பெறுவீர்கள்.",
-    ar: "مثال: RM1,000.00 بنسبة 1% ← يدفع المشتري RM1,010.10 وتستلم أنت RM1,000.00.",
-  },
   "set.tab.webhooks": { en: "Webhooks", ms: "Webhook", zh: "Webhook", ta: "வெப்ஹூக்குகள்", ar: "خطافات الويب" },
   // issue #129: MCP / connected agents get their own settings tab
   "set.tab.mcp": { en: "MCP", ms: "MCP", zh: "MCP", ta: "MCP", ar: "MCP" },
@@ -2367,16 +2453,21 @@ export const DICT = {
   "sales.shipCourierFellBack": { en: "courier quote did not arrive, zone rate charged instead", ms: "sebut harga kurier tidak masuk, kadar zon dikenakan", zh: "快递未返回报价，改按区域费率收费", ta: "கூரியர் மதிப்பீடு வரவில்லை, மண்டலக் கட்டணம் வசூலிக்கப்பட்டது", ar: "لم يصل عرض سعر الشركة، وتم احتساب سعر المنطقة بدلاً منه" },
   "sales.discount": { en: "Discount", ms: "Diskaun", zh: "折扣", ta: "தள்ளுபடி", ar: "الخصم" },
   "sales.total": { en: "Total", ms: "Jumlah", zh: "合计", ta: "மொத்தம்", ar: "الإجمالي" },
-  // Card t_4ca2da1f: the buyer-borne processing fee and what the merchant nets.
+  // Card t_4ca2da1f: the buyer-borne fee and what the merchant nets.
   // `sales.fee` is worded EXACTLY as the buyer's checkout row and the receipt's
   // own line in every locale (api/internal/httpapi/formLang.go FeeLine), so the
   // merchant and the buyer never see one charge called two things; the rate
   // beside it is the API's frozen fee_rate_label. `sales.feeNet` is the drawer's
   // net figure — the same words as the /docs/payment-fees gross-up table header.
   // Pinned together by web/src/lib/salesFee.test.ts.
-  "sales.fee": { en: "Processing fee", ms: "Caj pemprosesan", zh: "手续费", ta: "செயலாக்கக் கட்டணம்", ar: "رسوم المعالجة" },
+  //
+  // Card t_1a17d22d renamed the charge: it is JomForm's own platform fee, not the
+  // acquirer's processing charge, so this key carries the same five words as
+  // `dash.fee` and the Go FeeLine (the merge of #1711 with #1702 reconciled them;
+  // #1702 wrote this key against the pre-rename wording).
+  "sales.fee": { en: "Platform fee", ms: "Caj platform", zh: "平台费", ta: "தளக் கட்டணம்", ar: "رسوم المنصة" },
   "sales.feeNet": { en: "You receive", ms: "Anda terima", zh: "您收到", ta: "நீங்கள் பெறுவது", ar: "تستلم" },
-  "sales.feeDocs": { en: "What the processing fee is and how the total is calculated", ms: "Apa itu caj pemprosesan dan bagaimana jumlah dikira", zh: "什么是手续费以及总额如何计算", ta: "செயலாக்கக் கட்டணம் என்ன, மொத்தம் எப்படிக் கணக்கிடப்படுகிறது", ar: "ما رسوم المعالجة وكيف يُحتسب الإجمالي" },
+  "sales.feeDocs": { en: "What the platform fee is and how the total is calculated", ms: "Apa itu caj platform dan bagaimana jumlah dikira", zh: "什么是平台费以及总额如何计算", ta: "தளக் கட்டணம் என்ன, மொத்தம் எப்படிக் கணக்கிடப்படுகிறது", ar: "ما رسوم المنصة وكيف يُحتسب الإجمالي" },
   "sales.buyerInfo": { en: "Buyer", ms: "Pembeli", zh: "买家信息", ta: "வாங்குபவர்", ar: "المشتري" },
   "sales.qty": { en: "Qty", ms: "Kuantiti", zh: "数量", ta: "அளவு", ar: "الكمية" },
   "sales.actions": { en: "Actions", ms: "Tindakan", zh: "操作", ta: "செயல்கள்", ar: "الإجراءات" },
@@ -3075,7 +3166,7 @@ export const DICT = {
   // in every locale for the same reason: the merchant must never be shown
   // `get_payment_fees`.
   "chat.tool.get_workspace_settings": { en: "Workspace settings", ms: "Tetapan ruang kerja", zh: "工作区设置", ta: "பணியிட அமைப்புகள்", ar: "إعدادات مساحة العمل" },
-  "chat.tool.get_payment_fees": { en: "Processing fee settings", ms: "Tetapan caj pemprosesan", zh: "手续费设置", ta: "செயலாக்கக் கட்டண அமைப்புகள்", ar: "إعدادات رسوم المعالجة" },
+  "chat.tool.get_payment_fees": { en: "Platform fee settings", ms: "Tetapan caj platform", zh: "平台费设置", ta: "தளக் கட்டண அமைப்புகள்", ar: "إعدادات رسوم المنصة" },
   "chat.tool.get_shipping_rates": { en: "Shipping rates", ms: "Kadar penghantaran", zh: "运费费率", ta: "ஷிப்பிங் கட்டணங்கள்", ar: "أسعار الشحن" },
   "chat.tool.get_shipping_couriers": { en: "Courier connections", ms: "Sambungan kurier", zh: "快递连接", ta: "கூரியர் இணைப்புகள்", ar: "اتصالات شركات الشحن" },
   // The four WRITE tools the chat may propose (mcpsrv.chatProposableTools).

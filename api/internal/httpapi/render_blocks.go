@@ -1429,15 +1429,15 @@ var blockTmpl = template.Must(template.New("blocks").
   own enabled methods (server-resolved), never a hardcoded list. */}}
   <div class="paypick" role="radiogroup" aria-labelledby="payPickTitle">
     <div class="paypickhead"><span class="paypicktitle" id="payPickTitle">{{.Ls.PayMethodTitle}}</span><span class="paypickhint">{{.Ls.PayPickOne}}</span></div>
-    {{range .PayChoices}}<label class="payrow"><input type="radio" name="pay_method" class="paym" value="{{.Key}}" data-name="{{.Label}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}><span class="payrowtext"><span class="payrowlabel">{{.Label}}</span>{{if .Desc}}<span class="payrowdesc">{{.Desc}}</span>{{end}}</span></label>{{end}}
+    {{range .PayChoices}}<label class="payrow"><input type="radio" name="pay_method" class="paym" value="{{.Key}}" data-name="{{.Label}}" data-platform="{{.PlatformFeeSen}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}><span class="payrowtext"><span class="payrowlabel">{{.Label}}</span>{{if .Desc}}<span class="payrowdesc">{{.Desc}}</span>{{end}}</span></label>{{end}}
     <p class="paynote">{{.Ls.PayChipNote}}</p>
   </div>
   {{else}}{{if .FeeOptions}}<div class="jf-fees">
   {{if gt (len .FeeOptions) 1}}<div class="lbl">{{.Ls.FeeChoose}}</div>{{end}}
-  {{range .FeeOptions}}<label class="chk"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}" data-name="{{.RateLabel}}"{{if .Selected}} checked{{end}}> {{.RateLabel}}</label>{{end}}
+  {{range .FeeOptions}}<label class="chk"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-platform="{{.PlatformFeeSen}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}" data-name="{{.RateLabel}}"{{if .Selected}} checked{{end}}> {{.RateLabel}}</label>{{end}}
   </div>{{end}}{{end}}
   {{if or .PayChoices .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
-  <div class="total"><span>{{.Ls.FeeLine}} <small id="fee-rate"></small></span><span id="fee-amt">RM0.00</span></div>{{end}}
+  <div class="total"><span>{{.Ls.FeeLine}}</span><span id="fee-amt">RM0.00</span></div>{{end}}
   <div class="total"><span>{{$.Ls.Total}}</span><span id="total">RM0.00</span></div>
   {{.AntiSpam}}
   <button type="submit" form="of" id="ofSubmit"><span class="paybtnl" id="ofSubmitLabel">{{$.Ls.Submit}}</span><span class="paybtns" id="ofSubmitVia" hidden></span></button>
@@ -1548,19 +1548,27 @@ var blockTmpl = template.Must(template.New("blocks").
     });
     opts.forEach(function(s){if(s.value)hasSelection=true;});
     ships.forEach(function(s){if(s.value)hasSelection=true;});
-    // Card t_135c3c72: the buyer bears the CHIP processing fee for the method
-    // they picked. The page MUST show the grossed-up total BEFORE the buyer
-    // commits (a price shown is the price paid), and it must agree with the
-    // server to the sen — so this mirrors payments.GrossUp exactly:
+    // Card t_1a17d22d: the buyer's charge is a PLATFORM FEE — a flat amount added
+    // on top of the price, shown as its own line. The price the buyer typed does
+    // not move.
+    //
+    // Card t_135c3c72 (legacy gross-up, one release — migration 000090): a stored
+    // PERCENTAGE rate still raises the total so the merchant nets the asking
+    // amount. The page MUST show that total before the buyer commits (a price
+    // shown is the price paid), and it must agree with the server to the sen —
+    // so this mirrors payments.GrossUp exactly:
     //   fee(F) = fixed + floor((F*bp + 5000) / 10000)   [round half up]
     //   F = smallest integer with F - fee(F) >= base
     // The naive formula (base + base*rate) is 10 sen short on RM1,000 at 1%.
     var fr=document.querySelector('input.paym:checked')||document.querySelector('input.feee:checked');
     var fx=fr?Number(fr.dataset.fixed||0):0;
     var bp=fr?Number(fr.dataset.bp||0):0;
+    var pf=fr?Number(fr.dataset.platform||0):0;
     function feeOf(v){return fx+Math.floor((v*bp+5000)/10000);}
     var total=base;
-    if((fx>0||bp>0)&&hasSelection){
+    if(pf>0&&hasSelection){
+      total=base+pf;
+    }else if((fx>0||bp>0)&&hasSelection){
       var f=Math.ceil((base+fx)*10000/Math.max(1,10000-bp));
       if(!isFinite(f)||f<base)f=base;
       while(f-feeOf(f)<base)f++;
@@ -1574,13 +1582,11 @@ var blockTmpl = template.Must(template.New("blocks").
     if(fs){fs.textContent='RM'+(base/100).toFixed(2);}
     var fa=document.getElementById('fee-amt');
     if(fa){fa.textContent='RM'+((total-base)/100).toFixed(2);}
-    var frl=document.getElementById('fee-rate');
-    if(frl&&fr){
-      // The pay picker's row carries its own name; the legacy fee radio has
-      // none, so its label is the rate text inside the row.
-      var lbl=fr.dataset.name||((fr.parentNode&&fr.parentNode.textContent)||'').replace(/\s+/g,' ').replace(/^\s+|\s+$/g,'');
-      frl.textContent='— '+lbl;
-    }
+    // Card t_69d2dd19 (Wan's rule): the fee ROW is the amount only. It used to
+    // append the chosen method's label ("— FPX RM1.00"), which is a buyer-facing
+    // fee line naming the payment method. The method is already named by the
+    // picker above and by the Pay button; repeating it here is what the rule
+    // forbids.
     // Card t_453489b9: the Pay button says what it will charge and how — the
     // approved mockup's "Bayar RM 186.00 / melalui FPX". With a picker present
     // the amount replaces the generic submit label (the buyer sees the number

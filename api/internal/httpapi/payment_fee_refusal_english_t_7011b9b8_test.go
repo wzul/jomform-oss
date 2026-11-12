@@ -39,7 +39,7 @@ import (
 // feeAckRefusalEnglish is the sentence the refusal must carry. It is written out
 // here on purpose: this is the pin, so a revert to Malay (or a silent reword
 // nobody meant) shows up as a failing assertion with both strings printed.
-const feeAckRefusalEnglish = "tick the disclosure acknowledgement before enabling the processing fee"
+const feeAckRefusalEnglish = "tick the disclosure acknowledgement before enabling a fee"
 
 func TestFeeAckRefusalBodyIsEnglish(t *testing.T) {
 	ctx := context.Background()

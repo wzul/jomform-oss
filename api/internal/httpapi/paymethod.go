@@ -37,18 +37,20 @@ var errPayMethodUnavailable = buyertext.New(buyertext.CodeOrderPayMethodUnavaila
 
 // payMethodChoiceView is one row of the picker.
 //
-// FixedSen/PercentBP ride on the row as data attributes so the page can price
-// the buyer-borne processing fee for the CHOSEN method without a reload — the
-// same numbers the server will price with (card t_135c3c72). Zero/zero means
-// this method carries no fee.
+// The charge rides on the row as data attributes so the page can price the
+// buyer's total for the CHOSEN method without a reload — the same numbers the
+// server will price with. PlatformFeeSen > 0 is a flat platform fee added on top
+// of the price (card t_1a17d22d); FixedSen/PercentBP are the legacy gross-up rate
+// (migration 000090). All zero means this method carries no charge.
 type payMethodChoiceView struct {
-	Key       string // fpx | fpx_b2b1 | duitnow_qr | card | ewallet — the posted value
-	Label     string // "FPX", "FPX B2B1", "DuitNow QR", "Debit / credit card", "e-Wallet"
-	Desc      string // the small second line ("Scan with any bank app")
-	FixedSen  int64
-	PercentBP int64
-	RateLabel string // "Card 2.00%" — the fee this row will add, "" when none
-	Selected  bool
+	Key            string // fpx | fpx_b2b1 | duitnow_qr | card | ewallet — the posted value
+	Label          string // "FPX", "FPX B2B1", "DuitNow QR", "Debit / credit card", "e-Wallet"
+	Desc           string // the small second line ("Scan with any bank app")
+	PlatformFeeSen int64
+	FixedSen       int64
+	PercentBP      int64
+	RateLabel      string // "Platform fee RM1.00" / legacy "Card 2.00%" — this row's charge, "" when none
+	Selected       bool
 }
 
 // payMethodChoices resolves the picker for a checkout.
@@ -90,6 +92,11 @@ func (h *PublicHandlers) payMethodChoices(ctx context.Context, accountID, formID
 	fees := h.feeOptions(ctx, accountID, formID)
 	out := make([]payMethodChoiceView, 0, len(opts))
 	for i, o := range opts {
+		// Card t_1d0198e3: every PayOption is ONE CHIP identifier, and `fpx` and
+		// `fpx_b2b1` are already two of them, so the buyer answers B2C-or-B2B1
+		// here rather than at CHIP's page. The row's charge is the charge stored
+		// for THAT identifier (card t_1a17d22d): an `fpx_b2b1` row carries the
+		// B2B1 platform amount, never the B2C one.
 		v := payMethodChoiceView{
 			Key:      o.Method,
 			Label:    payMethodLabel(ls, o.Method),
@@ -98,7 +105,7 @@ func (h *PublicHandlers) payMethodChoices(ctx context.Context, accountID, formID
 		}
 		for _, f := range fees {
 			if f.Method == o.Method {
-				v.FixedSen, v.PercentBP, v.RateLabel = f.FixedSen, f.PercentBP, f.RateLabel
+				v.PlatformFeeSen, v.FixedSen, v.PercentBP, v.RateLabel = f.PlatformFeeSen, f.FixedSen, f.PercentBP, f.RateLabel
 				break
 			}
 		}

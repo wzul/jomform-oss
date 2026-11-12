@@ -31,6 +31,17 @@
 #                script CANNOT map to packages (`go list` failure, a file in no
 #                package directory). The narrowing is never guessed.
 #
+# A DATA-ONLY batch (docs, screenshots and web/ assets — no api/ path at all) stays
+# diff-mapped, and its `test` gate is narrowed to the api PACKAGES WHOSE TESTS READ
+# the changed data. `test` is a real dependency of a docs change: api *_test.go
+# files walk web/src, docs/ and repo-root files, and the model-id guard in
+# api/internal/llm walks the whole tree. Handing preflight the reader packages
+# instead of `./...` is what stops a 20-screenshot guide from paying the whole
+# module (measured 551 s, and 710 s on a later write of the same tree). The list is
+# DERIVED by preflight (`--test-readers`) from the same read table the gate
+# selection uses, never listed here; when it cannot be derived exactly, no list is
+# passed and `go test ./...` runs as before.
+#
 # Usage:
 #   deploy/merge-train.sh --base origin/main <ref>...            # gate the batch (diff-mapped)
 #   deploy/merge-train.sh --base origin/main --full <ref>...     # force the FULL inventory
@@ -426,21 +437,22 @@ fi
 [ -n "${TRAIN_GATE_CMD:-}" ] && needs_seed=0
 
 # One gate invocation, on the candidate worktree, exactly as a release would run it.
-# SCOPED_N / SCOPED_TOTAL are set here (not by the caller) because a bisect re-runs
-# this per prefix, and each prefix has its own affected package set.
+# SCOPED_N / SCOPED_TOTAL / SCOPED_KIND are set here (not by the caller) because a
+# bisect re-runs this per prefix, and each prefix has its own affected set.
 SCOPED_N=0
 SCOPED_TOTAL=0
+SCOPED_KIND=""
 gate_candidate() {   # -> 0 green, 1 red
   if [ "$needs_seed" = 1 ]; then
     seed_web_modules || { say "cannot seed web/node_modules — refusing to gate"; return 1; }
   fi
-  local args=() pkgs=""
-  SCOPED_N=0; SCOPED_TOTAL=0
+  local args=() pkgs="" readers=""
+  SCOPED_N=0; SCOPED_TOTAL=0; SCOPED_KIND=""
   # A bisect re-runs this function, and the first call may have exported a list. Only the
   # api-scoped branch below may leave one set: a stale export would make a LATER full run
   # refuse (preflight treats a list on a default run as a lie) or narrow a run the train
   # did not narrow.
-  unset PREFLIGHT_TEST_PACKAGES
+  unset PREFLIGHT_TEST_PACKAGES PREFLIGHT_TEST_PACKAGES_WHY
   if [ -n "$ONLY" ]; then
     args=(--only "$ONLY")
   elif [ "$MODE" = api-scoped ]; then
@@ -457,12 +469,33 @@ gate_candidate() {   # -> 0 green, 1 red
       # candidate). Never fall through to a narrowed run with no list: escalate.
       sed 's/^/    | /' "$WORK/select.log" 2>/dev/null | head -2
       say "cannot map this diff to api packages — running the FULL inventory instead"
-      unset PREFLIGHT_TEST_PACKAGES
+      unset PREFLIGHT_TEST_PACKAGES PREFLIGHT_TEST_PACKAGES_WHY
       MODE=full
     fi
   elif [ "$MODE" = scoped ]; then
     # The batch is gated against the base it will land on: preflight maps the changed
     # paths to the gates that can see them, and names the ones it did not run.
+    #
+    # `test` can be one of those gates on a DATA-ONLY diff, because api *_test.go
+    # files read web/src, docs/ and repo-root files (and one guard walks the whole
+    # tree). Ask preflight WHICH PACKAGES own those readers and hand it that set;
+    # without this the batch pays `go test ./...` for the whole module — measured
+    # 551-710 s — while the rest of a docs verify is minutes.
+    #
+    # NO LIST UNLESS PREFLIGHT CAN PROVE ONE. `--test-readers` exits 1 (reason on
+    # stderr) for an api/ path, a non-test reader, a reader at the module root or a
+    # tree `go list` cannot enumerate; the run then keeps ./... exactly as before.
+    if readers=$( cd "$CAND" && ./scripts/preflight.sh --test-readers "$BASE_SHA" 2>"$WORK/select.log" ); then
+      export PREFLIGHT_TEST_PACKAGES="$readers"
+      export PREFLIGHT_TEST_PACKAGES_WHY=readers
+      SCOPED_N=$(printf '%s\n' "$readers" | grep -c .)
+      SCOPED_TOTAL=$(sed -n 's/^select: [0-9][0-9]* of \([0-9][0-9]*\).*/\1/p' "$WORK/select.log" | head -1)
+      SCOPED_KIND=readers
+      say "test scope: ${SCOPED_N}/${SCOPED_TOTAL} api package(s) — the *_test.go readers of the changed data"
+    else
+      unset PREFLIGHT_TEST_PACKAGES PREFLIGHT_TEST_PACKAGES_WHY
+      sed 's/^/    | /' "$WORK/select.log" 2>/dev/null | head -2
+    fi
     args=(--for-diff "$BASE_SHA")
   fi
   # The same overridable durable default every other site names (preflight.sh emits this
@@ -623,6 +656,10 @@ if gate_candidate; then
     _untouched=$(( ${SCOPED_TOTAL:-0} - ${SCOPED_N:-0} ))
     [ "$_untouched" -ge 0 ] || _untouched=0
     say "GREEN candidate tree $CAND_TREE (api-scoped: changed+importers, ${SCOPED_N}/${SCOPED_TOTAL} packages — NOT full coverage; NEVER ran: go test ./... for the other $_untouched package(s); the RELEASE owes the full inventory)"
+  elif [ "$SCOPED_KIND" = readers ]; then
+    _untouched=$(( ${SCOPED_TOTAL:-0} - ${SCOPED_N:-0} ))
+    [ "$_untouched" -ge 0 ] || _untouched=0
+    say "GREEN candidate tree $CAND_TREE (readers-scoped: the ${SCOPED_N}/${SCOPED_TOTAL} api package(s) whose tests READ the changed data — NOT full coverage; NEVER ran: go test ./... for the other $_untouched package(s); the RELEASE owes the full inventory)"
   else
     say "GREEN candidate tree $CAND_TREE ($MODE — NOT full coverage; the RELEASE owes the full inventory)"
   fi

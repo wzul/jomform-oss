@@ -66,7 +66,7 @@ var (
 	receiptLabelRef    = receiptText{"ms": "Rujukan", "en": "Reference"}
 	receiptLabelDate   = receiptText{"ms": "Tarikh", "en": "Date"}
 	receiptLabelItem   = receiptText{"ms": "Item", "en": "Item"}
-	receiptLabelFee    = receiptText{"ms": "Caj pemprosesan", "en": "Processing fee"}
+	receiptLabelFee    = receiptText{"ms": "Caj platform", "en": "Platform fee"}
 	receiptLabelAmount = receiptText{"ms": "Jumlah", "en": "Amount"}
 	receiptLabelStatus = receiptText{"ms": "Status", "en": "Status"}
 
@@ -132,11 +132,12 @@ func receiptDetailRows(ref SaleRef) [][2]string {
 		{receiptLabelDate.String(), time.Now().Format("02-01-2006 15:04 MYT")},
 		{receiptLabelItem.String(), ref.ItemsSummary},
 	}
-	// Card t_135c3c72: the processing fee is its OWN row, with the rate frozen at
+	// Card t_135c3c72: the charge is its OWN row, with the amount frozen at
 	// purchase time — never folded into an item price and never recomputed from
-	// the merchant's current settings.
-	if line := ref.FeeLine(); line != "" {
-		rows = append(rows, [2]string{receiptLabelFee.String(), line})
+	// the merchant's current settings. Card t_1a17d22d: the row is labelled
+	// "Platform fee", JomForm's own word, so the value is just the amount.
+	if ref.FeeSen > 0 {
+		rows = append(rows, [2]string{receiptLabelFee.String(), "RM " + formatSen(ref.FeeSen)})
 	}
 	rows = append(rows, [2]string{receiptLabelAmount.String(), fmt.Sprintf("RM %.2f", float64(ref.AmountSen)/100)})
 	if ref.TIN != "" {

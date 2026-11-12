@@ -1,14 +1,21 @@
-// Processing-fee checkout surface (card t_135c3c72).
+// Processing-fee and platform-fee checkout surface (cards t_135c3c72 and
+// t_1a17d22d).
 //
-// The merchant sets their own MDR per CHIP payment method in the dashboard. When
-// at least one method is active for a form, the buyer picks their method ON the
-// JomForm page (a small step before paying), the server prices the processing fee
-// with the gross-up in payments.GrossUp, and the CHIP purchase is created with
-// that ONE method whitelisted and the grossed-up total as its amount — so the
-// buyer cannot switch to a cheaper method at the CHIP page after seeing the fee.
+// The merchant sets a charge PER CHIP PAYMENT METHOD in the dashboard. When at
+// least one method is active for a form, the buyer picks their method ON the
+// JomForm page (a small step before paying), the server prices that method's
+// charge, and the CHIP purchase is created with that ONE identifier whitelisted
+// and the charge as its own `purchase.products` line — so the buyer cannot switch
+// to a cheaper method at the CHIP page after seeing the price.
+//
+// TWO MODELS (migration 000090):
+//   - PLATFORM FEE: a flat amount in sen added on top of the buyer's price as its
+//     own line. This is JomForm's charge, never the acquirer's.
+//   - LEGACY GROSS-UP, one release only: a stored PERCENTAGE rate keeps pricing
+//     exactly as it does today (payments.GrossUp).
 //
 // This file holds the ONE resolution both the page and the route use, plus the
-// dashboard endpoints for the rates and the merchant's acknowledgement.
+// dashboard endpoints for the settings and the merchant's acknowledgement.
 package httpapi
 
 import (
@@ -43,19 +50,20 @@ var (
 )
 
 // feeChoiceView is one radio in the buyer's payment-method chooser on the
-// public payment form (render_blocks.go). The rate rides on data attributes so
-// the page's client-side gross-up uses the SAME numbers the server will.
+// public payment form (render_blocks.go). The charge rides on data attributes so
+// the page's client-side total uses the SAME numbers the server will.
 type feeChoiceView struct {
-	Method    string
-	Label     string
-	RateLabel string
-	FixedSen  int64
-	PercentBP int64
-	Selected  bool
+	Method         string
+	Label          string
+	RateLabel      string
+	PlatformFeeSen int64
+	FixedSen       int64
+	PercentBP      int64
+	Selected       bool
 }
 
 // feeChoiceViews is the template-facing chooser for the public renderers. The
-// first active method is preselected so a workspace with one rate costs the
+// first active method is preselected so a workspace with one fee costs the
 // buyer no extra click; with more than one the buyer must pick (and the order
 // route refuses a submission that names none).
 func (h *PublicHandlers) feeChoiceViews(ctx context.Context, f *dbstore.Form) []feeChoiceView {
@@ -67,25 +75,35 @@ func (h *PublicHandlers) feeChoiceViews(ctx context.Context, f *dbstore.Form) []
 	for i, o := range opts {
 		out = append(out, feeChoiceView{
 			Method: o.Method, Label: o.Label, RateLabel: o.RateLabel,
-			FixedSen: o.FixedSen, PercentBP: o.PercentBP, Selected: i == 0,
+			PlatformFeeSen: o.PlatformFeeSen, FixedSen: o.FixedSen, PercentBP: o.PercentBP,
+			Selected: i == 0,
 		})
 	}
 	return out
 }
 
-// feeOption is one method the buyer may choose, with the rate that applies and
+// feeOption is one method the buyer may choose, with the charge that applies and
 // the label shown both in the chooser and on the receipt.
+//
+// Method is the CHIP identifier AND the value the page posts back (`fpx` for FPX
+// B2C, `fpx_b2b1` for FPX B2B1, then `card`, `ewallet`, `duitnow_qr`). Using the
+// identifier as the key is what pins the purchase to the product whose amount
+// the buyer was shown (cards t_1d0198e3 and t_1a17d22d).
 type feeOption struct {
-	Method    string
-	Label     string // "Card"
-	RateLabel string // "Card 2.00%" — the frozen wording
-	FixedSen  int64
-	PercentBP int64
+	Method         string
+	Label          string // "Card"
+	RateLabel      string // "Platform fee RM1.00" or, legacy, "Card 2.00%"
+	PlatformFeeSen int64
+	FixedSen       int64
+	PercentBP      int64
+	// LegacyGrossUp is true when this row is priced by the old percentage
+	// gross-up instead of a flat platform amount (migration 000090).
+	LegacyGrossUp bool
 }
 
 // feeOptions resolves the active fee methods for a checkout. An empty result
-// means the processing fee is not active here: the page must show the plain
-// price and must not restrict the buyer's payment methods.
+// means no charge is active here: the page must show the plain price and must
+// not restrict the buyer's payment methods.
 //
 // Nil store (bare-mode tests) resolves to no fee, which is the pre-feature
 // behaviour.
@@ -104,14 +122,25 @@ func (h *PublicHandlers) feeOptions(ctx context.Context, accountID, formID strin
 	out := make([]feeOption, 0, len(rates))
 	for _, r := range rates {
 		out = append(out, feeOption{
-			Method:    r.Method,
-			Label:     payments.FeeMethodLabel(r.Method),
-			RateLabel: payments.FeeRateLabel(r.Method, r.FixedSen, r.PercentBP),
-			FixedSen:  r.FixedSen,
-			PercentBP: r.PercentBP,
+			Method:         r.Method,
+			Label:          payments.FeeMethodLabel(r.Method),
+			RateLabel:      feeRateLabel(r),
+			PlatformFeeSen: r.PlatformFeeSen,
+			FixedSen:       r.FixedSen,
+			PercentBP:      r.PercentBP,
+			LegacyGrossUp:  r.LegacyGrossUp,
 		})
 	}
 	return out
+}
+
+// feeRateLabel renders the frozen charge text for a resolved rate: the flat
+// amount for a platform fee, the rate for a legacy one.
+func feeRateLabel(r dbstore.EnabledRate) string {
+	if r.LegacyGrossUp {
+		return payments.FeeRateLabel(r.Method, r.FixedSen, r.PercentBP)
+	}
+	return payments.FeeRateLabel(r.Method, r.PlatformFeeSen, 0)
 }
 
 // pickFeeOption applies the buyer's choice to the resolved options. When exactly
@@ -124,7 +153,7 @@ func pickFeeOption(opts []feeOption, chosen string) (feeOption, error) {
 		}
 		return feeOption{}, nil
 	}
-	chosen = strings.TrimSpace(chosen)
+	chosen = strings.ToLower(strings.TrimSpace(chosen))
 	if chosen == "" {
 		if len(opts) == 1 {
 			return opts[0], nil
@@ -139,17 +168,44 @@ func pickFeeOption(opts []feeOption, chosen string) (feeOption, error) {
 	return feeOption{}, errFeeMethodInvalid
 }
 
+// feeOptionForPayload resolves the option the buyer's page posted. The posted
+// value is the row's Key, which is the CHIP identifier, so an exact match is the
+// only match: there is no group to fall back to, and falling back would price a
+// different product than the row the buyer clicked (cards t_1d0198e3 and
+// t_1a17d22d). An unknown method yields the zero option, which the route treats
+// as "no charge" and the pay-method validator refuses on its own.
+func feeOptionForPayload(opts []feeOption, method string) feeOption {
+	m := strings.ToLower(strings.TrimSpace(method))
+	if m == "" {
+		return feeOption{}
+	}
+	for _, o := range opts {
+		if o.Method == m {
+			return o
+		}
+	}
+	return feeOption{}
+}
+
 // ─── Dashboard: rates + acknowledgement ─────────────────────────────────────
 
 // restFeeRate is the JSON shape the settings page reads and writes. The money
-// fields are integer SEN and the percentage is BASIS POINTS (100 = 1%).
+// fields are integer SEN and the legacy percentage is BASIS POINTS (100 = 1%).
+//
+// PlatformFeeSen is the model going forward: a flat amount added to the buyer's
+// price as its own line. FeeFixedSen/FeePercentBp remain for the legacy gross-up
+// (migration 000090) and are still returned so nothing a merchant saved
+// disappears. LegacyGrossUp tells the dashboard this row is still priced by the
+// old percentage engine — it is the flag a notice is rendered from.
 type restFeeRate struct {
-	Method    string `json:"method"`
-	Enabled   bool   `json:"fee_enabled"`
-	FixedSen  int64  `json:"fee_fixed_sen"`
-	PercentBP int64  `json:"fee_percent_bp"`
-	RateLabel string `json:"rate_label"`
-	UpdatedBy string `json:"updated_by,omitempty"`
+	Method         string `json:"method"`
+	Enabled        bool   `json:"fee_enabled"`
+	PlatformFeeSen int64  `json:"platform_fee_sen"`
+	FixedSen       int64  `json:"fee_fixed_sen"`
+	PercentBP      int64  `json:"fee_percent_bp"`
+	RateLabel      string `json:"rate_label"`
+	LegacyGrossUp  bool   `json:"legacy_grossup"`
+	UpdatedBy      string `json:"updated_by,omitempty"`
 }
 
 type restFeeSettings struct {
@@ -192,7 +248,9 @@ func (h *RESTHandlers) getFeeSettings(w http.ResponseWriter, r *http.Request, ac
 	out := restFeeSettings{
 		AcknowledgementText: feeAcknowledgementText,
 		// Every storable method is listed, so the page cannot invent a method or
-		// forget one the DB accepts.
+		// forget one the DB accepts. A method absent from this list would be
+		// DELETED by the next save (Replace is a full set), which is why the two
+		// FPX identifiers are both here.
 		Rates: make([]restFeeRate, 0, len(payments.FeeMethods)),
 	}
 	for _, m := range payments.FeeMethods {
@@ -200,11 +258,21 @@ func (h *RESTHandlers) getFeeSettings(w http.ResponseWriter, r *http.Request, ac
 		rate := restFeeRate{Method: m}
 		if ok {
 			rate.Enabled = row.Enabled
+			rate.PlatformFeeSen = row.PlatformFeeSen
 			rate.FixedSen = row.FixedSen
 			rate.PercentBP = row.PercentBP
+			rate.LegacyGrossUp = row.PercentBP > 0
 			rate.UpdatedBy = row.UpdatedBy
 		}
-		rate.RateLabel = payments.FeeRateLabel(m, rate.FixedSen, rate.PercentBP)
+		if rate.LegacyGrossUp {
+			rate.RateLabel = payments.FeeRateLabel(m, rate.FixedSen, rate.PercentBP)
+		} else {
+			platform := rate.PlatformFeeSen
+			if platform == 0 {
+				platform = rate.FixedSen
+			}
+			rate.RateLabel = payments.FeeRateLabel(m, platform, 0)
+		}
 		out.Rates = append(out.Rates, rate)
 	}
 	if ack, err := h.PaymentFees.Acknowledgement(r.Context(), wsID); err != nil {
@@ -221,6 +289,11 @@ func (h *RESTHandlers) getFeeSettings(w http.ResponseWriter, r *http.Request, ac
 // putFeeSettings replaces the workspace's rate set. Enabling a method REQUIRES
 // the acknowledgement in the same request: the merchant must have ticked the
 // disclosure box, and whoever did is recorded with the time.
+//
+// platform_fee_sen is a POINTER on purpose: the dashboard editor that predates
+// the platform fee does not send it, and an absent field must mean "keep what is
+// stored" — a save from that page must not silently zero a platform amount set
+// through the API or an agent.
 func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, actx *AccountCtx) {
 	if _, ok := h.requireWriteRole(w, r, actx); !ok {
 		return
@@ -231,10 +304,11 @@ func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, ac
 	}
 	var in struct {
 		Rates []struct {
-			Method    string `json:"method"`
-			Enabled   bool   `json:"fee_enabled"`
-			FixedSen  int64  `json:"fee_fixed_sen"`
-			PercentBP int64  `json:"fee_percent_bp"`
+			Method         string `json:"method"`
+			Enabled        bool   `json:"fee_enabled"`
+			PlatformFeeSen *int64 `json:"platform_fee_sen"`
+			FixedSen       int64  `json:"fee_fixed_sen"`
+			PercentBP      int64  `json:"fee_percent_bp"`
 		} `json:"rates"`
 		Acknowledged bool `json:"acknowledged"`
 	}
@@ -246,6 +320,15 @@ func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, ac
 	if err != nil {
 		respondErr(w, r, err)
 		return
+	}
+	stored, err := h.PaymentFees.List(r.Context(), wsID)
+	if err != nil {
+		respondErr(w, r, err)
+		return
+	}
+	storedPlatform := map[string]int64{}
+	for _, row := range stored {
+		storedPlatform[row.Method] = row.PlatformFeeSen
 	}
 	// Who switched it on: the session user's email when there is one, else the
 	// form's account id. A blank "who" would make the acknowledgement
@@ -268,21 +351,26 @@ func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, ac
 	rates := make([]dbstore.PaymentFeeRate, 0, len(in.Rates))
 	for _, row := range in.Rates {
 		method := strings.TrimSpace(row.Method)
+		platform := storedPlatform[method]
+		if row.PlatformFeeSen != nil {
+			platform = *row.PlatformFeeSen
+		}
 		// A method that is already disabled is dropped rather than stored: the
 		// resolution ignores disabled rows anyway, and keeping a stale rate for
 		// a method the merchant turned off is how a "0%" row outlives its
 		// meaning.
-		if !row.Enabled && row.FixedSen == 0 && row.PercentBP == 0 {
+		if !row.Enabled && row.FixedSen == 0 && row.PercentBP == 0 && platform == 0 {
 			continue
 		}
 		rates = append(rates, dbstore.PaymentFeeRate{
-			Method: method, Enabled: row.Enabled, FixedSen: row.FixedSen, PercentBP: row.PercentBP,
+			Method: method, Enabled: row.Enabled, FixedSen: row.FixedSen,
+			PercentBP: row.PercentBP, PlatformFeeSen: platform,
 		})
-		if err := dbstore.ValidateFeeRate(method, row.FixedSen, row.PercentBP); err != nil {
+		if err := dbstore.ValidateFeeRate(method, row.FixedSen, row.PercentBP, platform); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if row.Enabled && (row.FixedSen > 0 || row.PercentBP > 0) {
+		if row.Enabled && (row.FixedSen > 0 || row.PercentBP > 0 || platform > 0) {
 			enabling = true
 		}
 	}
@@ -291,7 +379,7 @@ func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, ac
 		// Switching the fee on without the merchant accepting the disclosure
 		// sentence would let a charge reach a buyer that nobody acknowledged
 		// passing on.
-		writeErr(w, http.StatusBadRequest, "tick the disclosure acknowledgement before enabling the processing fee")
+		writeErr(w, http.StatusBadRequest, "tick the disclosure acknowledgement before enabling a fee")
 		return
 	}
 	if enabling {
@@ -301,7 +389,8 @@ func (h *RESTHandlers) putFeeSettings(w http.ResponseWriter, r *http.Request, ac
 		}
 	}
 	if err := h.PaymentFees.Replace(r.Context(), wsID, actor, rates); err != nil {
-		if errors.Is(err, dbstore.ErrFeeRateInvalid) || errors.Is(err, dbstore.ErrFeeUnknownMethod) {
+		if errors.Is(err, dbstore.ErrFeeRateInvalid) || errors.Is(err, dbstore.ErrFeeUnknownMethod) ||
+			errors.Is(err, dbstore.ErrFeeModelMixed) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}

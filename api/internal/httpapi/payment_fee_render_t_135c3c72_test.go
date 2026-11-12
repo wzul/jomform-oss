@@ -77,9 +77,18 @@ func TestFeeChooserRendersOnEveryOrderLayout(t *testing.T) {
 		}
 		// The breakdown: subtotal + its own fee row, then the total. The buyer
 		// must be able to read what the goods cost and what paying cost.
-		for _, want := range []string{`id="fee-sub"`, `id="fee-amt"`, `id="fee-rate"`, `id="total"`} {
+		for _, want := range []string{`id="fee-sub"`, `id="fee-amt"`, `id="total"`} {
 			if !strings.Contains(page, want) {
 				t.Errorf("%s is missing the fee breakdown element %q", name, want)
+			}
+		}
+		// Card t_69d2dd19 (Wan's rule): the fee ROW is the label + the amount.
+		// It used to append the chosen method's rate label ("— FPX RM1.00"), and
+		// the method name must never reach a fee line the buyer reads. The
+		// picker above the Pay button is where the method is named.
+		for _, banned := range []string{`id="fee-rate"`, "'— '+lbl", "'— ' + (fr.parentNode"} {
+			if strings.Contains(page, banned) {
+				t.Errorf("%s still renders the fee-row method suffix (%q) — the fee line must carry the amount only", name, banned)
 			}
 		}
 		// The JS must GROSS UP, not add `base × rate`: the naive formula is 10 sen
@@ -122,5 +131,41 @@ func TestNoFeeActiveLeavesThePageUnchanged(t *testing.T) {
 	}
 	if !strings.Contains(page, `id="total"`) {
 		t.Errorf("page lost its total")
+	}
+}
+
+// TestPlatformFeeRidesOnThePickerRows (card t_1a17d22d): the picker row carries
+// the FLAT platform amount the page's script adds to the price. Without it the
+// page would paint the item price while the server charged item + fee, which is
+// exactly the "amount the buyer never saw" refusal the route exists to prevent.
+func TestPlatformFeeRidesOnThePickerRows(t *testing.T) {
+	views := []payMethodChoiceView{
+		{Key: "fpx", Label: "FPX", PlatformFeeSen: 100, Selected: true},
+		{Key: "fpx_b2b1", Label: "FPX B2B1", PlatformFeeSen: 200},
+	}
+	var buf bytes.Buffer
+	if err := blockTmpl.Execute(&buf, map[string]any{
+		"Slug": "demo", "Title": "Demo", "Blocks": []struct{}{},
+		"Lang": "en", "Ls": formLangs["en"],
+		"HeightJS":   template.HTML(iframeHeightJS),
+		"PayChoices": views,
+	}); err != nil {
+		t.Fatalf("blockTmpl.Execute: %v", err)
+	}
+	page := buf.String()
+	for _, want := range []string{
+		`value="fpx" data-name="FPX" data-platform="100"`,
+		`value="fpx_b2b1" data-name="FPX B2B1" data-platform="200"`,
+		"Platform fee", // the fee row's label, from the language table
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("picker page does not contain %q — the platform amount or its name is not reaching the buyer\npage:\n%s", want, page)
+		}
+	}
+	// The buyer's path never calls it the acquirer's charge.
+	for _, banned := range []string{"Processing fee", "processing fee"} {
+		if strings.Contains(page, banned) {
+			t.Errorf("buyer page still renders %q", banned)
+		}
 	}
 }

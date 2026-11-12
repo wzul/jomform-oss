@@ -150,13 +150,8 @@ docs-passkeys-anchor.spec.ts	web/src/app/docs/**
 # too, so a change there stays unclaimed and keeps selecting the whole family.
 docs-guide-fold.spec.ts	web/src/app/docs/guides/**	web/src/components/GuideArticle.tsx	web/src/lib/guides.gen.ts	docs/guides/**
 
-# The surau guide's phone-legibility spec (card t_e1ea03a2). It reads /panduan/surau, whose
-# figures come from the guide manifest (guidesPrivate.gen.ts) and whose inline crops are produced
-# by web/scripts/guides.mjs from docs/guides/surau-donation/crops.json, so a change to any of those
-# can move the numbers it asserts. web/src/components/Markdown.ts is NOT claimed here — the chat
-# and feedback surfaces render through it too, so a change there stays unclaimed and keeps
-# selecting the whole family (the same rule as docs-guide-fold above).
-panduan-surau-shot-scale.spec.ts	web/src/app/panduan/**	web/src/lib/panduanSurauPage.ts	web/src/lib/guidesPrivate.gen.ts	web/scripts/guides.mjs	docs/guides/surau-donation/**
+# The private surau guide's phone-legibility spec (card t_e1ea03a2) was removed with the guide
+# itself (card t_1e4c1bba): /panduan/surau now 301s to /docs/fees and has no figures to measure.
 
 # ---- NOT MAPPED HERE, ON PURPOSE: menu-checkout-option-group.spec.ts ----------
 # Its runner is the `menufixture` gate (scripts/menu-fixture-e2e.sh, which starts the

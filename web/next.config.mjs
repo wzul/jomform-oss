@@ -205,6 +205,29 @@ const nextConfig = {
   // Removes `x-powered-by: Next.js` from every response. See the block above.
   poweredByHeader: false,
   allowedDevOrigins: DEV_HOSTS,
+  // ── the retired surau guide's URL (card t_1e4c1bba) ────────────────────────
+  //
+  // /panduan/surau shipped as an unlisted, noindex, nine-step guide and was handed to a surau
+  // committee by link (and to Wan's own WhatsApp groups). The guide is gone — the fee model it
+  // described changed — but that link is still in people's hands, so the route must LAND
+  // somewhere rather than 404. It 301s to the docs page that now carries the setup.
+  //
+  // 301, not `permanent: true`: Next maps `permanent: true` to **308** (its docs: "if true will
+  // use the 308 status code"), and the card asked for a permanent 301. `statusCode` and
+  // `permanent` are mutually exclusive in one entry, so this sets `statusCode: 301` alone.
+  //
+  // Guard: src/lib/panduanRetired.test.ts imports this config and fails if the entry, its 301,
+  // or its destination page disappears — a later cleanup must not turn the committee's link
+  // back into a 404.
+  async redirects() {
+    return [
+      {
+        source: "/panduan/surau",
+        destination: "/docs/fees",
+        statusCode: 301,
+      },
+    ];
+  },
   async headers() {
     const staticHeaders =
       process.env.NODE_ENV === "development"

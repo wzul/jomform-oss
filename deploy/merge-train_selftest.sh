@@ -17,6 +17,10 @@
 #      the rest was NEVER run. N/N package count is asserted too.
 #   H2. an api/ change that cannot be mapped to packages (a non-Go file) escalates to
 #      the FULL inventory instead of a narrowed run with a hole in it.
+#   H2b. a DATA-ONLY batch (no api/ path) keeps `test` but hands preflight the PACKAGES
+#      whose tests READ the changed data, names the scope, and says the rest of
+#      `go test ./...` was never run. The set is DERIVED by preflight (--test-readers)
+#      and its membership is recomputed here from the tree, not from a list.
 #   H3. a documentation asset whose NAME carries a payment keyword is NOT an
 #      escalation — PR #1701's `04-chip-kunci.png` turned an 11-gate diff-mapped run
 #      into the 27-gate inventory (13 min) on that alone.
@@ -160,6 +164,18 @@ mkdir -p web/src/app/docs/mcp/oauth
 printf 'export default function Page() { return null }\n' > web/src/app/docs/mcp/oauth/page.tsx
 git add -A && git commit -q -m "selftest: an oauth page under the web app's docs directory"
 
+# A DATA-ONLY change (card t_bf9ce4e2): no api/ path, so `select_test_packages` has
+# nothing to map — yet `test` is a real dependency, because api *_test.go files walk
+# web/src and one of them walks the whole tree. The train must hand preflight the
+# READER packages derived by `preflight.sh --test-readers`, and the verdict must say
+# the rest of `go test ./...` was never run.
+# The path carries no ESCALATE_RE keyword on purpose: it must reach the diff-mapped
+# branch, not the escalated one.
+mk train-docs
+mkdir -p web/src/app/zz_selftest
+printf 'docs-only fixture: no api/ path, no gate keyword\n' > web/src/app/zz_selftest/probe.txt
+git add -A && git commit -q -m "selftest: a data-only change under web/src"
+
 run() { local t rc; t=$(mktemp); "$HERE/merge-train.sh" "$@" >"$t" 2>&1; rc=$?; cat "$t"; return $rc; }
 
 echo "== A. clean batch (one ref)"
@@ -261,6 +277,72 @@ grep -q -- '--for-diff' <<<"$OUT" && bad "unmappable api change still passed --f
 grep -q 'STUB-PKGS: <unset>' <<<"$OUT" && ok "no package list was handed to preflight" \
   || bad "a package list was passed for a change with no package to map"
 grep -q 'full inventory' <<<"$OUT" && ok "verdict says full inventory" || bad "verdict did not say full inventory"
+
+echo "== H2b. a DATA-ONLY batch hands preflight the READER packages, not ./..."
+# The cost fix this guards (card t_bf9ce4e2): with no api/ path in the diff,
+# select_test_packages has nothing to map, so the batch used to pay `go test ./...`
+# for the whole module — measured 551 s, and 710 s on a later write of the same
+# tree — for a docs/guide diff whose only Go dependency is a handful of tests that
+# READ the changed data. The set must be DERIVED (preflight --test-readers); the
+# membership asserted below is recomputed from the tree, not from a list.
+OUT=$(TRAIN_GATE_CMD="bash $STUB" run --base "$BASE" train-docs); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ $RC -eq 0 ] && ok "exit 0 when the readers-scoped run is green" || bad "expected exit 0, got $RC"
+grep -q 'readers-scoped' <<<"$OUT" && ok "names the scope it chose (readers-scoped)" || bad "no readers-scoped line"
+grep -q -- "--for-diff $(git rev-parse "$BASE")" <<<"$OUT" \
+  && ok "the gate is still DIFF-MAPPED (package scoping rides the diff, never replaces it)" \
+  || bad "the readers-scoped run did not pass --for-diff"
+PKGS_SEEN=$(sed -n 's/^ *| STUB-PKGS: //p' <<<"$OUT" | sed -n '1p')
+[ -n "$PKGS_SEEN" ] && [ "$PKGS_SEEN" != "<unset>" ] \
+  && ok "preflight was handed a package list (PREFLIGHT_TEST_PACKAGES)" \
+  || bad "preflight got no package list — it would have run ./..."
+PKGS_ONE=$(tr ' ' '\n' <<<"$PKGS_SEEN")
+# Every test that reads the DIRECTORY web/src is a reader of this fixture's path,
+# recomputed here from the sources (the two-string Join shape, which is how the
+# real readers spell it) — not from the package list the runner printed.
+WEB_SRC_DIRS=$(cd "$CLONE" && grep -rlE --include='*_test.go' '"web",[[:space:]]*"src"' api 2>/dev/null \
+  | xargs -rn1 dirname | sed 's|^api/|./|' | sort -u)
+if [ -z "$WEB_SRC_DIRS" ]; then
+  bad "cannot check the readers set: no api *_test.go names the web/src directory, so the assertion would be vacuous"
+else
+  _missing=""
+  for _d in $WEB_SRC_DIRS; do grep -qx "$_d" <<<"$PKGS_ONE" || _missing="${_missing}${_d} "; done
+  [ -z "$_missing" ] \
+    && ok "the set CONTAINS every package whose test reads web/src: [$(printf '%s ' $WEB_SRC_DIRS)]" \
+    || bad "the set omits reader package(s): [${_missing% }] — their guards would not run on this change"
+fi
+# And the package that walks the WHOLE TREE: it reads the changed file whatever it
+# is, so it must run for a diff that touches no api/ path at all.
+TREE_DIRS=$(cd "$CLONE" && grep -rlE --include='*_test.go' \
+  'filepath\.Join\(filepath\.Dir\([^)]*\),[[:space:]]*"\.\."[[:space:]]*,[[:space:]]*"\.\."[[:space:]]*,[[:space:]]*"\.\."\)' \
+  api 2>/dev/null | xargs -rn1 dirname | sed 's|^api/|./|' | sort -u)
+if [ -z "$TREE_DIRS" ]; then
+  bad "cannot check the tree-walking reader: no api *_test.go resolves the repo root from its own directory, so the assertion would be vacuous"
+else
+  _missing=""
+  for _d in $TREE_DIRS; do grep -qx "$_d" <<<"$PKGS_ONE" || _missing="${_missing}${_d} "; done
+  [ -z "$_missing" ] \
+    && ok "the set CONTAINS every package whose test resolves the REPO ROOT: [$(printf '%s ' $TREE_DIRS)] — a docs change can break those" \
+    || bad "the set omits tree-walking reader(s): [${_missing% }] — they read every file, so this diff is an input of theirs"
+fi
+# A package with NO test file cannot read anything and must not be run.
+NOTEST_PKG=$(cd "$CLONE" && for _d in api/internal/*/; do
+    ls "$_d"*_test.go >/dev/null 2>&1 || { printf './%s' "${_d#api/}"; break; }
+  done)
+NOTEST_PKG="${NOTEST_PKG%/}"
+if [ -z "$NOTEST_PKG" ]; then
+  bad "cannot find a package without test files to prove the set is not just 'everything'"
+elif grep -qx "$NOTEST_PKG" <<<"$PKGS_ONE"; then
+  bad "the set contains $NOTEST_PKG, which has no test file and cannot read the change — the narrowing bought nothing"
+else
+  ok "the set OMITS $NOTEST_PKG (no test file: it reads nothing)"
+fi
+grep -qE 'readers-scoped: the [0-9]+/[0-9]+ api package' <<<"$OUT" \
+  && ok "the verdict states the real scope as N/M packages" \
+  || bad "verdict does not state the package counts"
+grep -q 'NEVER ran: go test ./...' <<<"$OUT" \
+  && ok "the verdict says the untouched packages were never tested" \
+  || bad "verdict hides that ./... was not run"
 
 echo "== H3. a documentation asset named after a payment rail is NOT an escalation"
 # PR #1701 measured this: `docs/guides/surau-donation/04-chip-kunci.png` matched the

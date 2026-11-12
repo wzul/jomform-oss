@@ -120,9 +120,10 @@ test("the dashboard's fee word is the buyer's own word in all five locales", () 
       `sales.fee in ${lang} drifted from the checkout/receipt FeeLine (${go[lang]})`,
     );
   }
-  // The card's own wording: the Malay dashboard says "Caj pemprosesan", and the
-  // net line is the phrase the card measured missing ("anda terima").
-  assert.equal(DICT["sales.fee"].ms, "Caj pemprosesan");
+  // The card's own wording, as renamed by card t_1a17d22d: the Malay dashboard
+  // says "Caj platform" (JomForm's own charge, not the acquirer's), and the net
+  // line is the phrase the card measured missing ("anda terima").
+  assert.equal(DICT["sales.fee"].ms, "Caj platform");
   assert.equal(DICT["sales.feeNet"].ms, "Anda terima");
 });
 

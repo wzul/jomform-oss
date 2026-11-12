@@ -78,9 +78,12 @@ func TestSaleRowCarriesTheFeeAndItsFrozenRateLabel(t *testing.T) {
 }
 
 // The drawer's fee line and the buyer's receipt must name the same charge the
-// same way. The receipt renders "Processing fee — <label>: RM <fee>"; the row's
-// label must be EXACTLY that rendered label, not a second implementation of the
-// basis-points formatting that could drift by a decimal or a space.
+// same way. Since card t_1a17d22d the receipt renders "Platform fee: RM <fee>"
+// — the flat amount the buyer agreed to, with no rate and no acquirer's name —
+// so the part the two surfaces share is the charge's NAME, and it must come
+// from the one constant (payments.PlatformFeeLineName) rather than a second
+// literal. The row keeps the frozen legacy rate beside it for the drawer, which
+// is why the label no longer appears inside the receipt's line.
 func TestSaleRowFeeLabelIsTheReceiptsOwnLabel(t *testing.T) {
 	sl := feeBearingSale()
 	// A combined rate, so a fixed amount and a percentage are both exercised.
@@ -101,8 +104,8 @@ func TestSaleRowFeeLabelIsTheReceiptsOwnLabel(t *testing.T) {
 	if line == "" {
 		t.Fatalf("the receipt rendered no fee line for a fee-bearing sale")
 	}
-	if !strings.Contains(line, row.FeeRateLabel) {
-		t.Fatalf("receipt line %q does not contain the row's label %q — the drawer and the receipt would name one charge two ways", line, row.FeeRateLabel)
+	if !strings.Contains(line, payments.PlatformFeeLineName) {
+		t.Fatalf("receipt line %q does not name the charge %q the drawer names — the drawer and the receipt would call one charge two things", line, payments.PlatformFeeLineName)
 	}
 	if got, want := row.FeeRateLabel, "Card 2.00% + RM1.00"; got != want {
 		t.Errorf("FeeRateLabel = %q, want %q", got, want)

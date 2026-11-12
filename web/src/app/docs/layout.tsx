@@ -75,7 +75,12 @@ const NAV_GROUPS: Group[] = [
       // Shipping by zone: the managed rate source a form's shipping block can use.
       { href: "/docs/shipping", label: "Shipping by zone" },
       // Card t_135c3c72: the buyer-borne processing fee.
-      { href: "/docs/payment-fees", label: "Processing fees paid by the buyer", guides: ["/docs/guides/payment-fees"] },
+      { href: "/docs/payment-fees", label: "Platform fees paid by the buyer", guides: ["/docs/guides/payment-fees"] },
+      // Card t_1e4c1bba: the task page the retired /panduan/surau link 301s to — connect the
+      // CHIP keys, switch methods on, set the platform fee, and read the worked example. The
+      // row is reached from the index's `more` list below (docsIndex.test.ts requires every
+      // sidebar route to be linked from the page), and /docs/payment-fees stays the reference.
+      { href: "/docs/fees", label: "Connect CHIP & set your fee" },
     ],
   },
   {

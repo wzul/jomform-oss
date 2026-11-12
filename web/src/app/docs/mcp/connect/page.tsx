@@ -62,6 +62,67 @@ const SECTIONS: Section[] = [
       "See [OAuth & tokens](/docs/mcp/oauth) for the endpoints, the polling rules and the scope ladder.",
     ],
   },
+  {
+    id: "cli",
+    title: "No browser? Use the CLI",
+    icon: "⌨️",
+    body: [
+      "Some MCP clients only implement the browser flow. On a machine with no display they cannot finish. The **JomForm CLI** runs the device grant in your terminal instead.",
+      {
+        steps: [
+          "Build the CLI once: `cd api && go build -o jomform ./cmd/jomform`.",
+          "Run `./jomform mcp login --headless`. Add `--out` for a client other than Cursor, and `--email` to mail the code to a specific address.",
+          "Open the printed link on any device — a phone is fine — sign in and press **Approve**.",
+          "The command finishes by itself, writes the token and prints the config path.",
+        ],
+      },
+      {
+        code: "$ ./jomform mcp login --headless\nhttps://jomform.com/profile?tab=mcp&user_code=BCDF-GHJK\nBCDF-GHJK\nopen this link and press Approve — you have 10 minutes\n/home/you/.cursor/mcp.json",
+        caption: "The link already carries the code; the code is repeated on its own line.",
+      },
+      "The entry it writes is the one you would add by hand, with the token in the header:",
+      {
+        code: '{\n  "mcpServers": {\n    "jomform": {\n      "url": "https://mcp.jomform.com/mcp",\n      "headers": { "Authorization": "Bearer <token>" }\n    }\n  }\n}',
+        caption: "Only the jomform entry is written.",
+      },
+      {
+        note: "Most clients read their config file only at startup. Restart the client after the command finishes, then call a tool to check the connection.",
+      },
+    ],
+  },
+  {
+    id: "cli-files",
+    title: "Where the CLI writes",
+    icon: "📄",
+    body: [
+      "The default is Cursor's file. Claude Desktop keeps its own, so pass `--out` with the path for your client:",
+      {
+        list: [
+          "`~/.cursor/mcp.json` — the default.",
+          "`~/Library/Application Support/Claude/claude_desktop_config.json` — Claude Desktop on macOS.",
+          "`~/.config/Claude/claude_desktop_config.json` — Claude Desktop on Linux.",
+        ],
+      },
+      "Any other path needs `--force`, so a typo cannot rewrite an unrelated JSON file.",
+      "The entry is **merged**: every other server in the file keeps its bytes, and the file is written 0600.",
+    ],
+  },
+  {
+    id: "cli-status",
+    title: "Check the grant, and sign out",
+    icon: "🔎",
+    body: [
+      {
+        list: [
+          "`./jomform mcp status` prints the expiry, the scopes and the account, and exits non-zero when there is no token or it expired.",
+          "`./jomform mcp logout` revokes the refresh token on the server, removes the mcp.json entry and deletes the local copy.",
+        ],
+      },
+      {
+        warn: "The entry carries the **access token**, issued for about an hour. When `status` says it expired, run the login command again.",
+      },
+    ],
+  },
 ];
 
 export default function McpConnectPage() {

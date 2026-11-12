@@ -87,15 +87,19 @@ Parity checklist (dashboard → MCP):
   `POST /v1/rest/shipping/couriers/{provider}/disconnect`; the PUBLIC OAuth return
   is `GET /v1/shipping/easyparcel/callback` (registered with EasyParcel as
   `https://<host>/api/shipping/easyparcel/callback`, the web app's proxy path).
-- Buyer-borne processing fee (Settings → Payment fees: one MDR rate per CHIP
-  payment method — fixed sen and/or basis points, 100 = 1%) → `get_payment_fees`,
-  `set_payment_fees`. `set_payment_fees` REPLACES the whole set: a method the
-  payload omits is deleted. Enabling a method REQUIRES `acknowledged=true` — the
-  merchant's acceptance of the pass-on disclosure sentence — and the tool records
-  who accepted it and when; without that acknowledgement the checkout charges no
-  fee at all, whatever the stored rates say. The buyer picks the method on the
-  JomForm page, the server grosses the fee up so the merchant is at most one sen
-  short, and the CHIP purchase is restricted to that one method.
+- Buyer-borne PLATFORM FEE (Settings → Payment fees: a flat amount in sen per CHIP
+  payment method, keyed by the CHIP identifier — fpx, fpx_b2b1, card, ewallet,
+  duitnow_qr) → `get_payment_fees`, `set_payment_fees`.
+  `set_payment_fees` REPLACES the whole set: a method the payload omits is
+  deleted. platform_fee_sen sets the flat amount (omitting it keeps the stored
+  one); a row still carrying a legacy percentage rate (legacy_grossup: true on the
+  read) keeps the old gross-up for one release. Enabling a method REQUIRES
+  acknowledged=true — the merchant's acceptance of the disclosure sentence — and
+  the tool records who accepted it and when; without that acknowledgement the
+  checkout charges no fee at all, whatever the stored settings say. The buyer picks
+  the method on the JomForm page, the server adds the flat fee as its own line in
+  purchase.products (the buyer's typed amount is untouched), and the CHIP purchase
+  is restricted to that one identifier.
   REST: `GET /v1/rest/settings/payment-fees`, `PUT /v1/rest/settings/payment-fees`;
   the per-form switch-off is `GET`/`PUT /v1/rest/forms/{id}/fee-override`.
 - Currency & exchange rates (Settings → Currency: the workspace's settlement
@@ -119,11 +123,12 @@ Parity checklist (dashboard → MCP):
   matching refunded / paid pairs), because the rollup spans every workspace and
   one form's history can hold more than one currency. Same contract as the
   dashboard bundle and the CSV export (#185).
-  revenue_sen is what BUYERS PAID and includes the buyer-borne processing fee;
+  revenue_sen is what BUYERS PAID and includes the buyer-borne platform fee;
   fees_sen is that fee and net_revenue_sen is revenue_sen − fees_sen — what the
   merchant keeps (card t_8064a965). get_sales_summary carries the same two
   fields. The sale-level and CSV money columns follow the rule too (total /
-  fee / net). Product revenue is item prices and never included the fee.
+  fee / platform_fee / net). Product revenue is item prices and never included
+  the fee.
 - CHIP per-form override → `set_form_chip_override`, `clear_form_chip_override`
 - e-Invoice settings → `set_einvoice_settings`, `get_einvoice_settings`
 - Webhooks → `create_webhook`, `list_webhooks`, `update_webhook`,

@@ -174,8 +174,8 @@ test("both CSV writers name the currency and drop the _rm headers", () => {
       `the ${name} export still heads a money column with _rm`,
     );
     assert.ok(
-      go.includes('"currency", "total", "fee", "net"'),
-      `the ${name} export has no currency/total/fee/net header block`,
+      go.includes('"currency", "total", "fee", "platform_fee", "net"'),
+      `the ${name} export has no currency/total/fee/platform_fee/net header block`,
     );
     assert.ok(
       /TotalSen-sl\.FeeSen|TotalSen-s\.FeeSen|TotalSen - s\.FeeSen/.test(go),

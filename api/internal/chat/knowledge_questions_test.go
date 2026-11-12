@@ -48,18 +48,18 @@ type productQuestion struct {
 // actually opens a chat for.
 var productQuestions = []productQuestion{
 	{
-		ask:   "macam mana nak tetapkan caj pemprosesan kepada pembeli?",
+		ask:   "macam mana nak tetapkan caj platform kepada pembeli?",
 		facts: []string{"payments.fee-setup", "payments.fee-grossup"},
 		wants: []string{
-			"pass the chip processing fee to the buyer",
+			"flat platform fee",
 			"settings → payment fees",
-			"100 = 1%",
+			"rm1.00 = 100",
 		},
 	},
 	{
-		ask:   "kalau harga RM1,000 dan kadar 1%, pembeli bayar berapa?",
+		ask:   "kalau harga RM100 dan caj platform RM1, pembeli bayar berapa?",
 		facts: []string{"payments.fee-grossup"},
-		wants: []string{"rm1,010.10", "smallest total"},
+		wants: []string{"rm101.00", "never grossed up"},
 	},
 	{
 		ask:   "boleh saya terima derma?",
@@ -147,14 +147,14 @@ var productQuestions = []productQuestion{
 		wants: []string{"profile → security", "6-digit code", "trusted device"},
 	},
 	{
-		ask:   "boleh saya kenakan caj kad kepada pembeli? ada syarat?",
+		ask:   "boleh saya kenakan caj platform kepada pembeli? ada syarat?",
 		facts: []string{"payments.fee-acknowledgement"},
-		wants: []string{"card-network and acquirer rules", "acknowledgement sentence"},
+		wants: []string{"acknowledgement sentence", "separate from what chip charges the merchant"},
 	},
 	{
-		ask:   "kalau saya refund, caj pemprosesan dikira semula?",
+		ask:   "kalau saya refund, caj platform dikira semula?",
 		facts: []string{"payments.fee-refunds"},
-		wants: []string{"never recalculates the processing fee"},
+		wants: []string{"never recalculates the platform fee"},
 	},
 	{
 		ask:   "apa jenis produk yang boleh saya jual?",
@@ -247,20 +247,20 @@ func TestTheQuestionsCoverTheGuideBothWays(t *testing.T) {
 // missing the fact it exists to protect is a test that asserts the table against
 // itself.
 //
-// The removed phrase is the one the QUESTION's own `wants` names (the basis-point
-// rule), not a sentence chosen for being long: removing a sentence whose content
-// another fact happens to repeat would leave the question answerable and the proof
-// would be measuring the wrong thing — which is how the first version of this
-// proof passed with nothing removed.
+// The removed phrase is the one the QUESTION's own `wants` names (the sen unit),
+// not a sentence chosen for being long: removing a sentence whose content another
+// fact happens to repeat would leave the question answerable and the proof would be
+// measuring the wrong thing — which is how the first version of this proof passed
+// with nothing removed.
 func TestQuestionCoverageBites(t *testing.T) {
 	guide := productGuideText()
-	const gone = "(100 = 1%)"
+	const gone = "RM1.00 = 100"
 	if !strings.Contains(guide, gone) {
 		t.Fatalf("the phrase this proof removes (%q) is not in the guide — the proof would test nothing", gone)
 	}
 	mutated := strings.Replace(guide, gone, "", 1)
 	problems := questionProblems(productQuestions, mutated, productFacts)
-	want := "macam mana nak tetapkan caj pemprosesan kepada pembeli?"
+	want := "macam mana nak tetapkan caj platform kepada pembeli?"
 	found := false
 	for _, p := range problems {
 		if strings.HasPrefix(p, want+":") {
@@ -268,7 +268,7 @@ func TestQuestionCoverageBites(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("with the basis-point rule removed from the guide, the question about passing the processing "+
+		t.Fatalf("with the sen-unit rule removed from the guide, the question about setting the platform "+
 			"fee is still reported as answerable — the coverage check is not reading the guide. Problems seen: %v",
 			problems)
 	}

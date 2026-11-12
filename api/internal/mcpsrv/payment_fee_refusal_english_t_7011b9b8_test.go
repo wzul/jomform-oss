@@ -31,7 +31,7 @@ import (
 
 const (
 	feeStoreUnavailableEnglish = "processing fee settings not available"
-	feeAckRequiredEnglish      = "tick the disclosure acknowledgement before enabling the processing fee"
+	feeAckRequiredEnglish      = "tick the disclosure acknowledgement before enabling a fee"
 )
 
 func TestPaymentFeeToolRefusalsAreEnglish(t *testing.T) {

@@ -589,29 +589,27 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		buyerErr(w, lang, http.StatusBadRequest, errTotalTooLarge)
 		return
 	}
-	// Card t_135c3c72: the buyer bears the CHIP processing fee for the method
-	// they chose. Resolved HERE, on the server, from the merchant's own stored
-	// rates — the client's method is a claim to be checked, never an input to
-	// trust. A method that is not active, or a total the page did not display,
-	// is refused (400) instead of silently corrected: a corrected amount is a
-	// charge the buyer never agreed to.
+	// Card t_135c3c72: the buyer bears the merchant's configured charge for the
+	// method they chose. Resolved HERE, on the server, from the merchant's own
+	// stored settings — the client's method is a claim to be checked, never an
+	// input to trust. A method that is not active, or a total the page did not
+	// display, is refused (400) instead of silently corrected: a corrected
+	// amount is a charge the buyer never agreed to.
 	//
-	// The fee applies to CHIP purchases only. A bank-direct order has no
-	// acquirer charge, so it keeps the plain total.
+	// The charge applies to CHIP purchases only. A bank-direct order has no
+	// gateway page to carry a fee line, so it keeps the plain total.
 	opts := h.feeOptions(r.Context(), tgt.AccountID, sale.FormID)
 	var chosenFee feeOption
 	if strings.TrimSpace(in.PayMethod) != "" {
-		// Card t_453489b9: the page's ONE picker sends pay_method, so the fee
+		// Card t_453489b9: the page's ONE picker sends pay_method, so the charge
 		// follows the method the buyer actually picked. A method with no
-		// configured rate simply has no fee — unlike the legacy fee_method
+		// configured charge simply has no fee — unlike the legacy fee_method
 		// contract below, where naming a method that carries no rate means the
 		// page showed a fee that must not be applied (errFeeInactive).
-		for _, o := range opts {
-			if o.Method == strings.ToLower(strings.TrimSpace(in.PayMethod)) {
-				chosenFee = o
-				break
-			}
-		}
+		//
+		// Card t_1a17d22d: the key may be `fpx_b2b1`, the corporate FPX row that
+		// exists when the merchant gave B2C and B2B1 different platform fees.
+		chosenFee = feeOptionForPayload(opts, in.PayMethod)
 	} else {
 		var ferr error
 		chosenFee, ferr = pickFeeOption(opts, in.FeeMethod)
@@ -621,12 +619,38 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 		}
 	}
 	if method == "chip" && chosenFee.Method != "" {
-		total, fee := payments.GrossUp(askTotal, chosenFee.FixedSen, chosenFee.PercentBP)
-		sale.FeeSen = fee
-		sale.FeeMethod = chosenFee.Method
-		sale.FeeFixedSen = chosenFee.FixedSen
-		sale.FeePercentBp = chosenFee.PercentBP
-		sale.TotalSen = total
+		switch {
+		case chosenFee.LegacyGrossUp:
+			// LEGACY (migration 000090): a stored percentage keeps grossing the
+			// total up for one release, exactly as it does today, so a workspace
+			// that never sets a platform amount is not charged differently by a
+			// release it did not ask for.
+			total, fee := payments.GrossUp(askTotal, chosenFee.FixedSen, chosenFee.PercentBP)
+			sale.FeeSen = fee
+			sale.FeeMethod = chosenFee.Method
+			sale.FeeIdentifier = chosenFee.Method
+			sale.FeeFixedSen = chosenFee.FixedSen
+			sale.FeePercentBp = chosenFee.PercentBP
+			sale.FeeModel = dbstore.FeeModelLegacyGrossUp
+			sale.TotalSen = total
+		case chosenFee.PlatformFeeSen > 0:
+			// Card t_1a17d22d: the PLATFORM FEE. The buyer's typed amount is
+			// untouched; a flat amount is added on top and sent to CHIP as its
+			// own `purchase.products` line (payments.chipProductsForSale). The
+			// sale records both the amount and which model priced it.
+			if askTotal > payments.MaxAmountSen-chosenFee.PlatformFeeSen {
+				buyerErr(w, lang, http.StatusBadRequest, errTotalTooLarge)
+				return
+			}
+			sale.PlatformFeeSen = chosenFee.PlatformFeeSen
+			sale.FeeSen = chosenFee.PlatformFeeSen
+			sale.FeeMethod = chosenFee.Method
+			sale.FeeIdentifier = chosenFee.Method
+			sale.FeeModel = dbstore.FeeModelPlatform
+			sale.TotalSen = askTotal + chosenFee.PlatformFeeSen
+		default:
+			sale.TotalSen = askTotal
+		}
 	} else {
 		sale.TotalSen = askTotal
 	}

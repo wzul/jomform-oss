@@ -1,22 +1,31 @@
-// Processing-fee gross-up for CHIP purchases (buyer bears the acquirer's MDR).
+// Buyer-borne charges on a CHIP purchase (cards t_135c3c72 and t_1a17d22d).
 //
-// The merchant sets, PER CHIP PAYMENT METHOD, the rate their acquirer actually
-// charges them (a fixed sen amount and/or basis points). When the fee is passed
-// on to the buyer, CHIP still charges its fee on the amount the buyer ACTUALLY
-// pays (F), not on the asking price (A). So adding `A × p` to A leaves the
-// merchant short by exactly the fee charged on the fee itself — the
-// WooCommerce plugin's naive `fee = total × rate` loses `p² × A` (10 sen on
-// RM 1,000 at 1%).
+// TWO MODELS LIVE HERE, and only one of them is the buyer's path.
 //
-// The correct answer is the smallest integer F with
+//  1. PLATFORM FEE (the model going forward). The merchant sets, PER CHIP
+//     PAYMENT METHOD, a flat amount in sen. JomForm adds that amount as its OWN
+//     line in the CHIP purchase (`purchase.products[]`), so the buyer's typed
+//     amount is untouched:
 //
-//	F − fee(F) ≥ A        where fee(F) = fixed + round(F × bp / 10000)
+//     products: [ {name: "<item>", price: A}, {name: "Platform fee", price: P} ]
 //
-// which for A = RM 1,000 at 1% is RM 1,010.10 (fee RM 10.10, merchant nets
-// exactly RM 1,000.00). GrossUp guarantees `0 ≤ (F − fee(F)) − A ≤ 1` sen for
-// every input: the ±1 is integer rounding, nothing more.
+//     It is JomForm's charge, not the acquirer's: CHIP's own MDR is still the
+//     merchant's cost and this fee does not describe itself as covering it.
 //
-// All amounts are integer SEN (AGENTS.md). The rate is BASIS POINTS: 100 = 1%.
+//  2. LEGACY GROSS-UP (kept for exactly one release, see migration 000090). The
+//     merchant stored a RATE (fixed sen and/or basis points) and the engine
+//     grosses the total up so the merchant nets the asking price —
+//     F - fee(F) >= A, e.g. RM1,000 at 1% -> the buyer pays RM1,010.10. A
+//     workspace carrying a percentage keeps being charged exactly what it
+//     charges today until the merchant saves a platform amount; nothing
+//     silently changes under it.
+//
+// GrossUp below is that legacy path. It stays correct and tested because
+// percentage rows still price with it, and because a workspace is moved to the
+// platform model by an explicit save, never by a release.
+//
+// All amounts are integer SEN (AGENTS.md). A legacy rate is BASIS POINTS:
+// 100 = 1%.
 package payments
 
 import (
@@ -24,16 +33,18 @@ import (
 	"strings"
 )
 
-// FeeMethod* are the CHIP payment methods a per-method rate can be stored
-// against. They are the aggregator keys the merchant sees in the dashboard and
-// the same keys the CHIP purchase whitelist takes (payments.ResolveWhitelist
+// FeeMethod* are the CHIP payment methods a per-method fee can be stored
+// against. They are the keys the merchant's settings are stored under and the
+// identifiers the CHIP purchase whitelist takes (payments.ResolveWhitelist
 // expands `card` to the network identifiers CHIP expects).
 //
 // FeeMethodFPX and FeeMethodFPXB2B1 are TWO keys (card t_1d0198e3): FPX B2C and
-// FPX B2B1 cost the merchant different amounts (RM1 vs RM2 in the common
-// configuration), so a workspace must be able to store a different rate for each.
-// They are also two BUYER choices, which is why the key split had to reach the
-// picker as well as this table.
+// FPX B2B1 are two CHIP identifiers with their own acquirer rate, so a
+// workspace must be able to store a different fee for each (RM1 vs RM2 in the
+// common configuration). They are also two BUYER choices, which is why the key
+// split had to reach the picker as well as this table — and it is what makes
+// the platform amount land on the right identifier, since the platform fee is
+// stored PER CHIP IDENTIFIER (card t_1a17d22d).
 const (
 	FeeMethodFPX      = "fpx"
 	FeeMethodFPXB2B1  = "fpx_b2b1"
@@ -42,14 +53,19 @@ const (
 	FeeMethodDuitNowQ = "duitnow_qr"
 )
 
-// FeeMethods lists every method a rate can be stored for, in the order the
-// dashboard and the buyer-facing chooser display them.
+// FeeMethods lists every method a platform amount (or a legacy rate) can be
+// stored for, in the order the dashboard settings and the buyer-facing chooser
+// display them.
 var FeeMethods = []string{FeeMethodFPX, FeeMethodFPXB2B1, FeeMethodCard, FeeMethodEWallet, FeeMethodDuitNowQ}
 
+// PlatformFeeLineName is the name of the charge when it is sent to CHIP as its
+// own purchase.products line (card t_1a17d22d). It is deliberately JomForm's own
+// word: the buyer must not read it as a gateway or acquirer charge.
+const PlatformFeeLineName = "Platform fee"
+
 // feeMethodLabels are the human labels shown to the BUYER in the checkout
-// breakdown and on the receipt line ("Processing fee — Card 2.00%"). A raw
-// method key must never reach a buyer; an unknown key falls back to the key
-// itself rather than an empty label.
+// breakdown and on the receipt line. A raw method key must never reach a buyer;
+// an unknown key falls back to the key itself rather than an empty label.
 var feeMethodLabels = map[string]string{
 	FeeMethodFPX:      "FPX",
 	FeeMethodFPXB2B1:  "FPX B2B1",
@@ -96,10 +112,13 @@ const MinCustomAmountSen int64 = 100
 // schema CHECK enforces the same rule.
 const MaxFeePercentBP int64 = 9999
 
-// ProcessingFee is what the acquirer charges on amountSen, in integer sen:
-// the fixed charge plus the percentage rounded HALF UP. Rounding half up is the
-// single rule both this and the checkout page's client-side mirror use, because
-// the page's number and the charge must agree to the sen.
+// ProcessingFee is what the LEGACY gross-up charges on amountSen, in integer
+// sen: the fixed charge plus the percentage rounded HALF UP. Rounding half up
+// is the single rule both this and the checkout page's client-side mirror use,
+// because the page's number and the charge must agree to the sen.
+//
+// It prices a stored PERCENTAGE rate only (migration 000090): a platform-fee
+// sale never calls it, because a platform fee does not depend on the amount.
 func ProcessingFee(amountSen, fixedSen, percentBP int64) int64 {
 	if amountSen <= 0 {
 		if fixedSen < 0 {
@@ -122,9 +141,12 @@ func ProcessingFee(amountSen, fixedSen, percentBP int64) int64 {
 // GrossUp returns the smallest integer total F such that
 // F − ProcessingFee(F) ≥ askingSen, together with the fee charged on F.
 //
-// It is exact and O(1): the closed-form estimate is computed, then the result is
-// walked to the true minimum. The walk is bounded by one or two sen in practice
-// (the estimate is the real solution rounded down by the integer division).
+// LEGACY ONLY (migration 000090). Only a workspace that stores a PERCENTAGE rate
+// reaches this; a platform-fee sale adds a flat amount instead and never moves
+// the buyer's price. It is exact and O(1): the closed-form estimate is computed,
+// then the result is walked to the true minimum. The walk is bounded by one or
+// two sen in practice (the estimate is the real solution rounded down by the
+// integer division).
 //
 // Precondition: askingSen ≤ MaxAmountSen and 0 ≤ percentBP < 10000 (both
 // enforced at the write path and by the schema). askingsen may be 0 (a
@@ -172,12 +194,17 @@ func GrossUp(askingSen, fixedSen, percentBP int64) (totalSen, feeSen int64) {
 }
 
 // FeeAcknowledgementText is the disclosure sentence a merchant must accept
-// before a fee may reach a buyer: the price shown is the price paid, so passing
-// the acquirer's charge on has to be an explicit, recorded decision. It is
-// served WITH the settings (REST and MCP) so an agent — or any client with no
+// before a fee may reach a buyer: the price shown is the price paid, so charging
+// the buyer on top of it has to be an explicit, recorded decision. It is served
+// WITH the settings (REST and MCP) so an agent — or any client with no
 // dictionary of its own — gets the disclosure the merchant is taking
-// responsibility for, and it names the card-issuer/acquirer rules that
-// responsibility covers.
+// responsibility for.
+//
+// WHAT IT MUST SAY (card t_1a17d22d): the charge is JomForm's PLATFORM FEE, added
+// on top of the price, and it is SEPARATE from the fee CHIP charges the merchant.
+// The old sentence described the buyer as bearing the ACQUIRER's charge, which is
+// no longer what this is: CHIP's own MDR stays the merchant's cost unless the
+// merchant chooses to fund it out of this fee.
 //
 // IT IS ENGLISH, AND IT IS NOT THE SENTENCE THE MERCHANT READS. The dashboard
 // renders its own dictionary arm for the same disclosure
@@ -193,12 +220,16 @@ func GrossUp(askingSen, fixedSen, percentBP int64) (totalSen, feeSen int64) {
 // stored (migration 000082), never a copy of this text. Rewording the sentence
 // therefore does not rewrite what any merchant already agreed to, and there is
 // no stored prose to migrate.
-const FeeAcknowledgementText = "I understand this processing fee is passed on to the buyer and is subject to acquirer/card-issuer rules."
+const FeeAcknowledgementText = "I understand this platform fee is charged to the buyer on top of the price and is separate from the fee CHIP charges me."
 
-// FeeRateLabel renders the rate the buyer was charged, e.g. "Card 2.00%",
-// "FPX RM1.00", or "Card 2.00% + RM1.00". Used by the receipt line and the
-// checkout disclosure; it reads ONLY the frozen rate snapshot, so a later rate
+// FeeRateLabel renders the stored charge for a method, e.g. "Card 2.00%",
+// "FPX RM1.00", or "Card 2.00% + RM1.00". Used by the checkout chooser row and
+// the settings surface; it reads ONLY the frozen values it is handed, so a later
 // change cannot rewrite what a past buyer was shown.
+//
+// For a platform fee the percentage is 0, so it renders the flat amount
+// ("FPX RM1.00") — the word "Platform fee" is the surrounding line's job
+// (formLang's FeeLine, payments.FeeLine), not this label's.
 func FeeRateLabel(method string, fixedSen, percentBP int64) string {
 	label := FeeMethodLabel(method)
 	var parts []string

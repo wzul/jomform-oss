@@ -257,14 +257,19 @@ const GROUPS: Group[] = [
         body: "Charge a delivery fee by zone — state, district or postcode — with a rate per weight band and a free-shipping threshold, or a courier quotes it at checkout, falling back to these rates.",
       },
       {
-        // Card t_135c3c72: the buyer-borne processing fee. The summary is short;
-        // the walk-through (gross-up table, disclosure, snapshot, refund rule)
-        // lives on the guide, which also names both MCP tools.
-        title: "Processing fees paid by the buyer",
+        // Card t_135c3c72: the buyer-borne fee, now a PLATFORM FEE (card
+        // t_1a17d22d). The summary is short; the walk-through (the products
+        // line, the disclosure, the snapshot, the refund rule) lives on the
+        // guide, which also names both MCP tools.
+        title: "Platform fees paid by the buyer",
         href: "/docs/payment-fees",
-        body: "Let the buyer pay the CHIP processing fee: one rate per payment method, grossed up so you receive the full price.",
+        body: "Charge a flat platform fee per method as its own CHIP purchase line; what the buyer typed never changes.",
       },
     ],
+    // Card t_1e4c1bba: the setup page the retired /panduan/surau link lands on. A `more` link,
+    // not an entry: it is one task page whose whole text is on the page, so there is no cut
+    // entry to guard (DESTINATION_FACTS covers entries whose text moved into a guide).
+    more: [{ href: "/docs/fees", label: "Connect CHIP & set your fee" }],
   },
   {
     id: "storefront",

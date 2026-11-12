@@ -89,6 +89,19 @@ func (s *Sale) OutstandingSen() int64 {
 	return s.TotalSen - s.RefundedSen
 }
 
+// Fee model values recorded on sales.fee_model (card t_1a17d22d).
+const (
+	// FeeModelPlatform is a sale priced with a per-method PLATFORM FEE: the
+	// buyer's typed amount is untouched and the flat fee is its own line in
+	// the CHIP purchase.
+	FeeModelPlatform = "platform"
+	// FeeModelLegacyGrossUp is a sale priced by the old percentage gross-up
+	// (payments.GrossUp). It is kept for exactly one release so a workspace
+	// that stores a percentage rate keeps being charged what it charges today;
+	// see migration 000090 for the full statement of the rule.
+	FeeModelLegacyGrossUp = "legacy_grossup"
+)
+
 // Refund rejections (issue #518). The over-refund guard is the important one:
 // a refund may never push refunded_sen past total_sen. These are exported so
 // the REST and MCP callers can render the same message and so tests can assert
@@ -144,18 +157,33 @@ type Sale struct {
 	ShippingSen int64
 	DiscountSen int64
 	// TotalSen is what the buyer was charged: subtotal + shipping - discount
-	// + FeeSen. The processing fee is a component of the total, never folded
+	// + FeeSen. The platform fee is a component of the total, never folded
 	// into an item price.
 	TotalSen int64
-	// FeeSen is the processing fee the buyer bore on this sale, in integer sen
-	// (card t_135c3c72). It is a SNAPSHOT: FeeMethod/FeeFixedSen/FeePercentBp
-	// record the rate in force at purchase time, so a merchant who changes
-	// their MDR later cannot rewrite what a past buyer was charged, and a
-	// refund can never recompute the charge.
+	// FeeSen is the charge the buyer bore on top of the items, in integer sen
+	// (cards t_135c3c72 and t_1a17d22d). It is a SNAPSHOT: FeeMethod/
+	// FeeFixedSen/FeePercentBp record the rate in force at purchase time, so a
+	// merchant who changes their settings later cannot rewrite what a past
+	// buyer was charged, and a refund can never recompute the charge.
 	FeeSen       int64
 	FeeMethod    string
 	FeeFixedSen  int64
 	FeePercentBp int64
+	// PlatformFeeSen is the PLATFORM FEE actually charged for this purchase
+	// (card t_1a17d22d): the amount JomForm added as its own line in the CHIP
+	// purchase, on top of the price the buyer typed. FeeSen carries the same
+	// number on a platform sale; the two differ on a legacy gross-up sale,
+	// where PlatformFeeSen is 0 and FeeSen is the grossed-up component.
+	PlatformFeeSen int64
+	// FeeModel is which model priced this sale: FeeModelPlatform,
+	// FeeModelLegacyGrossUp, or "" when no fee applied. It is recorded so a
+	// report can tell a platform charge from a legacy gross-up after the legacy
+	// path retires.
+	FeeModel string
+	// FeeIdentifier is the CHIP identifier whose fee was charged (`fpx` vs
+	// `fpx_b2b1` for the one FPX chooser group), so the purchase can be pinned
+	// to exactly that variant. Empty on a fee-free sale.
+	FeeIdentifier string
 	// RefundedSen is the running total already refunded against this sale, in
 	// integer sen, never greater than TotalSen (issue #518). 0 = nothing
 	// refunded; 0 < RefundedSen < TotalSen = a partial refund (the sale keeps
@@ -264,6 +292,7 @@ func NewSaleStore(pool *pgxpool.Pool) *SaleStore { return &SaleStore{pool: pool}
 
 const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code, client, items,
 	subtotal_sen, shipping_sen, discount_sen, total_sen, fee_sen, fee_method, fee_fixed_sen, fee_percent_bp,
+	platform_fee_sen, fee_model, fee_identifier,
 	refunded_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
 	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
@@ -277,6 +306,7 @@ func scanSale(row pgx.Row) (*Sale, error) {
 	err := row.Scan(&s.ID, &s.AccountID, &s.FormID, &s.RefCode, &s.Client, &s.Items,
 		&s.SubtotalSen, &s.ShippingSen, &s.DiscountSen, &s.TotalSen,
 		&s.FeeSen, &s.FeeMethod, &s.FeeFixedSen, &s.FeePercentBp,
+		&s.PlatformFeeSen, &s.FeeModel, &s.FeeIdentifier,
 		&s.RefundedSen, &s.Currency, &s.SaleType, &s.PaymentMethod, &s.Status,
 		&s.ChipPurchaseID, &s.ChipCheckoutURL, &s.InvoiceNo,
 		&s.SkipCapture, &s.Authorized, &s.CapturedAt, &s.ReceiptMessageID,
@@ -296,14 +326,16 @@ func (s *SaleStore) Create(ctx context.Context, sale *Sale) error {
 	return s.pool.QueryRow(ctx,
 		`INSERT INTO sales (account_id, form_id, ref_code, client, items, subtotal_sen, shipping_sen,
 		   discount_sen, total_sen, fee_sen, fee_method, fee_fixed_sen, fee_percent_bp,
+		   platform_fee_sen, fee_model, fee_identifier,
 		   currency, sale_type, payment_method, status, skip_capture, table_number, affiliate_code,
 		   subscription_product_id, subscription_amount_sen, subscription_period, subscription_variation_id, shipping_detail)
-		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NULLIF($19,''), NULLIF($20,''),
-		    NULLIF($21,'')::uuid, NULLIF($22,0), NULLIF($23,''), NULLIF($24,'')::uuid, $25::jsonb)
+		 VALUES ($1, NULLIF($2,'')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NULLIF($22,''), NULLIF($23,''),
+		    NULLIF($24,'')::uuid, NULLIF($25,0), NULLIF($26,''), NULLIF($27,'')::uuid, $28::jsonb)
 		 RETURNING id, created_at, updated_at`,
 		sale.AccountID, sale.FormID, sale.RefCode, sale.Client, sale.Items,
 		sale.SubtotalSen, sale.ShippingSen, sale.DiscountSen, sale.TotalSen,
 		sale.FeeSen, sale.FeeMethod, sale.FeeFixedSen, sale.FeePercentBp,
+		sale.PlatformFeeSen, sale.FeeModel, sale.FeeIdentifier,
 		orDefault(sale.Currency, "MYR"),
 		sale.SaleType, sale.PaymentMethod, sale.Status, sale.SkipCapture, sale.TableNumber, sale.AffiliateCode,
 		sale.SubscriptionProductID, sale.SubscriptionAmountSen, sale.SubscriptionPeriod, sale.SubscriptionVariationID,

@@ -28,7 +28,7 @@ const SECTIONS: Section[] = [
       "The first is how **JomForm** works. The second is what your account holds: live forms, what a form recorded, sales, submissions and past-due subscriptions.",
       "For your account it looks the answer up in your data, with the same **tools** an AI agent would use over MCP.",
       "It is not a general chatbot. It is the assistant for **JomForm** specifically.",
-      "Ask how to pass the processing fee to a buyer, how delivery is priced, or whether you can take donations or use your own domain.",
+      "Ask how the platform fee your buyer pays is set, how delivery is priced, or whether you can take donations or use your own domain.",
       "Those answers come from a short **guide** to the product that ships with the app, not from whatever the model remembers about other form builders.",
       "When neither the guide nor your data can answer, it says so.",
     ],
@@ -41,7 +41,7 @@ const SECTIONS: Section[] = [
       "The product answers come from a short **guide** that ships inside the app. It covers the questions a merchant asks most.",
       {
         list: [
-          "The buyer-borne processing fee and who pays it, plus shipping zones and courier quotes.",
+          "The per-method platform fee your buyer pays and who pays it, plus shipping zones and courier quotes.",
           "Products, including pay-what-you-want and donations.",
           "Subscriptions and what happens when a charge fails, refunds, and forms that collect responses rather than payments.",
           "Custom domains, email notifications, spam review and two-factor sign-in.",

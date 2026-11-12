@@ -351,6 +351,15 @@ type saleOut struct {
 	FeeSen       int64  `json:"fee_sen,omitempty"`
 	FeeRateLabel string `json:"fee_rate_label,omitempty"`
 	NetSen       int64  `json:"net_sen"`
+
+	// Card t_1a17d22d: platform_fee_sen is the flat platform line JomForm added
+	// to the CHIP purchase (equal to fee_sen on a platform sale, 0 on a legacy
+	// gross-up sale) and fee_model says which engine priced it
+	// ("platform" | "legacy_grossup", absent when no fee applied). Same two
+	// fields, same names and same convention as the REST sale row, so an agent
+	// and the dashboard describe one charge the same way.
+	PlatformFeeSen int64  `json:"platform_fee_sen,omitempty"`
+	FeeModel       string `json:"fee_model,omitempty"`
 	// Issue #604: for a response-mode form the row is a SUBMISSION, not a sale
 	// (issue #171) — sale_type is "response", submission_id identifies it and
 	// data carries the recorded answers. Without these an agent following the
@@ -482,6 +491,12 @@ func saleOutFromSale(sl *dbstore.Sale) saleOut {
 		o.FeeSen = sl.FeeSen
 		o.FeeRateLabel = payments.FeeRateLabel(sl.FeeMethod, sl.FeeFixedSen, sl.FeePercentBp)
 	}
+	// Card t_1a17d22d: which model priced the sale and the platform line it
+	// charged, set exactly as the REST row sets them (omitempty hides a 0/"" on
+	// a fee-free or legacy sale), so both surfaces answer "what is this fee?" the
+	// same way.
+	o.PlatformFeeSen = sl.PlatformFeeSen
+	o.FeeModel = sl.FeeModel
 	if len(sl.Items) > 0 {
 		o.Items = make([]saleItemOut, 0, len(sl.Items))
 		for _, it := range sl.Items {

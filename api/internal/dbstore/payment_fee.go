@@ -32,13 +32,25 @@ import (
 const FeeOverrideOff = "off"
 
 // PaymentFeeRate is one workspace's rate for one CHIP payment method.
+//
+// Two models share this row (card t_1a17d22d):
+//
+//   - PLATFORM FEE (the model going forward): PlatformFeeSen is a flat amount
+//     in sen that JomForm adds as its own `purchase.products` line. The buyer's
+//     price is untouched.
+//   - LEGACY GROSS-UP: a percentage rate (PercentBP > 0) that the old engine
+//     priced with payments.GrossUp. It is kept for exactly one release so a
+//     workspace that stores a percentage keeps being charged what it charges
+//     today (migration 000090), and it is flagged on the read surfaces so the
+//     merchant can move to a platform amount.
 type PaymentFeeRate struct {
-	Method    string
-	Enabled   bool
-	FixedSen  int64
-	PercentBP int64
-	UpdatedBy string
-	UpdatedAt time.Time
+	Method         string
+	Enabled        bool
+	FixedSen       int64
+	PercentBP      int64
+	PlatformFeeSen int64
+	UpdatedBy      string
+	UpdatedAt      time.Time
 }
 
 // FeeAcknowledgement records the merchant's acknowledgement of the
@@ -58,18 +70,26 @@ func NewPaymentFeeStore(pool *pgxpool.Pool) *PaymentFeeStore {
 
 // ErrFeeRateInvalid is the refusal for a rate the schema would also reject.
 // Exported so the REST/MCP callers render one message for it.
-var ErrFeeRateInvalid = errors.New("invalid fee rate: the percentage must be between 0% and 99.99%, the fixed fee must be 0 or more")
+var ErrFeeRateInvalid = errors.New("invalid fee rate: the platform fee must be 0 or more, and the legacy percentage must be between 0% and 99.99%")
 
 // ErrFeeUnknownMethod is the refusal for a rate stored against a method CHIP
 // does not offer JomForm a per-method choice for.
 var ErrFeeUnknownMethod = errors.New("invalid payment method")
+
+// ErrFeeModelMixed is the refusal for a row that carries BOTH a platform amount
+// and a legacy percentage. One row prices one way: a method is either charged a
+// flat platform fee or grossed up by the old rate, never both.
+var ErrFeeModelMixed = errors.New("a method carries either a platform fee or a legacy percentage rate, not both")
 
 // validFeeMethods mirrors the payment_fee_rates_method_chk constraint. Keeping
 // the list here (and the CHECK in the migration) means a bad method is refused
 // with a sentence at the API edge instead of a 500 from the schema.
 //
 // fpx and fpx_b2b1 are separate rows (card t_1d0198e3): FPX B2C and FPX B2B1 carry
-// different acquirer rates, so the merchant stores one rate per product.
+// different acquirer rates, so the merchant stores one rate per product. They
+// are also two BUYER choices, and a platform fee is keyed by the CHIP
+// identifier, so the two must be able to carry different amounts (card
+// t_1a17d22d).
 var validFeeMethods = map[string]bool{
 	"fpx":        true,
 	"fpx_b2b1":   true,
@@ -78,12 +98,17 @@ var validFeeMethods = map[string]bool{
 	"duitnow_qr": true,
 }
 
+// feeMethodOrder is the storage order every read uses, so the settings surface
+// and the checkout chooser render the same list on every call. The two FPX
+// identifiers sit together because they are adjacent buyer choices.
+var feeMethodOrder = []string{"fpx", "fpx_b2b1", "card", "ewallet", "duitnow_qr"}
+
 // List returns every stored rate for the workspace, ordered by method so the
 // settings page and the checkout chooser render the same order on every read.
 // A workspace that never configured fees returns an empty slice (not an error).
 func (s *PaymentFeeStore) List(ctx context.Context, workspaceID string) ([]PaymentFeeRate, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT method, fee_enabled, fee_fixed_sen, fee_percent_bp, updated_by, updated_at
+		`SELECT method, fee_enabled, fee_fixed_sen, fee_percent_bp, platform_fee_sen, updated_by, updated_at
 		 FROM payment_fee_rates WHERE workspace_id=$1
 		 ORDER BY array_position(ARRAY['fpx','fpx_b2b1','card','ewallet','duitnow_qr'], method)`, workspaceID)
 	if err != nil {
@@ -93,7 +118,7 @@ func (s *PaymentFeeStore) List(ctx context.Context, workspaceID string) ([]Payme
 	var out []PaymentFeeRate
 	for rows.Next() {
 		var r PaymentFeeRate
-		if err := rows.Scan(&r.Method, &r.Enabled, &r.FixedSen, &r.PercentBP, &r.UpdatedBy, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.Method, &r.Enabled, &r.FixedSen, &r.PercentBP, &r.PlatformFeeSen, &r.UpdatedBy, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -103,14 +128,19 @@ func (s *PaymentFeeStore) List(ctx context.Context, workspaceID string) ([]Payme
 
 // ValidateFeeRate rejects a rate the schema would reject, before it reaches the
 // database — one sentence at the API edge instead of a constraint violation.
-// The percentage bound is strictly below 100%: at 100% the fee grows as fast as
-// the amount and the gross-up has no solution, so it must never be storable.
-func ValidateFeeRate(method string, fixedSen, percentBP int64) error {
+// The percentage bound is strictly below 100%: at 100% the legacy gross-up has
+// no solution (the fee grows as fast as the amount), so it must never be
+// storable. A row carries one model at a time: a platform amount and a
+// percentage together are refused rather than silently preferring one.
+func ValidateFeeRate(method string, fixedSen, percentBP, platformFeeSen int64) error {
 	if !validFeeMethods[method] {
 		return ErrFeeUnknownMethod
 	}
-	if fixedSen < 0 || percentBP < 0 || percentBP >= 10000 {
+	if fixedSen < 0 || percentBP < 0 || percentBP >= 10000 || platformFeeSen < 0 {
 		return ErrFeeRateInvalid
+	}
+	if platformFeeSen > 0 && percentBP > 0 {
+		return ErrFeeModelMixed
 	}
 	return nil
 }
@@ -121,7 +151,7 @@ func ValidateFeeRate(method string, fixedSen, percentBP int64) error {
 // methods they want to keep.
 func (s *PaymentFeeStore) Replace(ctx context.Context, workspaceID, updatedBy string, rates []PaymentFeeRate) error {
 	for _, r := range rates {
-		if err := ValidateFeeRate(r.Method, r.FixedSen, r.PercentBP); err != nil {
+		if err := ValidateFeeRate(r.Method, r.FixedSen, r.PercentBP, r.PlatformFeeSen); err != nil {
 			return err
 		}
 	}
@@ -135,9 +165,9 @@ func (s *PaymentFeeStore) Replace(ctx context.Context, workspaceID, updatedBy st
 	}
 	for _, r := range rates {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO payment_fee_rates (workspace_id, method, fee_enabled, fee_fixed_sen, fee_percent_bp, updated_by, updated_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,now())`,
-			workspaceID, r.Method, r.Enabled, r.FixedSen, r.PercentBP, updatedBy); err != nil {
+			`INSERT INTO payment_fee_rates (workspace_id, method, fee_enabled, fee_fixed_sen, fee_percent_bp, platform_fee_sen, updated_by, updated_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,now())`,
+			workspaceID, r.Method, r.Enabled, r.FixedSen, r.PercentBP, r.PlatformFeeSen, updatedBy); err != nil {
 			return err
 		}
 	}
@@ -173,12 +203,25 @@ func (s *PaymentFeeStore) Acknowledge(ctx context.Context, workspaceID, by strin
 	return err
 }
 
-// EnabledRate is one method the buyer can choose, with the rate that applies to
-// it. It is the shape the checkout page renders and the order route prices.
+// EnabledRate is one method the buyer can choose, with the charge that applies
+// to it. It is the shape the checkout page renders and the order route prices.
+//
+// Method is the CHIP identifier, and it is also the buyer-facing chooser key:
+// `fpx` (FPX B2C), `fpx_b2b1` (FPX B2B1), `card`, `ewallet`, `duitnow_qr`. The
+// two FPX identifiers are two products with their own acquirer cost and their
+// own platform amount, so they are two keys and two chooser rows (card
+// t_1d0198e3) — which is also what pins the purchase to the identifier whose
+// charge was priced, so the buyer cannot reach the other variant at CHIP's page
+// after seeing this amount (card t_1a17d22d).
 type EnabledRate struct {
-	Method    string
-	FixedSen  int64
-	PercentBP int64
+	Method         string
+	PlatformFeeSen int64
+	FixedSen       int64
+	PercentBP      int64
+	// LegacyGrossUp is true for a stored PERCENTAGE rate: that row keeps the old
+	// gross-up for one release (see migration 000090), so the route must price it
+	// with payments.GrossUp rather than as a flat platform line.
+	LegacyGrossUp bool
 }
 
 // ForForm resolves the fee policy for one form: the workspace's enabled rates,
@@ -231,12 +274,38 @@ func (s *PaymentFeeStore) ForForm(ctx context.Context, accountID, formID string)
 		if !r.Enabled {
 			continue
 		}
-		if r.FixedSen == 0 && r.PercentBP == 0 {
-			// Enabled with no rate charges nothing: treat it as off rather than
-			// offering the buyer a method whose "fee" is zero.
+		rate := EnabledRate{
+			Method:    r.Method,
+			FixedSen:  r.FixedSen,
+			PercentBP: r.PercentBP,
+		}
+		switch {
+		case r.PercentBP > 0:
+			// A stored percentage keeps the legacy gross-up for one release
+			// (migration 000090): the amount is not a flat fee, so the route must
+			// price it with payments.GrossUp.
+			rate.LegacyGrossUp = true
+		default:
+			// A flat platform fee. A pre-existing FIXED-only row is the same
+			// arithmetic as a flat platform fee (grossing up a constant leaves
+			// exactly A + fixed), so it is read as one and the buyer's price
+			// stops moving.
+			rate.PlatformFeeSen = r.PlatformFeeSen
+			if rate.PlatformFeeSen == 0 {
+				rate.PlatformFeeSen = r.FixedSen
+			}
+		}
+		if !rate.LegacyGrossUp && rate.PlatformFeeSen == 0 {
+			// Enabled with no charge: treat it as off rather than offering the
+			// buyer a method whose "fee" is zero.
 			continue
 		}
-		out = append(out, EnabledRate{Method: r.Method, FixedSen: r.FixedSen, PercentBP: r.PercentBP})
+		// The two FPX identifiers stay TWO rows (card t_1d0198e3, #1710): they
+		// are two products with their own rate, and each row's key is the CHIP
+		// identifier, which is what pins the purchase to the amount shown. Do
+		// not fold them back into one "FPX" group here — a collapsed row cannot
+		// say which of the two amounts the buyer is paying.
+		out = append(out, rate)
 	}
 	return out, nil
 }

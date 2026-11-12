@@ -50,12 +50,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { Markdown } from "../components/Markdown.ts";
 import { GUIDES } from "./guides.gen.ts";
-// The PRIVATE guides. They are authored in docs/guides/ and validated by the
-// same generator and the same rules, but they are rendered by a noindex page outside app/docs
-// and must never appear in GUIDES (/docs/guides, the sitemap, llms.txt, the docs search index).
-// Leg 5 therefore reads both modules, so a private guide still has to match its README and its
-// copied PNGs byte for byte — it just does so under public/<assets>/ instead of public/guides/.
-import { PRIVATE_GUIDES } from "./guidesPrivate.gen.ts";
+
+// Card t_1e4c1bba: there is no private-guide module any more. /panduan/surau was retired and
+// docs/guides is published content only, so this guard compares GUIDES against EVERY directory
+// in docs/guides — a directory with no generated record is drift, not a hidden guide.
 
 // Derived from this file's own location (web/src/lib) rather than from `new URL("...")`
 // literals: those literals are read targets to src/lib/buildContext.test.ts, and the only one
@@ -271,32 +269,14 @@ test("the generated content matches docs/guides byte for byte (checkout only)", 
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort();
-  // A private guide is a source directory in docs/guides that the generator deliberately keeps
-  // OUT of GUIDES, so the comparison is done per module: the public list against the public
-  // directories, the private list against the private ones. Anything in neither is drift.
-  const privateSlugs = new Set(PRIVATE_GUIDES.map((g) => g.slug));
+  // Every directory in docs/guides is a published guide, so the two lists are the same list.
   assert.deepEqual(
     GUIDES.map((g) => g.slug),
-    slugs.filter((s) => !privateSlugs.has(s)),
+    slugs,
     "docs/guides and src/lib/guides.gen.ts carry different guides — run `npm run guides:sync`",
   );
-  const privateDirs = slugs.filter((s) => privateSlugs.has(s));
-  assert.deepEqual(
-    PRIVATE_GUIDES.map((g) => g.slug),
-    privateDirs,
-    "docs/guides carries a private-guide directory that src/lib/guidesPrivate.gen.ts does not — " +
-      "run `npm run guides:sync` (or remove the directory). A private guide with no generated " +
-      "record is a page nobody can render; a generated record with no directory is stale text.",
-  );
-  // The public copy of each guide's PNGs lives at public/guides/<slug>/; a private guide's live
-  // at its own `assets` directory (public/panduan/surau), which is what its page renders from.
-  const all = [
-    ...GUIDES.map((g) => ({ ...g, publicDir: join(PUBLIC_GUIDES, g.slug) })),
-    ...PRIVATE_GUIDES.map((g) => ({
-      ...g,
-      publicDir: join(WEB_DIR, "public", g.assets.replace(/^\//, "")),
-    })),
-  ];
+  // The screenshots live at public/guides/<slug>/, which is what the guide page renders from.
+  const all = GUIDES.map((g) => ({ ...g, publicDir: join(PUBLIC_GUIDES, g.slug) }));
   for (const g of all) {
     const dir = join(DOCS_GUIDES, g.slug);
     const readme = readFileSync(join(dir, "README.md"), "utf8").replace(/\r\n?/g, "\n");

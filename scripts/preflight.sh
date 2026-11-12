@@ -228,6 +228,19 @@
 #   scripts/preflight.sh --quick            # INNER LOOP: api tests without -race
 #   scripts/preflight.sh --explain-diff <ref>  # print that selection, run nothing
 #   scripts/preflight.sh --gate-deps        # the per-gate path dependencies, then exit
+#   scripts/preflight.sh --test-readers <ref>  # the api packages whose *_test.go
+#                                           #   files read <ref>..worktree; run nothing
+#
+#   --test-readers is the MERGE TRAIN's seam for a DATA-ONLY diff. A change with no
+#   api/ path can still be an input of the `test` gate: api *_test.go files walk
+#   web/src, docs/ and repo-root files (`webWorkspacePurgeCallers` in
+#   api/internal/mcpsrv is one), so `test` is a REAL dependency and must run. This
+#   mode prints the PACKAGES that own those readers — derived from the same read
+#   table the selection uses, never a literal list — so the train can hand the
+#   narrowed set over through PREFLIGHT_TEST_PACKAGES instead of paying
+#   `go test ./...` for the whole module (measured 551-710 s for 20 docs
+#   screenshots). It exits 1, printing why, whenever the answer cannot be derived
+#   exactly; the caller then runs the full suite as before.
 #
 #   --only/--skip exist for proving a single gate BITES (sabotage one thing,
 #   run that gate, expect RED) and for re-running one gate after a fix. They are
@@ -410,6 +423,8 @@ ONLY=""
 SKIP=""
 FOR_DIFF=""       # --for-diff <base-ref>: narrow to what <base-ref>..worktree can break
 EXPLAIN_DIFF=""   # --explain-diff <base-ref>: print that selection, run nothing
+TEST_READERS=""   # --test-readers <base-ref>: the api packages whose *_test.go read it
+TEST_READERS_GIVEN=0
 GATE_DEPS=0       # --gate-deps: print the per-gate path dependencies, then exit
 CLASSIFY=0        # --classify: read changed paths on stdin, print the gate set
 CLASSIFY_PATHS="" # the paths --classify was given (comma-separated), if any
@@ -515,6 +530,10 @@ while [ $# -gt 0 ]; do
     --for-diff=*)    FOR_DIFF="${1#*=}"; FOR_DIFF_GIVEN=1 ;;
     --explain-diff)   EXPLAIN_DIFF="${2:-}"; EXPLAIN_DIFF_GIVEN=1; shift ;;
     --explain-diff=*) EXPLAIN_DIFF="${1#*=}"; EXPLAIN_DIFF_GIVEN=1 ;;
+    # The DATA-ONLY seam: which api packages' tests READ <ref>..worktree. Inspection
+    # only — it runs no gate and takes no lock (served with --gate-deps below).
+    --test-readers)   TEST_READERS="${2:-}"; TEST_READERS_GIVEN=1; shift ;;
+    --test-readers=*) TEST_READERS="${1#*=}"; TEST_READERS_GIVEN=1 ;;
     # --reuse-record: the lane has already read the per-tree result record
     # (scripts/preflight_reuse.sh) and this run exists to re-run only what that
     # record could not vouch for. It does NOT widen what may be skipped: every
@@ -546,6 +565,12 @@ if [ "$EXPLAIN_DIFF_GIVEN" = 1 ] && [ -z "${EXPLAIN_DIFF//[[:space:]]/}" ]; then
 fi
 if [ "$FOR_DIFF_GIVEN" = 1 ] && [ "$EXPLAIN_DIFF_GIVEN" = 1 ]; then
   die "--for-diff and --explain-diff are mutually exclusive (--explain-diff runs nothing)"
+fi
+if [ "$TEST_READERS_GIVEN" = 1 ] && [ -z "${TEST_READERS//[[:space:]]/}" ]; then
+  die "--test-readers needs a base ref, e.g. --test-readers origin/main (there is no default: a guessed base answers a question about a different diff)"
+fi
+if [ "$TEST_READERS_GIVEN" = 1 ] && { [ "$FOR_DIFF_GIVEN" = 1 ] || [ "$EXPLAIN_DIFF_GIVEN" = 1 ]; }; then
+  die "--test-readers is an inspection mode of its own: it answers 'which packages read this diff' and then exits, so it cannot be combined with --for-diff/--explain-diff"
 fi
 # Narrowing AND hand-picking at once is ambiguous: --only could ask for a gate the
 # diff does not touch, and that gate would silently not run. Refuse the mix.
@@ -613,6 +638,9 @@ if [ "$FOR_DIFF_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$FOR_DIFF^{com
 fi
 if [ "$EXPLAIN_DIFF_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$EXPLAIN_DIFF^{commit}" >/dev/null 2>&1; then
   die "--explain-diff base ref '$EXPLAIN_DIFF' does not resolve to a commit"
+fi
+if [ "$TEST_READERS_GIVEN" = 1 ] && ! git rev-parse --verify --quiet "$TEST_READERS^{commit}" >/dev/null 2>&1; then
+  die "--test-readers base ref '$TEST_READERS' does not resolve to a commit (a guess would answer about a different diff)"
 fi
 
 # ===========================================================================
@@ -783,7 +811,7 @@ pw_sources() {
 # ROOT file named literally is the same trap one level up and is handled by
 # pw_root_literals, which DERIVES the name set from the tree rather than listing
 # the names here — see that function for why the list is not hand-maintained.
-PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\([^)]*\)|"(api|web|deploy|scripts|docs|loadtest|e2e)/[A-Za-z0-9_@./*-]*"|\$(HERE|SCRIPT_DIR)/\.\./[A-Za-z0-9_./-]+'
+PW_READ_RE='(\.\./){2,}[A-Za-z0-9_@./-]*|filepath\.Join\(.*\)|"(api|web|deploy|scripts|docs|loadtest|e2e)/[A-Za-z0-9_@./*-]*"|\$(HERE|SCRIPT_DIR)/\.\./[A-Za-z0-9_./-]+'
 
 # A repo-wide read (git grep / ls-files / rev-list over THIS checkout) makes a
 # gate depend on every tracked file's CONTENT, so it can never narrow. It is
@@ -809,6 +837,7 @@ PW_BLOCKED=""    # gates that cannot narrow, one per line
 PW_DEGRADED=0    # 1 -> derivation failed; every gate widens to `*`
 declare -A PW_DERIVED=()  # file -> its candidate reads (newline separated)
 declare -A PW_PS=()       # candidate -> its resolved pathspec ("" = unresolvable)
+declare -A PW_TREERW=()   # file -> 1 when it resolves the REPO ROOT (reads the whole tree)
 declare -A PW_RWSET=()    # file -> 1 when it reads the whole checkout
 declare -A PW_CLAIMS=()   # gate -> paths it CLAIMS are its inputs (declared, no `*`)
 declare -A PW_SRCS=()     # gate -> its source globs, one per line
@@ -911,6 +940,12 @@ pw_derive_all() {
       return (i > 1) ? substr(f, 1, i - 1) : ""
     }
     function emit(c) { if (c != "") print file "\t" c }
+    # A file-relative read that collapses to the REPO ROOT normalises to the EMPTY
+    # string, which `emit` cannot carry (an empty candidate is not a path). It is
+    # the strongest read there is — the whole tree — so it travels as the literal
+    # "." and is picked up by pw_build_table as a PW_TREERW marker. `pw_pathspec_v`
+    # resolves "." to nothing, so this cannot add a row to the path table.
+    function emit_root(c) { if (c == "") emit("."); else emit(c) }
     {
       i = index($0, ":"); file = substr($0, 1, i - 1)
       rest = substr($0, i + 1); j = index(rest, ":")
@@ -923,18 +958,31 @@ pw_derive_all() {
       s = text
       while (match(s, /(\.\.\/){2,}[A-Za-z0-9_@.\/-]*/)) {
         lit = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
-        emit(norm(d "/" lit))
+        emit_root(norm(d "/" lit))
       }
       # 2. filepath.Join(...) against every plausible base
+      #
+      # GREEDY TO THE LAST `)` ON THE LINE, deliberately. `[^)]*` stopped at the
+      # first close paren, so a call whose FIRST argument is itself a call —
+      # `filepath.Join(filepath.Dir(file), "..", "..", "..")`, which is how every
+      # test in this repo finds the REPO ROOT — matched as
+      # `filepath.Join(filepath.Dir(file` with NO quoted segment inside it, and
+      # contributed nothing. Measured consequence: the model-id guard in
+      # api/internal/llm walks the whole repo from exactly that expression and was
+      # invisible to the table, so a package that reads every file in the tree
+      # looked like a package that reads none of it. Taking the rest of the line
+      # merges the quoted segments of two calls on one line at worst, whose
+      # candidates are then dropped as nonexistent (or, if real, widen a gate —
+      # the safe side).
       s = text
-      while (match(s, /filepath\.Join\([^)]*\)/)) {
+      while (match(s, /filepath\.Join\(.*\)/)) {
         call = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
         joined = ""; k = 0
         while (match(call, /"[^"]*"/)) {
           seg = substr(call, RSTART + 1, RLENGTH - 2); call = substr(call, RSTART + RLENGTH)
           joined = joined (k++ > 0 ? "/" : "") seg
         }
-        if (joined != "") { emit(joined); emit("api/" joined); emit(norm(d "/" joined)) }
+        if (joined != "") { emit(joined); emit("api/" joined); emit_root(norm(d "/" joined)) }
       }
       # 3. repo-root-relative literals: "api/internal/httpapi/rest.go"
       s = text
@@ -1123,8 +1171,8 @@ pw_root_literals() {
 # pw_build_table — the whole dependency table, built once, before any gate runs.
 pw_build_table() {
   PW_SEL=""; PW_BLOCKED=""; PW_DEGRADED=0
-  PW_DERIVED=(); PW_PS=(); PW_RWSET=(); PW_CLAIMS=()
-  local gate pat file cand ps g p rows="" derived
+  PW_DERIVED=(); PW_PS=(); PW_TREERW=(); PW_RWSET=(); PW_CLAIMS=()
+  local gate pat file cand ps g p rows="" derived pw_root
   local -a cands=()
 
   pw_cache_sources
@@ -1150,6 +1198,17 @@ pw_build_table() {
     [ -n "$cand" ] || continue
     PW_DERIVED[$file]="${PW_DERIVED[$file]:-}${cand}
 "
+    # A candidate the FILE-RELATIVE interpretation collapses to the repo root
+    # (`filepath.Join(filepath.Dir(thisFile), "..", "..", "..")` from a three-deep
+    # package) is a read of the ROOT DIRECTORY: the file goes on to Walk/stat it,
+    # so every path in the tree is an input of whatever runs it. The candidate
+    # resolves to the empty string (norm drops "."), which is why it cannot be a
+    # row of the path table — and it is recorded separately so a gate that RUNS
+    # those files can still be told which packages must run. See
+    # pw_test_reader_packages. This does NOT widen the gate table: the
+    # cannot-narrow verdict is unchanged.
+    pw_norm_v pw_root "$cand"
+    [ -z "$pw_root" ] && PW_TREERW[$file]=1
   done <<<"$derived"
 
   # Which files read the whole checkout. The line is reduced to its code first
@@ -1361,6 +1420,131 @@ pw_claims() {
   return 1
 }
 
+# pw_test_reader_packages <base> — the api PACKAGES whose `*_test.go` files read a
+# path <base>..worktree changes.
+#
+# WHY THIS EXISTS. The `test` gate is not only about Go sources. Several api test
+# files WALK the rest of the repo — api/internal/mcpsrv's webWorkspacePurgeCallers
+# WalkDirs web/src and reads every .ts/.tsx/.js, api/internal/httpapi's
+# passkey_seam_test.go resolves ../../../web/src — so a docs page or a screenshot is
+# a genuine input of `go test ./...`. The derived read table already knows that and
+# selects the gate. What it does NOT say is WHICH packages must run: the merge train
+# only narrows for an api/**.go change (`select_test_packages`), so a DATA-only diff
+# pays the whole module — measured 551 s, and 710 s on a later write of the same
+# tree. This function answers that question from the SAME table, so the list cannot
+# rot the day a new guard is added: a reader that appears in the tree appears here.
+#
+# THE ANSWER IS REFUSED (exit 1, reason on stderr) IN EVERY CASE THIS CANNOT PROVE:
+#   * `test` cannot narrow at all (a source reads the whole checkout);
+#   * the diff touches `api/` — that is the changed+importers question, and a
+#     package that never READS the data can still fail to COMPILE against it;
+#   * a NON-test api source reads a changed path — its package plus every importer
+#     can change behaviour with the data, and only the import graph knows which;
+#   * a reader's package path cannot be expressed to `go test` (a reader at the
+#     module root).
+# Every refusal makes the caller run `go test ./...` exactly as before. The unsafe
+# direction is a reader this misses — that is a red gate reported green — so the
+# failure mode is always the expensive one.
+#
+# Prints one package path per line (relative to api/, e.g. ./internal/mcpsrv) on
+# stdout, and a "select: N of M package(s)" summary on stderr for the caller's
+# "the other M-N were never run" verdict.
+pw_test_reader_packages() {
+  local base="$1" changed="" file cand ps c hit dir
+  local -A seen=()
+
+  if pw_gate_blocked test; then
+    echo "select: the test gate cannot narrow (a source reads the whole checkout) — running ./..." >&2
+    return 1
+  fi
+  changed="$(pw_changed_paths "$base")"
+  if [ -z "$(printf '%s' "$changed" | tr -d '[:space:]')" ]; then
+    echo "select: no changed path — an empty diff is not evidence" >&2
+    return 1
+  fi
+  if printf '%s\n' "$changed" | grep -q '^api/'; then
+    echo "select: the diff touches api/ — that is the changed+importers question, not a reader question" >&2
+    return 1
+  fi
+  # THE LIST MAY ONLY NARROW A RUN THAT REALLY NARROWED. If the diff's gate selection
+  # is the FULL inventory (the fail-closed paths: a path no gate claims, an empty
+  # diff), the run says FULL — handing it a package list would make the api suite
+  # narrower than every other part of the same run claims to be, which is the kind of
+  # half-true scope a record must never carry. And if `test` is not in the selection at
+  # all, there is nothing to scope: the gate does not run.
+  local sel n_sel
+  sel="$(pw_selection "$base")"
+  n_sel="$(printf '%s\n' "$sel" | grep -cv '^#reason:')"
+  if [ "${n_sel:-0}" -ge "${#GATE_NAMES[@]}" ]; then
+    echo "select: the gate selection is the FULL inventory (fail-closed) — a package list would narrow the test gate inside a run that claims to be full" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$sel" | grep -qx 'test'; then
+    echo "select: the diff's selection does not include the test gate — nothing to scope" >&2
+    return 1
+  fi
+
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    # Only api/ sources can own an api package, and gate `test`'s sources are
+    # exactly `api/*` — so any claim below is a claim by the `test` gate.
+    case "$file" in api/*) ;; *) continue ;; esac
+    [ -n "${PW_DERIVED[$file]:-}" ] || continue
+    hit=0
+    # A file that resolves the REPO ROOT reads every path in the tree, so it is a
+    # reader of this diff whatever the pathspec table managed to resolve. This is
+    # the arm that keeps llm's model-id guard in the set: it walks the whole repo
+    # from `filepath.Join(filepath.Dir(thisFile), "..", "..", "..")`, and it fails on
+    # a model id written ANYWHERE — a docs page included.
+    [ -n "${PW_TREERW[$file]:-}" ] && hit=1
+    while [ "$hit" = 0 ] && IFS= read -r cand; do
+      [ -n "$cand" ] || continue
+      ps="${PW_PS[$cand]:-}"
+      [ -n "$ps" ] || continue
+      while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        case "$c" in $ps) hit=1; break ;; esac
+      done <<<"$changed"
+    done <<<"${PW_DERIVED[$file]}"
+    [ "$hit" = 1 ] || continue
+    case "$file" in
+      *_test.go)
+        dir="${file%/*}"
+        if [ "$dir" = "api" ]; then
+          echo "select: $file is a reader at the module root — that package path cannot ride PREFLIGHT_TEST_PACKAGES — running ./..." >&2
+          return 1
+        fi
+        seen[$dir]=1
+        ;;
+      *)
+        echo "select: $file (not a *_test.go) reads a changed path — a non-test reader's importers cannot be scoped by this seam — running ./..." >&2
+        return 1 ;;
+    esac
+  done < <(printf '%s\n' "${!PW_DERIVED[@]}")
+
+  if [ "${#seen[@]}" -eq 0 ]; then
+    echo "select: no api *_test.go reads a changed path — there is no reader set to narrow to" >&2
+    return 1
+  fi
+
+  for dir in $(printf '%s\n' "${!seen[@]}" | LC_ALL=C sort); do
+    printf './%s\n' "${dir#api/}"
+  done
+
+  # M — how many packages `go test ./...` WOULD have run, so the verdict can say how
+  # many were not. `go list` is the only honest source for it (a directory listing
+  # counts testdata and non-package dirs). If it cannot answer, the caller keeps
+  # ./...: an unverifiable "N of M" would be the kind of claim this board forbids.
+  local total
+  total="$(cd "$REPO_ROOT/api" 2>/dev/null && go list ./... 2>/dev/null | grep -c .)"
+  if [ -z "${total:-}" ] || [ "${total:-0}" -le 0 ]; then
+    echo "select: go list ./... failed in api/ — cannot state the true scope, so the full module runs" >&2
+    return 1
+  fi
+  echo "select: ${#seen[@]} of $total package(s) — the *_test.go readers of the changed data" >&2
+  return 0
+}
+
 # pw_changed_paths <base> — every path the diff touches, one per line.
 #   --no-renames reports a rename as its delete PLUS its add: both names are
 #   changes to files a gate may read.
@@ -1524,6 +1708,16 @@ if [ "$GATE_DEPS" = 1 ]; then
   pw_build_table
   pw_gate_deps
   exit 0
+fi
+
+# --test-readers <base> — the api packages whose `*_test.go` files read the diff.
+# Inspection only: no gate runs, no lock is taken. A refusal (exit 1) is the caller's
+# signal to keep `go test ./...`; see pw_test_reader_packages for why every
+# unprovable case fails that way.
+if [ "$TEST_READERS_GIVEN" = 1 ]; then
+  pw_build_table
+  pw_test_reader_packages "$TEST_READERS"
+  exit $?
 fi
 
 # --classify <paths> — the classification for an EXPLICIT path list, with nothing
@@ -2559,15 +2753,37 @@ gate_failure_kind() {
 
 # ---- harness cache: gates whose inputs are a fixed FILE SET, not the diff --------
 #
-# `selftest` re-runs the harness's own suite and `monitor` re-runs the watchdog's.
-# Neither reads the product tree: their inputs are the scripts under test. Paying
-# them again on every card re-learns an answer that cannot have changed — measured
-# as 18% + 2% of a real 4,819s run, every card, all day.
+# `monitor` re-runs the watchdog's suite, whose inputs are the files under
+# deploy/monitoring. Paying it on every card re-learns an answer that cannot have
+# changed — measured as 2% of a real 4,819s run, every card, all day.
 #
-# The key is a sha256 over the INPUT GLOBS and the bash version, and nothing else,
-# so a changed harness INVALIDATES the entry by construction. There is no race in
-# which a stale pass can be served for changed bytes; the TTL below only stops a
-# cache directory that has stopped being maintained from serving forever.
+# `selftest` also re-runs the gate-runner's own suite, but that suite DOES read the
+# product tree, and the runner itself already says so: `--gate-deps` reports
+# `selftest: *` — "reads the whole checkout, cannot narrow". Its checks derive a
+# gate's claimed paths by grepping quoted repo-root-relative literals out of
+# api/ web/ scripts/ deploy/ (pw_derive_all: check 15d and the gate-INPUT pins in
+# 15e), read web/e2e specs and web/playwright.config.ts (check 39), sweep every
+# tracked file for the test-env advice (12c), and walk the files of every pw_sources
+# glob (15o). A key over the scripts alone therefore vouched for a tree no run had
+# observed: measured 2026-11-11, a tree whose scripts were byte-identical but whose
+# web/ carried a bare "docs/" literal — which REDS check 15d — was told `selftest`
+# PASS in 2s from a record observed on a different tree. The comment that used to
+# stand here claimed "Neither reads the product tree"; that was true of `monitor`
+# and false of `selftest`, and the false half is what served the stale pass.
+#
+# So a gate that reads the whole checkout declares the `:tree:` input. It puts a
+# sha256 of the tracked tree into the key — `git ls-files -s`: mode, blob, stage and
+# path, no absolute path, so another worktree holding the same bytes still hits.
+# The cache is not even CONSULTED when the tree is not clean (a tracked file that
+# differs from the index, or an untracked non-ignored file) or when REPO_ROOT is not
+# a git checkout, because a key that describes bytes the gate did not read is the
+# defect this input exists to close. `git ls-files -s` over this repo measured ~20ms
+# for 2,205 files, against the 505-529s the gate itself costs.
+#
+# The other gates' key is a sha256 over the INPUT GLOBS and the bash version, and
+# nothing else, so a changed harness INVALIDATES the entry by construction. The TTL
+# below only stops a cache directory that has stopped being maintained from serving
+# forever.
 #
 # A hit is recorded the way this harness already records every remembered
 # observation: `reused: true`, carrying the timestamp of the run that OBSERVED it
@@ -2576,19 +2792,46 @@ gate_failure_kind() {
 # Kill switch: PREFLIGHT_HARNESS_CACHE=0 runs the gate exactly as before.
 HARNESS_CACHE_TTL="${PREFLIGHT_HARNESS_CACHE_TTL:-604800}"   # 7 days
 
-hcached() {   # hcached <gate> <glob>... -- <cmd...>
+hcached() {   # hcached <gate> [:tree:] <glob>... -- <cmd...>
   local gate="$1"; shift
-  local globs=() _g _p _f=0 key="" hit_key hit_at hit_secs dir file tmp t0 t1 rc
-  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do globs+=("$1"); shift; done
+  local globs=() _g _p _f=0 key="" hit_key hit_at hit_secs hit_basis basis=globs inputs_label
+  local tree_basis=0 tree_key="" dir file tmp t0 t1 rc
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    if [ "$1" = ":tree:" ]; then tree_basis=1; basis=tree; else globs+=("$1"); fi
+    shift
+  done
   if [ "${1:-}" = "--" ]; then shift; fi
 
   # No inputs declared, or the cache is switched off: run it, untouched.
-  if [ "${#globs[@]}" -eq 0 ] || [ "${PREFLIGHT_HARNESS_CACHE:-1}" = "0" ]; then
+  if { [ "${#globs[@]}" -eq 0 ] && [ "$tree_basis" = 0 ]; } || [ "${PREFLIGHT_HARNESS_CACHE:-1}" = "0" ]; then
     "$@"; return $?
   fi
 
   dir="${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/harness"
   file="$dir/$gate.json"
+
+  # The whole-checkout input. Any of these and the cache CANNOT vouch for this tree,
+  # so it is not consulted at all: a hit needs a key that describes the bytes below.
+  #   * REPO_ROOT is not a git checkout (a tarball install, the check-49 fixture);
+  #   * a tracked file differs from the index (`git grep` reads the WORKING TREE);
+  #   * an untracked, non-ignored file exists (check 39 globs web/e2e on disk).
+  # IGNORED files are outside this surface on purpose: `web/node_modules` and `.next`
+  # are ignored, and hashing them would make every worktree a miss.
+  # `git diff --quiet` is the PORCELAIN diff, not `diff-files`: it compares CONTENT,
+  # so a fresh `cp -a` of the same bytes (a different inode) still hits — measured,
+  # `diff-files` reported that copy as two modified files. A staged-but-uncommitted
+  # change is fine: the index IS the content `git grep` reads, and `ls-files -s`
+  # carries it.
+  if [ "$tree_basis" = 1 ]; then
+    if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
+       && git -C "$REPO_ROOT" diff --quiet 2>/dev/null \
+       && [ -z "$(git -C "$REPO_ROOT" ls-files --others --exclude-standard 2>/dev/null)" ]; then
+      tree_key=$(git -C "$REPO_ROOT" ls-files -s 2>/dev/null | sha256sum | cut -c1-32)
+    fi
+    if [ -z "$tree_key" ]; then
+      "$@"; return $?
+    fi
+  fi
 
   key=$(
     {
@@ -2609,6 +2852,9 @@ hcached() {   # hcached <gate> <glob>... -- <cmd...>
       # A glob that matched nothing must never look like a match that found nothing
       # to hash: the count is part of the key.
       printf 'inputs=%s\n' "$_f"
+      # `tree=` is part of the key material BY NAME, so a glob-keyed entry can never
+      # collide with a tree-keyed one.
+      if [ "$tree_basis" = 1 ]; then printf 'tree=%s\n' "$tree_key"; fi
       bash --version | head -1
     } 2>/dev/null | sha256sum | cut -c1-32
   )
@@ -2617,13 +2863,20 @@ hcached() {   # hcached <gate> <glob>... -- <cmd...>
     hit_key=$(sed -nE 's/^key=(.*)$/\1/p' "$file" | head -1)
     hit_at=$(sed -nE 's/^at=(.*)$/\1/p' "$file" | head -1)
     hit_secs=$(sed -nE 's/^seconds=(.*)$/\1/p' "$file" | head -1)
+    hit_basis=$(sed -nE 's/^basis=(.*)$/\1/p' "$file" | head -1)
     if [ "$hit_key" = "$key" ] && [ -n "$hit_at" ]; then
       # The TTL is read here, not from a file-level variable: this function must be
       # self-contained, because the self-test extracts it and calls it on its own.
       if [ $(( $(date +%s) - hit_at )) -lt "${HARNESS_CACHE_TTL:-${PREFLIGHT_HARNESS_CACHE_TTL:-604800}}" ]; then
-        echo "harness cache HIT: [$gate] the scripts under test are byte-identical (key $key)."
+        if [ "$hit_basis" = tree ]; then
+          echo "harness cache HIT: [$gate] the whole tracked tree is byte-identical (key $key)."
+          inputs_label=":tree: (every tracked file)"
+        else
+          echo "harness cache HIT: [$gate] the scripts under test are byte-identical (key $key)."
+          inputs_label="${globs[*]}"
+        fi
         echo "  observed pass ${hit_secs:-0}s on $(date -u -d "@$hit_at" '+%Y-%m-%dT%H:%M:%SZ'); nothing re-run for this tree."
-        echo "  standing on: $file (key $key, inputs: ${globs[*]})"
+        echo "  standing on: $file (key $key, inputs: $inputs_label)"
         # run() invokes the gate on the left of `| tee`, i.e. in a subshell, so a
         # variable set here cannot reach the recorder. The observation time is left in
         # a file keyed by the run pid (`$$` is the shell that started the pipeline),
@@ -2646,6 +2899,7 @@ hcached() {   # hcached <gate> <glob>... -- <cmd...>
         echo "key=$key"
         echo "at=$t1"
         echo "seconds=$((t1-t0))"
+        echo "basis=$basis"
         echo "globs=${globs[*]}"
         echo "bash=$(bash --version | head -1)"
       } > "$tmp" 2>/dev/null
@@ -2949,7 +3203,12 @@ fi
 # pass cannot be reused as a full one. The label NAMES THE LIST, so the recorded
 # verdict says exactly what executed instead of implying `./...`.
 TEST_PKGS=(./...)
-if [ -n "$_test_pkgs_trimmed" ]; then
+# `selected test` IS PART OF THE CONDITION, not just an optimisation. The merge train
+# now hands a package list to every diff-mapped batch (it cannot know, from the paths
+# alone, whether `test` is one of the gates that diff selects). Printing "the api test
+# gate is SCOPED to N package(s)" for a run in which the gate never executed, and
+# stamping the record for it, would be a scope claim about work that did not happen.
+if [ -n "$_test_pkgs_trimmed" ] && [ "$g_test" = 1 ]; then
   # WORD SPLITTING, not `read -a`: the list arrives ONE IMPORT PATH PER LINE, and
   # `read -r -a` stops at the first newline — which silently ran ONE package and
   # reported the scope as "8". (Measured: it did exactly that before this line was
@@ -2961,10 +3220,24 @@ if [ -n "$_test_pkgs_trimmed" ]; then
   export PREFLIGHT_KEY_EXTRA="${PREFLIGHT_KEY_EXTRA:+$PREFLIGHT_KEY_EXTRA;}test=scoped"
   printf '\n%s\n' "================================================================"
   printf '%s\n' "PREFLIGHT: the api test gate is SCOPED to ${#TEST_PKGS[@]} package(s) (PREFLIGHT_TEST_PACKAGES)."
-  printf '%s\n' "  Scope: the changed packages plus every package whose build or test"
-  printf '%s\n' "  imports them (the merge train computed it). NOT the full inventory:"
-  printf '%s\n' "  'go test ./...' for the untouched packages was NEVER run here."
-  printf '%s\n' "  The RELEASE gate owes that run on the shipping bytes."
+  case "${PREFLIGHT_TEST_PACKAGES_WHY:-}" in
+    readers)
+      # The list is the DERIVED reader set for a data-only diff (preflight
+      # --test-readers). Saying "changed packages plus importers" here would be a
+      # false description of what ran.
+      printf '%s\n' "  Scope: the api packages whose tests READ the changed data (the merge"
+      printf '%s\n' "  train derived them from the runners' own reads). NOT full coverage:"
+      printf '%s\n' "  NEVER ran: 'go test ./...' for every package outside that set — the"
+      printf '%s\n' "  verdict names how many. The RELEASE gate owes that run on the"
+      printf '%s\n' "  shipping bytes."
+      ;;
+    *)
+      printf '%s\n' "  Scope: the changed packages plus every package whose build or test"
+      printf '%s\n' "  imports them (the merge train computed it). NOT the full inventory:"
+      printf '%s\n' "  'go test ./...' for the untouched packages was NEVER run here."
+      printf '%s\n' "  The RELEASE gate owes that run on the shipping bytes."
+      ;;
+  esac
   printf '%s\n' "  Record stamped test=scoped — it cannot be reused as a full record."
   printf '%s\n' "================================================================"
   # CONSUMED HERE: the value now lives in TEST_PKGS. Unset the transport so nothing
@@ -2974,8 +3247,14 @@ if [ -n "$_test_pkgs_trimmed" ]; then
   # selftest gate of a legitimate scoped run went red ("a no-flag run printed a
   # narrowing notice", "a green record for the whole inventory must be reused" —
   # measured 2026-11-07).
-  unset PREFLIGHT_TEST_PACKAGES
 fi
+# OUTSIDE the branch above, deliberately. The merge train now hands a list to every
+# diff-mapped data-only batch and CANNOT know whether `test` is one of the gates that
+# diff selects (that is the selection's answer, not the paths'). When the gate is not
+# selected there is nothing to narrow, so the list is dropped rather than left in the
+# environment — a nested invocation would otherwise find it, and an inherited list is
+# exactly the shape the no-flag guard above refuses.
+unset PREFLIGHT_TEST_PACKAGES PREFLIGHT_TEST_PACKAGES_WHY
 run test "cd api && go test ${TEST_PKGS[*]} $RACE -count=1 -timeout $API_TEST_TIMEOUT" \
   bash -c "cd '$REPO_ROOT/api' && go test ${TEST_PKGS[*]} $RACE -count=1 -timeout '$API_TEST_TIMEOUT'"
 
@@ -4279,8 +4558,7 @@ selftest_run() {
   bash "$REPO_ROOT/scripts/preflight_test.sh"
 }
 run selftest "gate-runner self-test (empty run refused, missing prereq fails, no gate inventory drift)" \
-  hcached selftest "scripts/*.sh" "scripts/*.md" "GATE-INVENTORY.md" "gate-inventory/*" "deploy/monitoring/*" "docs/PREFLIGHT-REUSE.md" "AGENTS.md" \
-  -- selftest_run
+  hcached selftest :tree: -- selftest_run
 
 # The run reached the END of its inventory: this is the one write that says so.
 # Every earlier flush said `complete: false`, which is why a mid-run or killed

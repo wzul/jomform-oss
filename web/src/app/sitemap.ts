@@ -56,6 +56,10 @@ const APEX_PAGES = [
   "/docs/shipping",
   // Card t_135c3c72: the buyer-borne processing fee guide.
   "/docs/payment-fees",
+  // Card t_1e4c1bba: the setup task page the retired /panduan/surau link 301s to (connect CHIP,
+  // switch methods on, set the platform fee). sitemapCoverage.test.ts pins this list against
+  // every page on disk.
+  "/docs/fees",
   // Card t_7b9f6d18: the screenshot guides. docs/guides/<slug> is real content that had no
   // route; /docs/guides is the index and the two guides are the pages it lists. They are
   // public, canonical-carrying pages like every other guide (sitemapCoverage.test.ts pins

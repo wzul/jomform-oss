@@ -110,12 +110,18 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 	// visible in the export instead of the sale reading as fully paid.
 	//
 	// Card t_8064a965: `fee` and `net` sit beside `total`, because the total a
-	// buyer paid is NOT what the merchant earned — the buyer-borne processing
-	// fee is inside it and is never paid out. `net` is total − fee in the sale's
-	// own currency (the payment's net; a refund is its own column and is not
-	// folded in here, exactly as the /sales row's "You receive" reads). Without
-	// these two columns a merchant reconciling from this file counted the fee as
+	// buyer paid is NOT what the merchant earned — the buyer-borne charge is
+	// inside it and is never paid out. `net` is total − fee in the sale's own
+	// currency (the payment's net; a refund is its own column and is not folded
+	// in here, exactly as the /sales row's "You receive" reads). Without these
+	// two columns a merchant reconciling from this file counted the fee as
 	// income.
+	//
+	// Card t_1a17d22d: `platform_fee` is the flat line JomForm added to the CHIP
+	// purchase, as its own amount beside `fee`. On a platform sale the two are
+	// equal; on a legacy gross-up sale (migration 000090) `fee` carries the
+	// grossed-up component and `platform_fee` is 0.00, which is how a reader can
+	// tell the two models apart without opening the database.
 	//
 	// Issue #185: the money columns are in the SALE's own currency, so the
 	// old `total_rm` / `refunded_rm` / `outstanding_rm` names labelled a USD sale
@@ -126,7 +132,7 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 	// would keep stating the wrong money, and this export is produced by the
 	// merchant's own download button, not a versioned API contract.
 	header := []string{"ref_code", "status", "payment_method", "buyer_name", "buyer_email",
-		"currency", "total", "fee", "net", "created_at", "purchase_id", "table_number",
+		"currency", "total", "fee", "platform_fee", "net", "created_at", "purchase_id", "table_number",
 		"refunded", "outstanding", "refund_status"}
 	if haveSubs {
 		// record_type + submission_id only when the set is actually mixed: a
@@ -151,8 +157,9 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 				s.CurrencyOrMYR(),
 				strconv.FormatFloat(float64(s.TotalSen)/100, 'f', 2, 64),
 				strconv.FormatFloat(float64(s.FeeSen)/100, 'f', 2, 64),
+				strconv.FormatFloat(float64(s.PlatformFeeSen)/100, 'f', 2, 64),
 				// net is what the merchant keeps: the buyer's total minus the
-				// buyer-borne fee, in integer sen before the decimal render.
+				// buyer-borne charge, in integer sen before the decimal render.
 				strconv.FormatFloat(float64(s.TotalSen-s.FeeSen)/100, 'f', 2, 64),
 				s.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				s.ChipPurchaseID, csvguard.Cell(s.TableNumber),
@@ -175,9 +182,9 @@ func writeRecordsCSV(w http.ResponseWriter, records []*dbstore.Record, accountSl
 				"", // a response has no money and therefore no currency
 				"0.00",
 				// fee and net: a response has no payment, so both are zero —
-				// the columns stay present so every row of the file has the
-				// same shape.
-				"0.00", "0.00",
+				// the columns (including platform_fee) stay present so every
+				// row of the file has the same shape.
+				"0.00", "0.00", "0.00",
 				sub.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
 				"", "",
 				"0.00", "0.00", dbstore.RefundNone,

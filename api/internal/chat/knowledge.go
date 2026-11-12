@@ -5,8 +5,8 @@
 // Before this file the system prompt (prompt.go) told the model it was the
 // assistant inside "a Malaysian form-builder and payment product" and then only
 // described the merchant's OWN data: their forms, sales, products. Every fact
-// about how the PRODUCT works — that a processing fee can be passed to the
-// buyer, that shipping can be quoted by a courier, that a donation form is a
+// about how the PRODUCT works — how the per-method platform fee is added, that
+// shipping can be quoted by a courier, that a donation form is a
 // pay-what-you-want product — was left to the model's own priors, so the answer
 // depended on whether the model happened to guess JomForm's rules right. Wan's
 // words: "patutnya agen umum yang tahu dan pandai pasal produk JomForm" (it
@@ -86,63 +86,63 @@ var productFacts = []productFact{
 	{
 		ID:    "payments.fee-setup",
 		Topic: "Payments and fees",
-		Text: "JomForm can pass the CHIP processing fee to the buyer. It is off until the merchant sets it up in " +
-			"Settings → Payment fees, where FPX B2C, FPX B2B1, Card, e-Wallet and DuitNow QR each has its own rate: " +
-			"a fixed sen amount, basis points (100 = 1%), or both. FPX's two products are separate methods with " +
-			"different acquirer fees. The merchant types their acquirer's rate; JomForm does not fill it in. " +
-			"Payments run on the merchant's CHIP credentials.",
+		Text: "JomForm can add a flat PLATFORM FEE to what the buyer pays — its own charge, separate from what " +
+			"CHIP charges the merchant — set in Settings → Payment fees. Every method (FPX B2C, FPX B2B1, Card, " +
+			"e-Wallet, DuitNow QR) has its own amount in sen (RM1.00 = 100); blank means no fee. FPX's two " +
+			"products carry their own amount. A stored PERCENTAGE keeps the old gross-up for one release. " +
+			"Payments run on the merchant's own CHIP credentials.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "FPX B2C, FPX B2B1, Card, e-Wallet and DuitNow QR"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "100 basis points is 1%"},
-			{File: "web/src/app/docs/page.tsx", Anchor: "CHIP payment credentials"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "Set a flat amount per method"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "is one ringgit on every purchase"},
+			{File: "web/src/app/docs/page.tsx", Anchor: "Platform fees paid by the buyer"},
 		},
 	},
 	{
 		ID:    "payments.fee-acknowledgement",
 		Topic: "Payments and fees",
-		Text: "Passing a card surcharge on to the buyer is restricted by card-network and acquirer rules, so the " +
-			"merchant must tick an acknowledgement sentence before any fee reaches a buyer, and the acceptance is " +
-			"recorded with who accepted it and when. One form can opt out of a workspace-wide rate with its own fee " +
-			"override.",
+		Text: "The merchant must tick an acknowledgement sentence before any platform fee reaches a buyer; the " +
+			"acceptance is recorded with who accepted it and when. The sentence says the fee is on top of the " +
+			"price and separate from what CHIP charges the merchant. One form can opt out with its own override.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "I understand this processing fee is passed on to the buyer"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "I understand this platform fee is charged to the buyer"},
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "no fee reaches a buyer"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "A single form can opt out"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "a form can opt out with its fee override"},
 		},
 	},
 	{
 		ID:    "payments.fee-grossup",
 		Topic: "Payments and fees",
-		Text: "The buyer's total is grossed up, not price plus rate: JomForm charges the smallest total that still " +
-			"leaves the merchant the asking price after the fee is taken (RM1,000 at 1% is charged as RM1,010.10, " +
-			"a fee of RM10.10). The buyer sees the method, the fee and the final total before paying, and the " +
-			"payment is restricted to the method they chose.",
+		Text: "The fee is FLAT and added as its own line: the amount the buyer typed is the item line and is " +
+			"never grossed up or recalculated. RM100.00 with a RM1.00 platform fee is charged as RM101.00, and " +
+			"the receipt reads \"Platform fee\" with the amount only — it never names the payment method. A stored " +
+			"percentage keeps the old gross-up for one release (RM1,000 at 1% charged RM1,010.10).",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "smallest total where, after the fee is taken"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "before Proceed to Payment"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "Platform fee, RM 1.00"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "not grossed up and not recalculated"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "marks that row as legacy"},
 		},
 	},
 	{
 		ID:    "payments.fee-refunds",
 		Topic: "Payments and fees",
-		Text: "A refund never recalculates the processing fee. A full refund returns what the buyer actually paid, " +
-			"fee included; a partial refund returns the amount the merchant chooses; and the sale keeps the fee the " +
-			"merchant bore at the rate in force when the buyer paid.",
+		Text: "A refund never recalculates the platform fee. A full refund returns what the buyer actually paid, " +
+			"fee included; a partial refund returns the amount the merchant chooses; and the sale keeps the fee that " +
+			"was frozen when the buyer paid.",
 		Sources: []factSource{
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "a refund is never recalculated"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "does not return the processing fee"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "does not return the platform fee"},
 		},
 	},
 	{
 		ID:    "payments.no-tax-line",
 		Topic: "Payments and fees",
-		Text: "JomForm does not calculate SST or any other tax on a sale: the total is items subtotal + shipping − " +
-			"discount + processing fee, with no tax line, and SST is not calculated on the processing fee in the " +
+		Text: "JomForm does not calculate SST or any other tax on a sale: the total is items + shipping − " +
+			"discount + platform fee, with no tax line, and SST is not calculated on the platform fee in the " +
 			"current release. An e-Invoice (LHDN) line-item document is supported.",
 		Sources: []factSource{
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "items subtotal + shipping − discount + processing fee"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "items + shipping − discount + platform fee"},
 			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "SST is not calculated for this fee in the current release"},
-			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "an LHDN line-item document can carry it"},
+			{File: "web/src/app/docs/payment-fees/page.tsx", Anchor: "part of the amount charged"},
 		},
 	},
 

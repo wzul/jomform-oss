@@ -76,28 +76,36 @@ type SaleRef struct {
 	FormLang      string
 	WorkspaceLang string
 
-	// Card t_135c3c72: the processing fee the buyer bore, and the rate that was
-	// in force when they paid. These are a SNAPSHOT read from the sale row, so a
-	// later rate change cannot rewrite a past receipt. FeeSen == 0 means no fee
-	// line is rendered at all.
+	// The charge the buyer bore, and the snapshot that priced it. These are read
+	// from the SALE row, so a later settings change cannot rewrite a past
+	// receipt. FeeSen == 0 means no fee line is rendered at all.
+	//
+	// Card t_1a17d22d: the line is called "Platform fee" on every buyer surface.
+	// FeeMethod/FeeFixedSen/FeePercentBp stay on the ref because they are the
+	// frozen snapshot a support question is answered from (and a legacy gross-up
+	// sale is identified by a non-zero FeePercentBp), but the receipt no longer
+	// prints a rate or the acquirer's name: that wording described a different
+	// model.
 	FeeSen       int64
 	FeeMethod    string
 	FeeFixedSen  int64
 	FeePercentBp int64
 }
 
-// FeeLine is the receipt's processing-fee line, e.g.
-// "Processing fee — Card 2.00%: RM 10.10". Empty when the buyer bore no fee, so
-// a receipt for a sale without one is byte-identical to before the feature.
+// FeeLine is the receipt's platform-fee line, e.g. "Platform fee: RM 1.00".
+// Empty when the buyer bore no fee, so a receipt for a sale without one is
+// byte-identical to before the feature.
 //
-// The wording comes from the FROZEN snapshot (FeeMethod/FeeFixedSen/
-// FeePercentBp), never from the merchant's current settings.
+// The WORD is JomForm's own (payments.PlatformFeeLineName and formLang's
+// FeeLine), never "processing fee" and never anything that implies the acquirer
+// charged it: CHIP's MDR is the merchant's own cost and is not what this line is.
+// The amount comes from the frozen snapshot (FeeSen), so a later settings change
+// cannot rewrite what a past buyer paid.
 func (r SaleRef) FeeLine() string {
 	if r.FeeSen <= 0 {
 		return ""
 	}
-	return "Processing fee — " + FeeRateLabel(r.FeeMethod, r.FeeFixedSen, r.FeePercentBp) +
-		": RM " + formatSen(r.FeeSen)
+	return PlatformFeeLineName + ": RM " + formatSen(r.FeeSen)
 }
 
 // receiptData is the placeholder context rendered into a receipt template.
@@ -148,9 +156,9 @@ func renderReceipt(ref SaleRef, subject, body, lang string, html bool) (subj, re
 }
 
 // receiptItems is the {{items}} value for a receipt: the item summary, plus the
-// processing fee as its OWN line when the buyer bore one (card t_135c3c72). The
-// fee is never folded into an item's price — a buyer who reads the receipt must
-// be able to see what the goods cost and what the charge for paying was.
+// platform fee as its OWN line when the buyer bore one. The fee is never folded
+// into an item's price — a buyer who reads the receipt must be able to see what
+// the goods cost and what JomForm's charge for paying was.
 func receiptItems(ref SaleRef) string {
 	items := ref.ItemsSummary
 	if line := ref.FeeLine(); line != "" {

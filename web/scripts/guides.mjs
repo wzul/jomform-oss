@@ -45,68 +45,17 @@ const REPO_ROOT = resolve(WEB_DIR, "..");
 const SRC_DIR = join(REPO_ROOT, "docs", "guides");
 const OUT_MODULE = join(WEB_DIR, "src", "lib", "guides.gen.ts");
 const OUT_PUBLIC = join(WEB_DIR, "public", "guides");
-const OUT_PRIVATE_MODULE = join(WEB_DIR, "src", "lib", "guidesPrivate.gen.ts");
 
-// ── PRIVATE GUIDES ───────────────────────────────────────────────────────────
-//
-// A private guide is authored EXACTLY like a public one — `docs/guides/<slug>/README.md` plus
-// one screenshot per step, same red-box convention, same alt text — and it goes through the
-// same validation below. The only difference is where the output lands:
-//
-//   public guide   → src/lib/guides.gen.ts            + public/guides/<slug>/         (+ /docs/guides)
-//   private guide  → src/lib/guidesPrivate.gen.ts     + public/<assets>/             (no index entry)
-//
-// The map is `slug → the asset directory the private page renders its screenshots from`. A slug
-// listed here is REMOVED from GUIDES, so it cannot reach /docs/guides, the docs nav/search
-// registry (web/scripts/docsNav.mjs walks the page tree, not this list), the apex sitemap or
-// llms.txt — the four surfaces that would make it findable. The page that does render it lives
-// outside app/docs (app/panduan/surau) and is noindex by its own metadata; see
-// src/lib/panduanSurau.test.ts for the guards that hold all of that in place.
-const PRIVATE_GUIDES = new Map([["surau-donation", "/panduan/surau"]]);
+// There is no private-guide path any more (card t_1e4c1bba). docs/guides/<slug> is published
+// content: every directory becomes a GUIDES record and a /docs/guides page. The one private
+// guide that used to live here (/panduan/surau) was retired with its route, its screenshots and
+// its separate generated module; a future partner-only guide is a revert of that change, not a
+// second output path nobody uses.
 
 const CHECK = process.argv.includes("--check");
 
 const problems = [];
 const fail = (msg) => problems.push(msg);
-
-// ── DETAIL CROPS (card t_e1ea03a2) ───────────────────────────────────────────
-//
-// A capture is a 1900 px full-page screenshot: correct for a desktop docs page, unreadable as a
-// phone thumbnail — at the 358 px article column of a 390 px viewport it is a 0.19x scale, so a
-// 16 px label inside the capture lands at 3 px. A guide whose figures ARE the instructions
-// (the private surau guide, read by a volunteer committee) therefore renders a CROP of each
-// capture and links to the full PNG for pinch-zoom.
-//
-// The crop is declared as DATA — `crops.json` next to the README, one rect per screenshot — and
-// applied HERE, at sync time. Deriving it rather than committing a second set of PNGs is what
-// makes it safe to re-capture: the thumbnail is a function of the full capture and the rect, so
-// replacing a capture cannot silently leave a stale thumbnail behind, and no rect can drift from
-// the bytes on disk. The full PNG is written unchanged; it stays the zoom target.
-//
-// `crops.json`:
-//   { "shots": { "<file>.png": { "x": 120, "y": 560, "width": 820, "height": 310 } } }
-//
-// Only a PRIVATE guide may declare crops: the zoom target is a URL its own page's image resolver
-// builds (src/lib/panduanSurauPage.ts), and a public /docs/guides figure has no such link — it
-// would render a crop a reader could not enlarge. So a crops.json in a public guide is refused.
-const DETAIL_DIR = "detail";
-let sharpModule = null;
-/** sharp, loaded only when a guide actually declares crops (the sync path is otherwise image-free). */
-async function loadSharp() {
-  if (!sharpModule) {
-    try {
-      sharpModule = (await import("sharp")).default;
-    } catch (err) {
-      console.error(
-        `guides: docs/guides declares detail crops but "sharp" is not installed in ${WEB_DIR} ` +
-          `(${err.message}). It ships as Next's image dependency, so \`npm install\` in web/ ` +
-          `provides it — the crop cannot be derived without it.`,
-      );
-      process.exit(1);
-    }
-  }
-  return sharpModule;
-}
 
 /** Width/height from a PNG's IHDR chunk — the page needs them so an <img> cannot shift layout. */
 function pngSize(buf, file) {
@@ -143,65 +92,6 @@ function plainSummary(md) {
   const cut = text.slice(0, 200);
   const at = cut.lastIndexOf(" ");
   return `${cut.slice(0, at > 120 ? at : 200)}…`;
-}
-
-/**
- * The guide's detail crops, from `crops.json` next to the README (see DETAIL CROPS above), or
- * null when the guide renders its captures whole. Every rect is checked against the capture it
- * crops, and a guide may not crop only some of its steps: a half-cropped guide is a guide whose
- * remaining steps are still 0.19x on a phone.
- */
-function readCrops(dir, slug, shots) {
-  const file = join(dir, "crops.json");
-  if (!existsSync(file)) return null;
-  let doc;
-  try {
-    doc = JSON.parse(readFileSync(file, "utf8"));
-  } catch (err) {
-    fail(`docs/guides/${slug}/crops.json: not valid JSON (${err.message})`);
-    return null;
-  }
-  const declared = doc?.shots;
-  if (!declared || typeof declared !== "object" || Array.isArray(declared)) {
-    fail(`docs/guides/${slug}/crops.json: no "shots" object mapping <file>.png to {x,y,width,height}`);
-    return null;
-  }
-  const byFile = new Map(shots.map((s) => [s.file, s]));
-  const crops = new Map();
-  for (const [name, rect] of Object.entries(declared)) {
-    const shot = byFile.get(name);
-    if (!shot) {
-      fail(
-        `docs/guides/${slug}/crops.json declares a crop for "${name}", which the README never ` +
-          `references — a crop of an image nothing displays.`,
-      );
-      continue;
-    }
-    const integral = rect && ["x", "y", "width", "height"].every((k) => Number.isInteger(rect[k]) && rect[k] >= 0);
-    if (
-      !integral ||
-      rect.width === 0 ||
-      rect.height === 0 ||
-      rect.x + rect.width > shot.width ||
-      rect.y + rect.height > shot.height
-    ) {
-      fail(
-        `docs/guides/${slug}/crops.json: "${name}" is not an integer {x,y,width,height} rect inside ` +
-          `the ${shot.width}x${shot.height} capture.`,
-      );
-      continue;
-    }
-    crops.set(name, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
-  }
-  const missing = shots.filter((s) => !crops.has(s.file)).map((s) => s.file);
-  if (missing.length > 0) {
-    fail(
-      `docs/guides/${slug}/crops.json crops ${crops.size} of ${shots.length} screenshots; ` +
-        `${missing.join(", ")} would still render at its full width (0.19x on a 390px phone). ` +
-        `Crop every shot, or delete crops.json — a guide cannot be half-legible.`,
-    );
-  }
-  return crops.size > 0 ? crops : null;
 }
 
 /** One guide directory → the record the page renders. */
@@ -296,7 +186,7 @@ function readGuide(slug) {
     body = `${paragraphs.join("\n\n").replace(/^\n+/, "").replace(/\s+$/, "")}\n`;
   }
 
-  return { slug, title, summary: plainSummary(lede), body, shots, crops: readCrops(dir, slug, shots) };
+  return { slug, title, summary: plainSummary(lede), body, shots };
 }
 
 // ── read the source guides ───────────────────────────────────────────────────
@@ -308,37 +198,7 @@ const slugs = readdirSync(SRC_DIR, { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => e.name)
   .sort();
-// A slug in PRIVATE_GUIDES is read by the SAME reader and validated by the SAME rules, then
-// routed to the private outputs — it never enters `guides`, so it cannot be listed publicly.
-const publicSlugs = slugs.filter((s) => !PRIVATE_GUIDES.has(s));
-const privateSlugs = slugs.filter((s) => PRIVATE_GUIDES.has(s));
-const guides = publicSlugs.map(readGuide).filter((g) => g !== null);
-const privateGuides = privateSlugs
-  .map(readGuide)
-  .filter((g) => g !== null)
-  .map((g) => ({ ...g, assets: PRIVATE_GUIDES.get(g.slug) }));
-
-// A PUBLIC guide may not declare crops (see DETAIL CROPS above): /docs/guides figures are not
-// links, so a crop there is a figure the reader can never enlarge — the exact complaint this
-// crop exists to answer. Only the private page's resolver knows the full-size URL.
-for (const g of guides) {
-  if (g.crops) {
-    fail(
-      `docs/guides/${g.slug}/crops.json: only a PRIVATE guide may declare detail crops. A ` +
-        `/docs/guides figure renders through GuideArticle, which does not link it to its full ` +
-        `capture, so a crop there would leave the reader with no way to enlarge it.`,
-    );
-  }
-}
-
-// A private guide that has a page but no source is an orphan page whose prose nobody can edit;
-// a source directory for a private page the app does not render is a guide nobody can reach.
-for (const g of privateGuides) {
-  const page = join(WEB_DIR, "src", "app", g.assets.replace(/^\//, ""), "page.tsx");
-  if (!existsSync(page)) {
-    fail(`docs/guides/${g.slug} is listed as a private guide but ${page} does not exist — the guide would never render`);
-  }
-}
+const guides = slugs.map(readGuide).filter((g) => g !== null);
 
 if (problems.length > 0) {
   console.error(`guides: ${problems.length} problem(s), nothing written:\n  ${problems.join("\n  ")}`);
@@ -376,7 +236,7 @@ export type Guide = {
   shots: GuideShot[];
 };
 
-export const GUIDES: Guide[] = ${JSON.stringify(guides.map(({ crops, ...g }) => g), null, 2)};
+export const GUIDES: Guide[] = ${JSON.stringify(guides, null, 2)};
 
 /** The guide a page renders. Throws at build time rather than shipping a blank page. */
 export function guideBySlug(slug: string): Guide {
@@ -391,79 +251,6 @@ export function guideBySlug(slug: string): Guide {
 }
 `;
 
-// ── the private module ───────────────────────────────────────────────────────
-const privateGenerated = `// GENERATED FILE — do not edit. Run \`npm run guides:sync\` (web/scripts/guides.mjs).
-//
-// The PRIVATE guides: authored in docs/guides/<slug>/ exactly like the public ones, but with a
-// page outside app/docs that is noindex and linked from nowhere in the repo. They are kept in a
-// separate module so /docs/guides (which maps GUIDES) cannot list one by accident, and the docs
-// registry, sitemap, search index and llms.txt never see them.
-//
-// Source of truth: docs/guides/<slug>/README.md + its screenshots. The screenshots are copied to
-// web/public/<assets>/ (the \`assets\` field below is that directory), NOT to public/guides/.
-
-export type PrivateGuideShot = {
-  /** Bare filename, exactly as the README writes it: ![](01-step.png). */
-  file: string;
-  /** Intrinsic PNG size of the FULL capture — the zoom target, and the intrinsic size of the
-   *  <a href> it is opened at. The figure itself renders \`detail\` when there is one. */
-  width: number;
-  height: number;
-  /**
-   * The INLINE figure: a crop of \`file\` (docs/guides/<slug>/crops.json), sized to stay legible at
-   * the width of a phone — see src/lib/panduanSurau.test.ts for the scale floor it must meet.
-   * \`path\` is relative to the guide's \`assets\` directory. null: the capture renders whole.
-   */
-  detail: PrivateGuideDetail | null;
-};
-
-export type PrivateGuideDetail = {
-  /** Path under the guide's \`assets\` directory: "detail/<file>". */
-  path: string;
-  width: number;
-  height: number;
-};
-
-export type PrivateGuide = {
-  slug: string;
-  /** The README's \`# …\` line. The page renders it as its <h1>; it is removed from body. */
-  title: string;
-  /** The README's first paragraph, rendered as the page's lede (and removed from body). */
-  summary: string;
-  /** The README with the title line and the lede removed, rendered through <Markdown mode="docs">. */
-  body: string;
-  shots: PrivateGuideShot[];
-  /** Public directory the screenshots were copied to, e.g. "/panduan/surau". */
-  assets: string;
-};
-
-export const PRIVATE_GUIDES: PrivateGuide[] = ${JSON.stringify(
-  privateGuides.map(({ crops, ...g }) => ({
-    ...g,
-    shots: g.shots.map((s) => ({
-      ...s,
-      detail: crops?.get(s.file)
-        ? { path: `${DETAIL_DIR}/${s.file}`, width: crops.get(s.file).width, height: crops.get(s.file).height }
-        : null,
-    })),
-  })),
-  null,
-  2,
-)};
-
-/** The private guide a page renders. Throws at build time rather than shipping a blank page. */
-export function privateGuideBySlug(slug: string): PrivateGuide {
-  const guide = PRIVATE_GUIDES.find((g) => g.slug === slug);
-  if (!guide) {
-    throw new Error(
-      \`no private guide "\${slug}" in src/lib/guidesPrivate.gen.ts — run \\\`npm run guides:sync\\\`. \` +
-        \`Known slugs: \${PRIVATE_GUIDES.map((g) => g.slug).join(", ")}\`,
-    );
-  }
-  return guide;
-}
-`;
-
 // ── the screenshots ──────────────────────────────────────────────────────────
 const writes = []; // { path, data }
 for (const g of guides) {
@@ -471,53 +258,13 @@ for (const g of guides) {
     writes.push({ path: join(OUT_PUBLIC, g.slug, shot.file), data: readFileSync(join(SRC_DIR, g.slug, shot.file)) });
   }
 }
-for (const g of privateGuides) {
-  const outDir = join(WEB_DIR, "public", g.assets.replace(/^\//, ""));
-  for (const shot of g.shots) {
-    const src = join(SRC_DIR, g.slug, shot.file);
-    writes.push({ path: join(outDir, shot.file), data: readFileSync(src) });
-    // The inline figure: the SAME bytes as the capture, cropped to the declared rect. Derived
-    // here (not committed) so a re-captured screenshot is re-cropped by the same command that
-    // copies it — see DETAIL CROPS above.
-    const crop = g.crops?.get(shot.file);
-    if (crop) {
-      const sharp = await loadSharp();
-      writes.push({
-        path: join(outDir, DETAIL_DIR, shot.file),
-        data: await sharp(src)
-          .extract({ left: crop.x, top: crop.y, width: crop.width, height: crop.height })
-          // compressionLevel 9: these are static assets served from public/, and a crop of a
-          // mostly-white dashboard UI compresses well. No resize, no palette: the crop is 1:1.
-          .png({ compressionLevel: 9 })
-          .toBuffer(),
-      });
-    }
-  }
-}
 writes.push({ path: OUT_MODULE, data: Buffer.from(generated, "utf8") });
-writes.push({ path: OUT_PRIVATE_MODULE, data: Buffer.from(privateGenerated, "utf8") });
 
 // Files that are no longer generated — a renamed or removed step would otherwise linger in
-// public/ and be shipped forever. Only the directories this script owns are swept: one per public
-// guide, plus one per private guide's asset directory. Nothing else under public/ is touched.
+// public/ and be shipped forever. Only the directories this script owns are swept: one per guide.
+// Nothing else under public/ is touched.
 const stale = [];
-const ownedDirs = [
-  ...guides.map((g) => ({ dir: join(OUT_PUBLIC, g.slug), slug: g.slug, shots: g.shots })),
-  ...privateGuides.map((g) => ({
-    dir: join(WEB_DIR, "public", g.assets.replace(/^\//, "")),
-    slug: g.slug,
-    shots: g.shots,
-    // The detail crops live in a subdirectory this script also owns; without this entry a
-    // renamed step's crop would linger there forever (the parent sweep cannot descend).
-    subdirs: g.crops ? [DETAIL_DIR] : [],
-  })),
-  ...privateGuides.map((g) => ({
-    dir: join(WEB_DIR, "public", g.assets.replace(/^\//, ""), DETAIL_DIR),
-    slug: g.slug,
-    shots: g.crops ? g.shots : [],
-    subdirs: [],
-  })),
-];
+const ownedDirs = guides.map((g) => ({ dir: join(OUT_PUBLIC, g.slug), slug: g.slug, shots: g.shots }));
 if (existsSync(OUT_PUBLIC)) {
   for (const slug of readdirSync(OUT_PUBLIC, { withFileTypes: true })) {
     if (!slug.isDirectory()) {
@@ -550,10 +297,7 @@ if (CHECK) {
     console.error(`guides: out of date — run \`npm run guides:sync\`:\n  ${drift.join("\n  ")}`);
     process.exit(1);
   }
-  console.log(
-    `guides: ${guides.length} guide(s) in sync (${guides.map((g) => g.slug).join(", ")})` +
-      (privateGuides.length > 0 ? ` + ${privateGuides.length} private (${privateGuides.map((g) => g.slug).join(", ")})` : ""),
-  );
+  console.log(`guides: ${guides.length} guide(s) in sync (${guides.map((g) => g.slug).join(", ")})`);
   process.exit(0);
 }
 
@@ -574,17 +318,6 @@ for (const s of stale) {
   }
 }
 console.log(
-  `guides: wrote ${guides.length} guide(s) and ${writes.length - 2} screenshot(s) ` +
-    `→ src/lib/guides.gen.ts + public/guides/` +
-    (privateGuides.length > 0
-      ? `; ${privateGuides.length} private guide(s) → src/lib/guidesPrivate.gen.ts + ${privateGuides
-          .map((g) => `public${g.assets}/`)
-          .join(", ")}` +
-        (privateGuides.some((g) => g.crops)
-          ? ` (${privateGuides.reduce((n, g) => n + (g.crops ? g.crops.size : 0), 0)} detail crop(s) → public${privateGuides
-              .filter((g) => g.crops)
-              .map((g) => `${g.assets}/${DETAIL_DIR}/`)
-              .join(", ")})`
-          : "")
-      : ""),
+  `guides: wrote ${guides.length} guide(s) and ${writes.length - 1} screenshot(s) ` +
+    `→ src/lib/guides.gen.ts + public/guides/`,
 );

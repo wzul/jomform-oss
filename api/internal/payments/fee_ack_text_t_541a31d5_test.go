@@ -82,7 +82,7 @@ func readMigration(t *testing.T, name string) string {
 	return string(b)
 }
 
-const canonicalFeeAck = "I understand this processing fee is passed on to the buyer and is subject to acquirer/card-issuer rules."
+const canonicalFeeAck = "I understand this platform fee is charged to the buyer on top of the price and is separate from the fee CHIP charges me."
 
 // TestFeeAcknowledgementTextIsTheCanonicalEnglishSentence is the reported defect.
 func TestFeeAcknowledgementTextIsTheCanonicalEnglishSentence(t *testing.T) {

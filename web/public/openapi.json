@@ -3718,7 +3718,7 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Read a form's processing-fee override",
+        "summary": "Read a form's fee override",
         "tags": [
           "Forms"
         ],
@@ -3791,7 +3791,7 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Set a form's processing-fee override ('' inherit, 'off' switch off)",
+        "summary": "Set a form's fee override ('' inherit, 'off' switch off)",
         "tags": [
           "Forms"
         ],
@@ -7186,7 +7186,7 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Read per-method processing-fee rates + acknowledgement",
+        "summary": "Read the per-method platform fee + acknowledgement",
         "tags": [
           "Settings"
         ],
@@ -7248,7 +7248,7 @@
             "description": "The credential is not allowed to do this: a readonly key on a write, or a ?workspace= scope the caller has no manage/admin role in."
           }
         },
-        "summary": "Set per-method processing-fee rates (requires the pass-on acknowledgement)",
+        "summary": "Set the per-method platform fee (requires the disclosure acknowledgement)",
         "tags": [
           "Settings"
         ],

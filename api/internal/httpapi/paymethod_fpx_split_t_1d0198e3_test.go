@@ -46,7 +46,7 @@ func payMethodRadios(t *testing.T, body string) []map[string]string {
 	var out []map[string]string
 	for _, input := range re.FindAllString(body, -1) {
 		row := map[string]string{"html": input}
-		for _, attr := range []string{"value", "data-name", "data-fixed", "data-bp"} {
+		for _, attr := range []string{"value", "data-name", "data-platform", "data-fixed", "data-bp"} {
 			if m := regexp.MustCompile(attr + `="([^"]*)"`).FindStringSubmatch(input); m != nil {
 				row[attr] = m[1]
 			}

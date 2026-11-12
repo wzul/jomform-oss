@@ -14,30 +14,26 @@ every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (
 `a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
 gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
 `testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
-**324 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
+**322 tests in 61 files**: sales, chat, forms, form settings, settings/workspaces,
 products, media, templates, deliveries, activity, landing, login, session, profile,
 docs and the cross-page presentation specs.
 
-The 63 → 62 FILE and 325 → 324 test drop is this PR (card `t_9efc5ed7`,
-wzul/jomform #1708): it deletes `web/e2e/chip-mode-choice.spec.ts` — ONE arm, "a
-stored mode renders as the selected choice, and choosing Live saves live" — and that
-spec's `web/e2e/areas.tsv` row, because the Test/Live mode control it drove is gone
-from the settings CHIP card. That is the only spec and the only area mapping the PR
-removes and nothing else moved (the `a11y` family on the same tree reads 217 in 23,
-and `e2e-builder` 56 in 17). Measured on the MERGED tree (`origin/main` `11ce49ab6` +
-this PR, merge commit `2ba0e541a`) with `cd web && ./node_modules/.bin/playwright test
---project=feature-core --list`. The figure before it was **325 tests in 63 files**
-(that figure, and the paragraph below that counts `panduan-surau-shot-scale.spec.ts`
-as the 63rd file, are the shape of the family BEFORE this deletion — the file it names
-is this family's 62nd now).
+The 63 → 61 FILE and 325 → 322 test drop is the MERGE of two PRs that each deleted one
+spec and its `web/e2e/areas.tsv` row, and nothing else moved. Card `t_9efc5ed7`
+(wzul/jomform #1708) deletes `web/e2e/chip-mode-choice.spec.ts` — ONE arm, "a stored
+mode renders as the selected choice, and choosing Live saves live" — because the
+Test/Live mode control it drove is gone from the settings CHIP card. Card `t_1e4c1bba`
+(this PR, wzul/jomform #1712) deletes `web/e2e/panduan-surau-shot-scale.spec.ts` — 2
+arms on the nine figures of the private `/panduan/surau` guide, which is retired and now
+301s to `/docs/fees`, so a page with no figures has nothing to measure. Together they
+remove exactly 2 spec files, 3 arms and 2 area rows. The figure is MEASURED on this
+merged tree with `cd web && ./node_modules/.bin/playwright test --project=feature-core
+--list`, which reads **322 in 61** (the `a11y` family on the same tree reads 218 in 23,
+and `e2e-builder` 56 in 17). The figure before either deletion was **325 tests in 63
+files** — the two paragraphs below are its shape: the surau spec was its 63rd FILE, and
+`surau-donation`'s own screenshots and guide page are gone with it.
 
-The 63rd FILE is `web/e2e/panduan-surau-shot-scale.spec.ts` (card `t_e1ea03a2`): 2 arms on the
-nine figures of `/panduan/surau` — at a 390px phone viewport every figure renders at >= 0.45x
-its own natural width, edge to edge, and links to the full 1900px capture, which answers 2xx;
-at 1280px the figures stay in the article column. Read with `playwright test
---project=feature-core --list` on the tree that merges that card.
-
-The figure before that was **323 tests in 62 files**; before it, **317 tests in 61 files**, which card `t_516bab9d` grew with
+The figure before the surau spec was **323 tests in 62 files**; before it, **317 tests in 61 files**, which card `t_516bab9d` grew with
 `web/e2e/landing-usecases-mobile.spec.ts` — the 62nd FILE, 6 arms on the seven use-case
 cards of `/landing` at a real 390px viewport (isMobile/hasTouch/dpr 2): one arm per locale
 (en/ms/zh/ta/ar) asserting per card that it renders <= 55 words, a lead <= 20 words, four

@@ -1417,10 +1417,10 @@ var formTmpl = template.Must(template.New("form").Funcs(formFuncs).Parse(withMot
     <input type="tel" name="phone">
     {{if .FeeOptions}}<div class="jf-fees">
     {{if gt (len .FeeOptions) 1}}<div class="sub">{{.Ls.FeeChoose}}</div>{{end}}
-    {{range .FeeOptions}}<label class="prod"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}"{{if .Selected}} checked{{end}}> <span class="pname">{{.RateLabel}}</span></label>{{end}}
+    {{range .FeeOptions}}<label class="prod"><input type="radio" name="fee_method" class="feee" value="{{.Method}}" data-platform="{{.PlatformFeeSen}}" data-fixed="{{.FixedSen}}" data-bp="{{.PercentBP}}" data-name="{{.RateLabel}}"{{if .Selected}} checked{{end}}> <span class="pname">{{.RateLabel}}</span></label>{{end}}
     </div>{{end}}
     {{if .FeeOptions}}<div class="total"><span>{{.Ls.FeeSubtotal}}</span><span id="fee-sub">RM0.00</span></div>
-    <div class="total"><span>{{.Ls.FeeLine}} <small id="fee-rate"></small></span><span id="fee-amt">RM0.00</span></div>{{end}}
+    <div class="total"><span>{{.Ls.FeeLine}}</span><span id="fee-amt">RM0.00</span></div>{{end}}
     <div class="total"><span>{{.Ls.Total}}</span><span id="total">RM0.00</span></div>
     {{.AntiSpam}}
     <button type="submit">{{.Ls.Submit}}</button>
@@ -1450,10 +1450,15 @@ document.querySelectorAll('img.pimg[data-base]').forEach(function(im){
   },{once:true});
 });
 const boxes = document.querySelectorAll('.p');
-// Card t_135c3c72: the buyer bears the processing fee of the method they pick,
+// Card t_1a17d22d: the buyer's charge is a PLATFORM FEE — a flat amount added on
+// top of the price, shown as its own line. The price the buyer typed does not
+// move.
+//
+// Card t_135c3c72 (legacy gross-up, one release — migration 000090): a stored
+// PERCENTAGE rate still raises the total so the merchant nets the asking amount,
 // and the price shown must be the price paid — so this layout prices and shows
-// the grossed-up total before the buyer commits, with the SAME integer formula
-// the server uses:
+// that total before the buyer commits, with the SAME integer formula the server
+// uses:
 //   fee(F) = fixed + floor((F*bp + 5000)/10000)   [round half up]
 //   F = smallest integer with F - fee(F) >= base
 // The naive formula (base + base*rate) is 10 sen short on RM1,000 at 1%.
@@ -1461,12 +1466,13 @@ let jfTotal = 0;
 function update() {
   let total = 0;
   boxes.forEach(b => { if (b.checked) total += Number(b.dataset.price); });
-  // total is the asking price of the checked items; the gross-up below raises
-  // it to what the buyer pays once the processing fee is included.
+  // total is the asking price of the checked items; the fee below raises it to
+  // what the buyer pays.
   const base = total;
   const fr = document.querySelector('input.feee:checked');
   const fx = fr ? Number(fr.dataset.fixed || 0) : 0;
   const bp = fr ? Number(fr.dataset.bp || 0) : 0;
+  const pf = fr ? Number(fr.dataset.platform || 0) : 0;
   const feeOf = v => fx + Math.floor((v*bp + 5000)/10000);
   // Card t_c19c095f: an EMPTY cart is not a zero-priced order. The server
   // charges the FIXED part of the fee on a zero asking amount (deliberate for a
@@ -1476,7 +1482,9 @@ function update() {
   // selection still grosses up, because that is what the server charges.
   let hasSelection = false;
   boxes.forEach(b => { if (b.checked) hasSelection = true; });
-  if ((fx > 0 || bp > 0) && hasSelection) {
+  if (pf > 0 && hasSelection) {
+    total = base + pf;
+  } else if ((fx > 0 || bp > 0) && hasSelection) {
     let f = Math.ceil((base + fx) * 10000 / Math.max(1, 10000 - bp));
     if (!isFinite(f) || f < base) f = base;
     while (f - feeOf(f) < base) f++;
@@ -1487,9 +1495,12 @@ function update() {
   const fs = document.getElementById('fee-sub');
   if (fs) fs.textContent = 'RM' + (base/100).toFixed(2);
   const fa = document.getElementById('fee-amt');
-  if (fa) fa.textContent = 'RM' + ((total - base)/100).toFixed(2);
-  const frl = document.getElementById('fee-rate');
-  if (frl && fr) frl.textContent = '— ' + (fr.parentNode.textContent || '').trim();
+  if (fa) fa.textContent = 'RM' + ((total - base) / 100).toFixed(2);
+  // Card t_69d2dd19 (Wan's rule): the fee ROW is the amount only. It used to
+  // append the chosen method's rate label ("— FPX RM1.00"), which is a
+  // buyer-facing fee line naming the payment method. The method is already
+  // named by the picker above and by the Pay button; repeating it on the fee
+  // line is what the rule forbids.
   jfTotal = total;
 }
 boxes.forEach(b => b.addEventListener('change', update));

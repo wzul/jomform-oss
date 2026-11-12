@@ -36,14 +36,16 @@ const DESTINATION_FACTS: Record<string, string[]> = {
     "disconnect_shipping_courier",
     "never silently zero",
   ],
-  // Card t_135c3c72: the buyer-borne processing fee. The facts a reader must be
-  // told on the guide: both MCP tools, the gross-up, and the disclosure rule.
-  "Processing fees paid by the buyer": [
+  // Cards t_135c3c72 and t_1a17d22d: the buyer-borne charge, now a PLATFORM FEE.
+  // The facts a reader must be told on the guide: both MCP tools, the flat line
+  // that leaves the buyer's amount untouched, the pre-payment disclosure, and the
+  // refund rule.
+  "Platform fees paid by the buyer": [
     "get_payment_fees",
     "set_payment_fees",
-    "grossed up",
+    "Platform fee (flat, per method)",
     "before paying",
-    "does not return the processing fee",
+    "does not return the platform fee",
   ],
   "Sales": [
     "reference code",
@@ -270,9 +272,9 @@ const PER_ENTRY_FLOOR: Record<string, number> = {
   // guide and its fact list together (the floor exists to notice a list being
   // shortened to suit itself, so it moves WITH the list, in the same change).
   "Shipping by zone": 6,
-  // Card t_135c3c72: five facts on the payment-fee guide (both MCP tools, the
-  // gross-up, the pre-payment disclosure, the refund rule).
-  "Processing fees paid by the buyer": 5,
+  // Cards t_135c3c72 / t_1a17d22d: five facts on the platform-fee guide (both
+  // MCP tools, the products line, the pre-payment disclosure, the refund rule).
+  "Platform fees paid by the buyer": 5,
   Sales: 5,
   "One list for sales and responses": 4,
   "Responses (response-only forms)": 3,
