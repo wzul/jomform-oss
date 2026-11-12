@@ -5777,6 +5777,157 @@ S50OLD
 fi
 rm -rf "$s50"
 
+# 51. A RED GATE MUST NOT DELETE THE EVIDENCE THAT SAYS WHAT FAILED (card t_e2a3cf23).
+#
+#     THE DEFECT. `gate_record_fail_exit` used a gate's captured output only to
+#     CLASSIFY the failure and then deleted it, so a red record carried `"log": ""`.
+#     Measured on the v1.36.0 release tree (db4cae6 / commit 4c7ab94d7): `test` failed
+#     after 710s and `e2e-core` after 850s, and no record could say WHICH package or
+#     spec failed. Both had to be re-run blind (426s + 391s) and both PASSED on the
+#     byte-identical tree, so two real reds became unattributable intermittents. A
+#     release that ships on a bypassed gate cannot afford "the gate was red
+#     yesterday, re-run it" as its only diagnostic.
+#
+#     THE PROPERTY, asserted on a REAL failed run in the sandbox (every gate there
+#     fails fast on a missing prerequisite, so `--only <one gate>` is a genuine red):
+#       (a) the record's `log` names a file that EXISTS and is NOT EMPTY, that file
+#           carries the gate's own failing line (the first line the run streamed for
+#           it — what the human at the terminal saw), and the record's `log_tail`
+#           holds exactly the last 80 lines of that file, escaped once;
+#       (b) THE BITE: the same run against a COPY whose preserve step is a no-op
+#           must leave `log: ""` and keep no file. Without this leg the check could
+#           stay green on a runner that preserves nothing;
+#       (c) the kept-log store is BOUNDED: planted files older than the age window
+#           and beyond the count cap are deleted by the pruner the preserve step
+#           calls, so a host with 1781 records cannot grow logs for ever.
+if [ -n "$probe_tree" ]; then
+  rm -rf "$RECORD_DIR/logs"
+  # THE RECORD IS KEYED ON THE TREE AT RUN TIME, NOT ON $probe_tree. Checks after
+  # line 2735 legitimately change the sandbox (check 44 appends to GATE-INVENTORY.md
+  # and commits, to give `--for-diff` a base), so $probe_tree describes the sandbox
+  # as it WAS. Computing the path from the current tree is what makes this check
+  # measure its own run instead of reading a file that run never wrote. The pre-run
+  # delete keeps a record from an earlier check from being offered as a reuse.
+  rm -f "$(gr_file "$(gr_tree_sha "$SB" 2>/dev/null)")"
+  out51="$( (cd "$SB" && PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" 2>&1) )"
+  rc51=$?
+  rec="$(gr_file "$(gr_tree_sha "$SB" 2>/dev/null)")"
+  log51=""; tail51=""
+  if [ -r "$rec" ]; then
+    log51="$(gr_read_field "$rec" log)"
+    tail51="$(gr_read_field "$rec" log_tail)"
+  fi
+  # THE FAILING LINE AS THE RUN PRINTED IT: the first non-blank line after the
+  # gate's banner. Taken from the RUN's output, not from the kept file, so the two
+  # are independent evidence.
+  fail51="$(printf '%s\n' "$out51" | awk -v pat="==> gate [$probe_gate]:" 'index($0, pat) { f=1; next } f && /[^[:space:]]/ { print; exit }')"
+  s51_bad=""
+  if [ "$rc51" -eq 0 ]; then
+    s51_bad="the run exited 0 — every gate is expected to fail fast in this sandbox, so there is no red gate to attribute"
+  elif [ ! -r "$rec" ]; then
+    s51_bad="the run wrote NO record for the sandbox tree (rc=$rc51, expected [$rec]) — nothing can be attributed from a record that does not exist; last output [$(printf '%s' "$out51" | tail -n 1)]"
+  elif [ -z "$log51" ]; then
+    s51_bad="the RED gate recorded log:\"\" — its output was deleted, so nobody can say what failed (the defect this check exists for)"
+  elif [ ! -s "$log51" ]; then
+    s51_bad="the record names [$log51] but that file is missing or empty — it points at evidence that does not exist"
+  elif [ -z "$fail51" ]; then
+    s51_bad="premise broken: the run streamed no gate output between '$probe_gate' and its failure, so 'contains the failing line' cannot be measured"
+  elif ! grep -qxF -- "$fail51" "$log51"; then
+    s51_bad="the kept log does not contain the failing line the run printed ([$fail51]) — the record points at the wrong output"
+  else
+    s51_exp="$(tail -n 80 "$log51" 2>/dev/null | tail -c 12000)"
+    s51_exp_json="$(gr_json_escape_text "$s51_exp")"
+    if [ -z "$tail51" ]; then
+      s51_bad="the record's log_tail is empty — a reader with only the JSON still cannot name the failure"
+    elif [ "$tail51" != "$s51_exp_json" ]; then
+      s51_bad="log_tail is not the last 80 lines of the kept log escaped once: got [$(printf '%.140s' "$tail51")] expected [$(printf '%.140s' "$s51_exp_json")]"
+    elif command -v python3 >/dev/null 2>&1 && ! python3 -c 'import json,sys
+json.load(open(sys.argv[1]))' "$rec" >/dev/null 2>&1; then
+      s51_bad="the record is not valid JSON once log_tail is present — a reader that parses it (jq, python, a dashboard) cannot read the failure the field exists for"
+    fi
+    # THE ESCAPER ITSELF, on the shapes a gate log actually contains: quotes,
+    # backslashes, tabs and blank lines. A one-line sandbox gate would not exercise
+    # any of them, and a mangled escape corrupts the WHOLE record (every reader in
+    # gate_result.sh is a line-anchored sed).
+    if [ -z "$s51_bad" ] && command -v python3 >/dev/null 2>&1; then
+      s51_raw="$(printf 'first "quoted" \\ back\nsecond\tline\n\nlast')"
+      s51_esc="$(gr_json_escape_text "$s51_raw")"
+      if ! python3 -c 'import json,sys
+sys.exit(0 if json.loads("\"" + sys.argv[1] + "\"") == sys.argv[2] else 1)' "$s51_esc" "$s51_raw"; then
+        s51_bad="gr_json_escape_text does not round-trip a multi-line value with quotes, backslashes and tabs (got [$s51_esc])"
+      fi
+    fi
+  fi
+  if [ -n "$s51_bad" ]; then
+    bad "check 51 (a) — $s51_bad"
+  else
+    ok "check 51 (a) — a red gate keeps its output: the record's log names [$log51] ($(wc -c < "$log51") bytes), the file carries the failing line the run printed, and log_tail is exactly its last 80 lines"
+  fi
+
+  # ---- (b) THE BITE: remove the preserve step and the record must say log:"" ----
+  s51_mut="$SB_STATE/s51-mutant"
+  rm -rf "$s51_mut"
+  cp -a "$SB" "$s51_mut"
+  s51_mut_script="$s51_mut/scripts/preflight.sh"
+  sed -i '/^gate_keep_failure_log() {/a\  return 0  # S51 MUTANT: the preserve step removed' "$s51_mut_script"
+  s51_landed=no
+  s51_next=""
+  if grep -qF 'S51 MUTANT' "$s51_mut_script"; then
+    s51_next="$(sed -n '/^gate_keep_failure_log() {/{n;p;q;}' "$s51_mut_script")"
+    case "$s51_next" in *'return 0'*) s51_landed=yes ;; esac
+  fi
+  if [ "$s51_landed" != yes ]; then
+    bad "check 51 (b) — the sabotage did not land: gate_keep_failure_log()'s first statement in the mutant is [${s51_next:-<none>}]. The arm that must FAIL was never built, so the green above would be untested."
+  else
+    s51_mut_dir="$SB_STATE/s51-mut-records"
+    rm -rf "$s51_mut_dir"
+    out51m="$( (cd "$s51_mut" && PREFLIGHT_RESULT_DIR="$s51_mut_dir" PREFLIGHT_KEY_EXTRA=probe15 ./scripts/preflight.sh --only "$probe_gate" 2>&1) )"
+    rc51m=$?
+    s51_mrec="$(find "$s51_mut_dir" -maxdepth 1 -type f -name '*.json' 2>/dev/null | sed -n 1p)"
+    if [ "$rc51m" -eq 0 ] || [ -z "$s51_mrec" ]; then
+      bad "check 51 (b) — the mutant run produced no red record (rc=$rc51m, records=[${s51_mrec:-none}]); the bite cannot be measured on a broken copy. Output: [$(printf '%s' "$out51m" | tail -n 1)]"
+    else
+      s51_mlog="$(gr_read_field "$s51_mrec" log)"
+      s51_mfiles=0
+      if [ -d "$s51_mut_dir/logs" ]; then
+        s51_mfiles="$(find "$s51_mut_dir/logs" -maxdepth 1 -type f -name '*.log' 2>/dev/null | wc -l)"
+      fi
+      if [ -n "$s51_mlog" ] || [ "${s51_mfiles:-0}" -ne 0 ]; then
+        bad "check 51 (b) — with the preserve step removed the record STILL carries log=[$s51_mlog] and $s51_mfiles kept file(s): the assertion in (a) would stay green for a runner that preserves nothing, so it is not measuring this fix"
+      else
+        ok "check 51 (b) — the bite holds: the SAME red run with the preserve step made a no-op leaves log:\"\" and no kept file, so (a) is a real assertion and not a tautology"
+      fi
+    fi
+  fi
+  rm -rf "$s51_mut"
+
+  # ---- (c) THE STORE IS BOUNDED: age and count both prune kept logs ----
+  s51_pr="$SB_STATE/s51-prune"
+  rm -rf "$s51_pr"
+  mkdir -p "$s51_pr/logs"
+  sed -n '/^gate_log_dir() {/,/^gate_log_prune() {/p' "$PREFLIGHT" | sed '$d' > "$s51_pr/fns.sh"
+  sed -n '/^gate_log_prune() {/,/^}$/p' "$PREFLIGHT" >> "$s51_pr/fns.sh"
+  if ! grep -q '^gate_log_prune() {' "$s51_pr/fns.sh"; then
+    bad "check 51 (c) — gate_log_prune() is not extractable from preflight.sh, so the bound on the kept-log store is untested"
+  else
+    : > "$s51_pr/logs/old.log";    touch -d '40 days ago' "$s51_pr/logs/old.log"
+    : > "$s51_pr/logs/mid.log";    touch -d '10 days ago' "$s51_pr/logs/mid.log"
+    : > "$s51_pr/logs/new-1.log";  touch -d '3 days ago'  "$s51_pr/logs/new-1.log"
+    : > "$s51_pr/logs/new-2.log";  touch -d '2 days ago'  "$s51_pr/logs/new-2.log"
+    : > "$s51_pr/logs/new-3.log";  touch -d '1 day ago'   "$s51_pr/logs/new-3.log"
+    PREFLIGHT_RESULT_DIR="$s51_pr" PREFLIGHT_LOG_KEEP_DAYS=14 PREFLIGHT_LOG_KEEP_MAX=3 \
+      bash -c '. "$1/fns.sh"; gate_log_prune' _ "$s51_pr"
+    s51_left="$(cd "$s51_pr/logs" && ls -1 2>/dev/null | sort | tr '\n' ' ')"
+    case "$s51_left" in
+      "new-1.log new-2.log new-3.log ")
+        ok "check 51 (c) — the kept-log store is bounded: a 40-day-old log is deleted by the age bound, a 10-day-old one by the count cap (max 3), and the three newest survive [$s51_left]" ;;
+      *)
+        bad "check 51 (c) — pruning left [$s51_left]; expected only the three newest logs. An unpruned store grows for ever on a host that already carries 1781 records." ;;
+    esac
+  fi
+  rm -rf "$s51_pr"
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

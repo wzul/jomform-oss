@@ -29,7 +29,7 @@ import { docsRoutesOnDisk } from "./docsRoutes.ts";
 // The generator itself: the temp-tree test below drives the SAME code `npm run docs:nav`
 // runs, so the acceptance cannot be satisfied by a second, test-only implementation. The
 // squash-landing test compares RENDERED registries, i.e. the bytes `--check` compares.
-import { buildRegistry, renderNavSource } from "../../scripts/docsNav.mjs";
+import { buildRegistry, renderNavSource, PAGE_TEXT_BUDGET, readPage } from "../../scripts/docsNav.mjs";
 
 const WEB_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DOCS_DIR = join(WEB_DIR, "src", "app", "docs");
@@ -162,6 +162,75 @@ test("the generator indexes a page that did not exist when the index was written
     assert.match(added.text, /Freshly added page|appeared after the search index/);
     assert.match(added.headings.map((heading) => heading.text).join(" "), /Why it is indexed/);
     assert.equal(added.section, "More");
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("a page longer than the budget still carries its CLOSING paragraphs (t_d80ad142)", () => {
+  // WHY: the per-page cut kept the HEAD only, so a page that outran PAGE_TEXT_BUDGET lost
+  // everything after the cut — not ranked, not searchable, invisible. /docs/mcp/connect
+  // rendered a note about the proxy renewing the token, and ⌘K answered "No page matches
+  // "proxy"" because the word sat 1,300 characters past the cut.
+  //
+  // This is the generator-level case, on a fixture: 60 filler paragraphs (≈5,000 characters)
+  // put the closing paragraph far past the budget, and that paragraph carries the only
+  // occurrence of "revokes" anywhere in the page.
+  const tree = mkdtempSync(join(tmpdir(), "jf-docsnav-budget-"));
+  try {
+    mkdirSync(join(tree, "long-page"));
+    const filler = Array.from(
+      { length: 60 },
+      (_, n) =>
+        `      <p>Filler paragraph ${n} of the long page: the canvas holds the fields in the order a buyer sees them.</p>`,
+    );
+    writeFileSync(
+      join(tree, "long-page", "page.tsx"),
+      [
+        "export default function Page() {",
+        "  return (",
+        "    <div>",
+        "      <h1>Long page</h1>",
+        ...filler,
+        "      <p>Signing out revokes the refresh token on the server.</p>",
+        "    </div>",
+        "  );",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const layoutSource = [
+      "const NAV_GROUPS = [",
+      '  { layer: "Learn", label: "Start here", sections: [] },',
+      "];",
+      "",
+    ].join("\n");
+    const { entries } = buildRegistry({ docsDir: tree, layoutSource, guides: [], previousEntries: new Map() });
+    const page = entries.find((entry) => entry.path === "/docs/long-page");
+    assert.ok(page, "the long page was not indexed");
+
+    // The fixture must really be a CUT page, or the assertion below would pass on a page
+    // that was indexed whole and prove nothing.
+    const whole = readPage(join(tree, "long-page", "page.tsx"), "/docs/long-page", Number.MAX_SAFE_INTEGER).body;
+    assert.ok(
+      whole.length > PAGE_TEXT_BUDGET,
+      `the fixture indexes ${whole.length} characters — it does not exercise the ${PAGE_TEXT_BUDGET}-character cut`,
+    );
+    assert.match(
+      whole,
+      /revokes the refresh token/,
+      "the extractor never read the closing paragraph, so this case cannot tell a budget bug from an extractor bug",
+    );
+    assert.ok(
+      page.text.length <= PAGE_TEXT_BUDGET,
+      `the entry is ${page.text.length} characters, over the ${PAGE_TEXT_BUDGET}-character budget`,
+    );
+    assert.match(
+      page.text,
+      /Signing out revokes the refresh token on the server\.$/,
+      `the closing paragraph of a cut page is missing: the entry ends "${page.text.slice(-90)}"`,
+    );
+    assert.ok(page.text.includes(" … "), "the page was indexed whole — the fixture no longer exercises the cut");
   } finally {
     rmSync(tree, { recursive: true, force: true });
   }

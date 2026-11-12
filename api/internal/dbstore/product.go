@@ -138,6 +138,40 @@ func (s *ProductStore) ListActiveByAccount(ctx context.Context, accountID string
 	return out, rows.Err()
 }
 
+// ProductIDsForAccount returns the id of EVERY product row the account still
+// has — active, archived AND trashed. A PURGED (hard-deleted) product is absent,
+// which is the only way a form can name a product the account can no longer
+// resolve at all.
+//
+// Card t_983425e5 uses this to tell "this block names a product that was
+// purged" from "this block names an archived product". The distinction is
+// deliberate and load-bearing: the public renderer and the order path both fall
+// back to the form's `products` snapshot for an archived/trashed row, so such a
+// form still sells at the snapshotted price and must NOT be reported as dead; a
+// purged row has nothing to resolve and does.
+func ProductIDsForAccount(ctx context.Context, pool *pgxpool.Pool, accountID string) (map[string]bool, error) {
+	rows, err := pool.Query(ctx, `SELECT id FROM products WHERE account_id=$1`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// ProductIDs is the ProductStore method behind ProductIDsForAccount, for the
+// handlers (REST and MCP) that own a store rather than a pool.
+func (s *ProductStore) ProductIDs(ctx context.Context, accountID string) (map[string]bool, error) {
+	return ProductIDsForAccount(ctx, s.pool, accountID)
+}
+
 // ListActiveByAccounts lists active products across a set of accounts
 // (e.g. every account in the workspace the dashboard user selected).
 func (s *ProductStore) ListActiveByAccounts(ctx context.Context, accountIDs []string) ([]*Product, error) {

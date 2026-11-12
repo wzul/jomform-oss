@@ -27,6 +27,12 @@ type FormRow = {
   // (RSVP, contact, event signup) can never record a sale, so it must not be
   // offered the "Sales" action.
   mode?: string;
+  // Card t_983425e5: the API's own answer (dbstore.NotAcceptingOrders) to "will
+  // the buyer page say This form is not accepting orders right now?" — true for a
+  // published-but-dead payment form: no product block, or one not pointed at a
+  // product. `no_product_block_id` names the block to fix.
+  not_accepting_orders?: boolean;
+  no_product_block_id?: string;
 };
 
 // A row in the Trash view. `can_purge` is false when the form has sales —
@@ -685,9 +691,25 @@ export default function FormsPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="min-w-0 truncate text-sm font-medium">{f.title}</p>
                     {f.status === "published" || f.status === "unlisted" ? (
-                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
-                        {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
-                      </span>
+                      // Card t_983425e5: a LIVE pill is a promise. When the API
+                      // says this form's buyer page answers "This form is not
+                      // accepting orders right now", the row says THAT instead —
+                      // the published-but-dead form used to look perfectly
+                      // healthy here, which is how Wan demoed a form that could
+                      // not take a donation.
+                      f.not_accepting_orders ? (
+                        <span
+                          title={t("forms.notAcceptingHint")}
+                          aria-label={t("forms.notAcceptingHint")}
+                          className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-jf-2xs font-medium text-amber-800"
+                        >
+                          {t("forms.notAcceptingOrders")}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
+                          {f.status === "unlisted" ? t("forms.unlisted") : t("forms.live")}
+                        </span>
+                      )
                     ) : (
                       <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-jf-2xs font-medium text-slate-500">
                         {f.status === "private" ? t("forms.private") : t("forms.draft")}

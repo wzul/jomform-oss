@@ -101,6 +101,25 @@ func DefaultScopes() []string { return []string{ScopeReadWrite} }
 // the AS metadata must advertise and what a client sends as `grant_type`.
 const DeviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 
+// GrantTypesSupported returns the OAuth grant types this deployment accepts AND
+// issues, in the order discovery advertises them.
+//
+// ONE SOURCE OF TRUTH, for the same reason as ScopesSupported above. Two
+// documents describe what a registered client may do: the AS metadata
+// `grant_types_supported` (RFC 8414), which a client discovers, and the Dynamic
+// Client Registration response's `grant_types` (RFC 7591 §3.2.1), which states
+// what was assigned to that client. Both are this list.
+//
+// The device grant is on it because every registered client really can use it:
+// /oauth/device_authorization looks the client up by id and never consults the
+// stored grant_types. A registration response that omitted it described a
+// narrower credential than the one it had just issued, and a harness that reads
+// its own registration to choose a flow (RFC 8628 §5) could conclude the
+// headless path was unavailable and fall back to a browser it may not have.
+func GrantTypesSupported() []string {
+	return []string{"authorization_code", "refresh_token", DeviceGrantType}
+}
+
 // DeviceDefaultScopes is the grant for a DEVICE authorisation that omits
 // `scope`. It is read, deliberately, and different from DefaultScopes() above.
 //

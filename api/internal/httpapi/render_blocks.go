@@ -486,15 +486,22 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 // form first.
 //
 // Why this is NOT dbstore.PaymentFormWithoutProducts (the write-path rule): that
-// rule counts a config product snapshot with an id as something to sell, which
-// is true for the legacy layout (renderLegacy paints one row per snapshot) but
-// NOT for the block layout — renderBlocks paints controls from `blocks` only and
-// uses the snapshot just to resolve a product block's name, price and image.
-// Measured for this card: `blocks:[name,email,phone]` with `products:[{id:…}]`
-// and no product block renders "Proceed to Payment" with zero `class="p"`,
-// `class="opt"` and `class="ship"` controls. The two renderers therefore ask two
-// different questions, and TestBlockLineItemPredicateMatchesTheRenderedPage
-// keeps this one honest against the page renderBlocks actually paints.
+// rule asks the config-only question, and its answer is deliberately WIDER now —
+// it also reports a block layout with an unpointed product block (card
+// t_983425e5 made the write path agree with this renderer). The predicate below
+// stays the RENDERER's question, and both are answered from dbstore's ONE
+// implementation (dbstore.BlockLayoutPaintsNoLineItemControl), so the page and
+// the publish guard cannot drift apart again: the prod form of card t_983425e5
+// (`blocks:[…, {type:product, value:"", no product_id}]` plus a `products`
+// snapshot) published silently because the write-path rule counted the snapshot
+// and this renderer did not.
+//
+// Measured for card t_bfdcafbc: `blocks:[name,email,phone]` with
+// `products:[{id:…}]` and no product block renders "Proceed to Payment" with
+// zero `class="p"`, `class="opt"` and `class="ship"` controls; the block
+// renderer paints no line-item control for it, and
+// TestBlockLineItemPredicateMatchesTheRenderedPage keeps that honest against the
+// page renderBlocks actually paints.
 //
 // A zone/courier-sourced shipping block counts as a live control even when its
 // rate list would be empty here: its options come from live zone data this
@@ -505,66 +512,10 @@ func (h *PublicHandlers) renderBlocks(w http.ResponseWriter, r *http.Request, f 
 // Returns false when the config has no blocks: renderBlocks does not claim such
 // a form, and the legacy arm in serveForm owns it.
 func blockLayoutPaintsNoLineItemControl(f *dbstore.Form) bool {
-	if f == nil || f.Config == nil || formMode(f) != dbstore.FormModePayment {
+	if f == nil || formMode(f) != dbstore.FormModePayment {
 		return false
 	}
-	raw, err := json.Marshal(f.Config)
-	if err != nil {
-		return false
-	}
-	var cfg struct {
-		Blocks []struct {
-			Type      string `json:"type"`
-			ProductID string `json:"product_id"`
-			Source    string `json:"source"`
-			Choices   []struct {
-				Value string `json:"value"`
-			} `json:"choices"`
-		} `json:"blocks"`
-	}
-	// A config renderBlocks cannot decode is not a block layout either (it
-	// unmarshals the same fields); leave it to the legacy arm rather than
-	// restricting a form this helper failed to read.
-	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Blocks) == 0 {
-		return false
-	}
-	for _, b := range cfg.Blocks {
-		switch b.Type {
-		case "product":
-			// The checkbox posts data-id verbatim; an empty id cannot be
-			// charged (`produk tidak sah: `), so it is not a buyable control.
-			if b.ProductID != "" {
-				return false
-			}
-		case "option":
-			// select.opt pushes an item only for a chosen non-empty value.
-			if anySelectableChoice(b.Choices) {
-				return false
-			}
-		case "shipping":
-			// A sourced block's options are the zone set's (loaded by the
-			// renderer), so it is assumed live; a static one needs its own
-			// choice rows. See the doc comment.
-			if firstNonEmpty(b.Source, shipping.SourceStatic) != shipping.SourceStatic || anySelectableChoice(b.Choices) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// anySelectableChoice reports whether a pricing block's choice list has an entry
-// the buyer can pick: the page's submit handler skips a choice whose value is
-// empty (`if(o&&o.value)`), and the template's placeholder option IS empty.
-func anySelectableChoice(choices []struct {
-	Value string `json:"value"`
-}) bool {
-	for _, c := range choices {
-		if c.Value != "" {
-			return true
-		}
-	}
-	return false
+	return dbstore.BlockLayoutPaintsNoLineItemControl(f)
 }
 
 // iframeHeightJS reports the rendered page's height to the parent frame so a

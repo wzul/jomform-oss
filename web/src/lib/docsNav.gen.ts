@@ -261,7 +261,7 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "order": 19,
     "kind": "product",
     "updated": "2026-11-09",
-    "digest": "fb461f0d5a420214",
+    "digest": "10c3bba8d3729341",
     "guides": [
       "/docs/guides/affiliate-programme",
       "/docs/guides/qr-table-ordering",

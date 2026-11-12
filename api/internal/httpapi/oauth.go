@@ -696,10 +696,17 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	clientID := "jfc_" + randTokenHex(16)
+	// The grant types the server assigns to this client. RFC 7591 §3.2.1: the
+	// registration response carries the metadata the server actually assigned,
+	// and the server may replace a narrower request with the full set it
+	// supports. This is oauthmeta.GrantTypesSupported() — the same list the AS
+	// metadata advertises — stored on the row AND echoed in the response, so the
+	// two documents and the persisted credential cannot drift.
+	grants := oauthmeta.GrantTypesSupported()
 	c := &dbstore.OAuthClient{
 		ClientID: clientID, Name: in.ClientName, RedirectURIs: in.RedirectURIs,
 		TokenEndpointAuthMethod: "none",
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		GrantTypes:              grants,
 	}
 	if err := o.Store.CreateClient(r.Context(), c); err != nil {
 		oauthErr(w, http.StatusInternalServerError, "server_error", "failed to store the client", "err", err)
@@ -710,7 +717,7 @@ func (o *OAuthHandlers) register(w http.ResponseWriter, r *http.Request) {
 		"client_name":                in.ClientName,
 		"redirect_uris":              in.RedirectURIs,
 		"token_endpoint_auth_method": "none",
-		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"grant_types":                grants,
 		"response_types":             []string{"code"},
 	})
 }

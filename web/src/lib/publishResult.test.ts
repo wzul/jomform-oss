@@ -41,6 +41,8 @@ import { fileURLToPath } from "node:url";
 import {
   PUBLISH_NEEDS_ACK,
   PUBLISH_NEEDS_ACK_KEY,
+  PUBLISH_NO_PRODUCT_SELECTED,
+  PUBLISH_NO_PRODUCT_SELECTED_KEY,
   acknowledgmentBody,
   liveLink,
   needsProductsIDs,
@@ -68,7 +70,7 @@ const goRestHandlers = read("../../../api/internal/httpapi/rest_handlers.go");
  */
 function goNoProductsProse(): string {
   const m = goRestHandlers.match(
-    /func writePublishNeedsAck[\s\S]*?writeJSON\([\s\S]*?"error":\s*((?:"[^"]*"\s*\+?\s*)+)/,
+    /func writePublishNeedsAck[\s\S]*?out\s*:=\s*map\[string\]any\{\s*"error":\s*((?:"[^"]*"\s*\+?\s*)+)/,
   );
   assert.ok(m, "writePublishNeedsAck's prose was not found in rest_handlers.go — the Go rule moved");
   const parts = [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
@@ -243,7 +245,10 @@ test("the no-products refusal does not offer to collect anything, and says nothi
   assert.match(en, /collects nothing/i, `the English refusal dropped "collects nothing": ${JSON.stringify(en)}`);
   assert.match(en, /cannot submit/i, `the English refusal dropped what the buyer hits: ${JSON.stringify(en)}`);
   // And this is the sentence the pages render (not a copy kept beside it).
-  assert.equal(publishConfirmText({ kind: "needs_ack" }, (k) => dict("en", k)), en);
+  assert.equal(
+    publishConfirmText({ kind: "needs_ack", code: PUBLISH_NEEDS_ACK, blockId: "" }, (k) => dict("en", k)),
+    en,
+  );
   // The agent/curl/MCP surface reads the GO prose, not the dictionary — it must
   // not read as "confirm and the form is usable" either. Read from source, so a
   // revert of the Go sentence reddens here.
@@ -328,6 +333,43 @@ test("WEB/GO CONTRACT: PUBLISH_NEEDS_ACK equals the Go constant", () => {
   const m = goPublishReady.match(/PublishWarningNoProducts\s*=\s*"([a-z_]+)"/);
   assert.ok(m, "dbstore.PublishWarningNoProducts not found — the Go rule moved or was renamed");
   assert.equal(PUBLISH_NEEDS_ACK, m[1]);
+  // Card t_983425e5: the second refusal is a separate code, and the same drift
+  // would put the merchant back on a generic error.
+  const sel = goPublishReady.match(/PublishWarningNoProductSelected\s*=\s*"([a-z_]+)"/);
+  assert.ok(sel, "dbstore.PublishWarningNoProductSelected not found — the Go rule moved or was renamed");
+  assert.equal(PUBLISH_NO_PRODUCT_SELECTED, sel[1]);
+});
+
+test("a product block with no product selected is its own actionable refusal", () => {
+  // The prod shape: `{"type":"product","value":""}` with no product_id. The API
+  // answers 409 with `code:no_product_selected` and the block id, and the builder
+  // must show the sentence that quotes the BUYER ("This form is not accepting
+  // orders right now") — not the no-products sentence, which would send the
+  // merchant looking for a product they already created.
+  const out = publishOutcome(
+    {
+      ok: false,
+      status: 409,
+      body: { error: "This payment form has a product block with no product selected", code: PUBLISH_NO_PRODUCT_SELECTED, requires_ack: true, block_id: "q5uhvoy" },
+    },
+    "",
+  );
+  assert.equal(out.kind, "needs_ack");
+  assert.equal(out.kind === "needs_ack" && out.code, PUBLISH_NO_PRODUCT_SELECTED);
+  assert.equal(out.kind === "needs_ack" && out.blockId, "q5uhvoy", "the refusal's block id was dropped, so the link has no target");
+  assert.equal("message" in out, false, "the refusal carries prose again");
+
+  const tIn = (lang: string) => (k: string) => dict(lang, k);
+  const en = publishConfirmText(out, tIn("en"));
+  assert.match(en, /not accepting orders right now/i, `the English refusal does not quote the buyer: ${JSON.stringify(en)}`);
+  for (const lang of LANGS) {
+    assert.equal(publishConfirmText(out, tIn(lang)), dict(lang, PUBLISH_NO_PRODUCT_SELECTED_KEY), `lang=${lang} is not the dictionary sentence`);
+  }
+  // And the OLD code still renders the OLD sentence — the two must not collapse.
+  const old = publishOutcome({ ok: false, status: 409, body: { code: PUBLISH_NEEDS_ACK } }, "");
+  assert.equal(old.kind === "needs_ack" && old.code, PUBLISH_NEEDS_ACK);
+  assert.equal(old.kind === "needs_ack" && old.blockId, "");
+  assert.equal(publishConfirmText(old, tIn("en")), dict("en", PUBLISH_NEEDS_ACK_KEY));
 });
 
 test("publishErrorText yields the localized failure sentence, and nothing for a refusal or a success", () => {
@@ -388,9 +430,13 @@ test("WEB/GO CONTRACT: the two REST routes still gate on the Go rule", () => {
   // The gate is the TRANSITION rule (PublishNeedsAck), not the raw predicate:
   // both routes must ask only when the form is not already live, or the
   // dashboard's status control would demand an acknowledgement on every save.
-  assert.match(goRestHandlers, /dbstore\.PublishNeedsAck\(f, dbstore\.FormStatusPublished\)/, "publishForm no longer consults the rule");
-  assert.match(goRestHandlers, /dbstore\.PublishNeedsAck\(f, in\.Status\)/, "setFormStatus no longer consults the rule");
+  assert.match(goRestHandlers, /dbstore\.PublishWarning\(f, dbstore\.FormStatusPublished,/, "publishForm no longer consults the rule");
+  assert.match(goRestHandlers, /dbstore\.PublishWarning\(f, in\.Status,/, "setFormStatus no longer consults the rule");
   assert.match(goRestHandlers, /dbstore\.PublishWarningNoProducts/, "the 409 body no longer carries the code the dashboard matches on");
+  // Card t_983425e5: the refusal names the product block it is about, and the
+  // list/row payloads carry the same dead-form signal the badge reads.
+  assert.match(goRestHandlers, /dbstore\.PublishWarningNoProductSelected/, "the 409 body cannot report an unpointed product block");
+  assert.match(goRestHandlers, /dbstore\.NotAcceptingOrders\(f, live\)/, "the forms list does not ask the shared dead-form rule");
   // The bulk path is a publish too, and must not be the way around the guard.
   assert.match(goRestHandlers, /PublishNeedsAckIDs/, "bulkForms no longer consults the rule");
 });
@@ -454,11 +500,13 @@ test("the 'anyone with this link' hint is only shown when there IS a link", () =
 test("the builder's warning panel renders the localized refusal from the key", () => {
   // The builder is the other surface that prints this refusal, and it had the
   // same shape (`publishNotice.message || t("bld.noProductsWarn")`). It now
-  // renders the dictionary key off a message-less notice.
+  // renders the dictionary key off a message-less notice — and, since card
+  // t_983425e5, picks WHICH key from the refusal's machine code so an unpointed
+  // product block does not read as "this form has no products".
   assert.match(
     builderPage,
-    /publishNotice\.kind === "needsAck"\s*\?\s*t\(PUBLISH_NEEDS_ACK_KEY\)/,
-    "the builder's warning text is not rendered from the dictionary key",
+    /publishNotice\.kind === "needsAck"[\s\S]{0,260}PUBLISH_NO_PRODUCT_SELECTED[\s\S]{0,200}PUBLISH_NO_PRODUCT_SELECTED_KEY[\s\S]{0,200}PUBLISH_NEEDS_ACK_KEY/,
+    "the builder's warning text is not rendered from the dictionary key picked by the refusal code",
   );
   assert.match(builderPage, /t\("bld\.publishAnyway"\)/);
   assert.match(builderPage, /publishAnyway/, "no confirm handler");
@@ -490,6 +538,9 @@ test("every string the live panel and the warning use exists in all five locales
     "bld.urlCopied",
     "bld.publishAnyway",
     "bld.noProductsWarn",
+    "bld.noProductSelectedWarn",
+    "bld.chooseProduct",
+    "bld.goToProductBlock",
     "bld.dismiss",
   ];
   for (const k of keys) {
@@ -503,8 +554,11 @@ test("every string the live panel and the warning use exists in all five locales
   for (const k of keys.filter((k) => k !== "bld.noProductsWarn")) {
     assert.match(builderPage, new RegExp(`t\\("${k.replace(".", "\\.")}"\\)`), `"${k}" is never rendered`);
   }
-  // The refusal is rendered through the constant, so that its name lives in ONE
-  // place (lib/publishResult.ts) and a rename cannot split it from the Go code.
-  assert.match(builderPage, new RegExp(`t\\(PUBLISH_NEEDS_ACK_KEY\\)`), `"bld.noProductsWarn" is never rendered`);
+  // The refusals are rendered through the constants, so their names live in ONE
+  // place (lib/publishResult.ts) and a rename cannot split them from the Go
+  // codes. Card t_983425e5 added the second refusal.
+  assert.match(builderPage, /PUBLISH_NEEDS_ACK_KEY/, `"bld.noProductsWarn" is never rendered`);
+  assert.match(builderPage, /PUBLISH_NO_PRODUCT_SELECTED_KEY/, `"bld.noProductSelectedWarn" is never rendered`);
   assert.match(i18nDict, new RegExp(`"${PUBLISH_NEEDS_ACK_KEY}":\\s*\\{`), "PUBLISH_NEEDS_ACK_KEY does not name a dictionary entry");
+  assert.match(i18nDict, new RegExp(`"${PUBLISH_NO_PRODUCT_SELECTED_KEY}":\\s*\\{`), "PUBLISH_NO_PRODUCT_SELECTED_KEY does not name a dictionary entry");
 });

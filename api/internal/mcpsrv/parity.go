@@ -954,6 +954,31 @@ func jsonValid(s string) bool {
 const errPublishNeedsAck = "This payment form has no products — it cannot accept payment " +
 	"and collects nothing. Add a product first, or send acknowledge=true to continue."
 
+// errPublishNoProductSelected is the refusal for the sibling shape (card
+// t_983425e5): the form HAS a product block, the block just is not pointed at a
+// product the account can sell (no product_id, or a product row that was purged).
+// The sentence quotes what the buyer is served, because that is the fact the
+// merchant could not see, and it names the block so an agent can fix the right
+// one.
+const errPublishNoProductSelected = "This payment form has a product block with no product selected — " +
+	"buyers are shown \"This form is not accepting orders right now\". " +
+	"Set the block's product_id, or send acknowledge=true to continue."
+
+// productIDsForAccount returns every product id the account still has a row for
+// (active, archived and trashed). dbstore.PublishWarning uses it to see a
+// product block pointing at a PURGED product; nil (no product store wired) means
+// "skip that arm", never "the account has no products".
+func (s *Server) productIDsForAccount(ctx context.Context, accountID string) map[string]bool {
+	if s == nil || s.deps.Products == nil || accountID == "" {
+		return nil
+	}
+	ids, err := s.deps.Products.ProductIDs(ctx, accountID)
+	if err != nil {
+		return nil
+	}
+	return ids
+}
+
 // publishFormIn extends publish_form for the private status (issue #176):
 // status=private requires a password; status=published/draft/unlisted clears it.
 type publishFormIn struct {
@@ -1005,9 +1030,17 @@ func (s *Server) publishFormMCP(
 	}
 	// Onboarding gap: a payment form with nothing to sell must not go live
 	// silently through MCP either — this is the same rule the REST publish and
-	// status routes apply (dbstore.PublishNeedsAck), not a second copy.
+	// status routes apply (dbstore.PublishWarning), not a second copy.
+	//
+	// Card t_983425e5: the refusal names WHICH shape it is. A form whose product
+	// block is unpointed (no product_id, or a product row that was purged) is
+	// `no_product_selected` — the merchant picked a block but not a product — and
+	// the sentence quotes what the buyer would see instead.
 	if dbstore.IsLiveStatus(status) && !in.Acknowledge {
-		if dbstore.PublishNeedsAck(f, status) {
+		if code, _ := dbstore.PublishWarning(f, status, s.productIDsForAccount(ctx, f.AccountID)); code != dbstore.PublishReady {
+			if code == dbstore.PublishWarningNoProductSelected {
+				return nil, nil, errors.New(errPublishNoProductSelected)
+			}
 			return nil, nil, errors.New(errPublishNeedsAck)
 		}
 	}
@@ -1290,7 +1323,7 @@ func (s *Server) bulkFormsMCP(
 				if ferr != nil {
 					continue
 				}
-				if dbstore.PublishNeedsAck(f, status) {
+				if code, _ := dbstore.PublishWarning(f, status, s.productIDsForAccount(ctx, f.AccountID)); code != dbstore.PublishReady {
 					needsProducts = append(needsProducts, id)
 					continue
 				}

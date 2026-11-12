@@ -41,6 +41,15 @@ func productBlock(productID string) map[string]any {
 	return map[string]any{"id": "b1", "type": "product", "product_id": productID}
 }
 
+// publishNeedsAck is this file's shorthand for the config-only half of the
+// production rule: no product table is passed (nil), so the purged-product arm
+// is skipped and these tests keep measuring the config questions they name. The
+// table arm has its own tests (ProductBlockArm*).
+func publishNeedsAck(f *Form, status string) bool {
+	code, _ := PublishWarning(f, status, nil)
+	return code != PublishReady
+}
+
 func TestPaymentFormWithoutProductsFlagsTheProductionDraftShape(t *testing.T) {
 	// The exact shape the two production drafts had: payment mode, ordinary
 	// field blocks, no `products` key.
@@ -64,7 +73,7 @@ func TestPublishNeedsAckOnlyOnTheFirstLiveTransition(t *testing.T) {
 
 	// Entering a live status for the first time needs an acknowledgement...
 	for _, live := range []string{FormStatusPublished, FormStatusUnlisted, FormStatusPrivate} {
-		if !PublishNeedsAck(emptyPayment, live) {
+		if !publishNeedsAck(emptyPayment, live) {
 			t.Errorf("moving a draft payment form with no products to %q did not require an acknowledgement", live)
 		}
 	}
@@ -73,22 +82,22 @@ func TestPublishNeedsAckOnlyOnTheFirstLiveTransition(t *testing.T) {
 	// current status on every save, so a non-transition rule would nag the
 	// merchant every time they edited the title of a form they published empty
 	// on purpose.
-	if PublishNeedsAck(emptyPayment, FormStatusDraft) {
+	if publishNeedsAck(emptyPayment, FormStatusDraft) {
 		t.Error("moving to draft required an acknowledgement — draft is not live")
 	}
 	for _, live := range []string{FormStatusPublished, FormStatusUnlisted, FormStatusPrivate} {
 		already := formWithConfig(live, FormModePayment, nil)
-		if PublishNeedsAck(already, live) {
+		if publishNeedsAck(already, live) {
 			t.Errorf("re-sending status %q on a form that already has it required an acknowledgement", live)
 		}
 		// Moving from one live status to another is also not a first publish.
-		if PublishNeedsAck(already, FormStatusPublished) && live != FormStatusPublished {
+		if publishNeedsAck(already, FormStatusPublished) && live != FormStatusPublished {
 			t.Errorf("moving %q -> published required an acknowledgement", live)
 		}
 	}
 	// A nil form is never "unready" — a lookup failure must not block a write
 	// (the callers resolve the form first and report a real not-found).
-	if PublishNeedsAck(nil, FormStatusPublished) {
+	if publishNeedsAck(nil, FormStatusPublished) {
 		t.Error("a nil form required an acknowledgement")
 	}
 }
@@ -103,7 +112,7 @@ func TestResponseFormWithNoProductsStaysPublishable(t *testing.T) {
 		t.Fatal("a response form with no products was reported as unready — a product-free form is exactly " +
 			"what response mode is for, and blocking it would be the worse failure")
 	}
-	if PublishNeedsAck(resp, FormStatusPublished) {
+	if publishNeedsAck(resp, FormStatusPublished) {
 		t.Fatal("publishing a response form with no products required an acknowledgement")
 	}
 	// A response form with no `mode` key at all is NOT a response form (legacy
@@ -125,8 +134,14 @@ func TestPaymentFormWithSomethingToSellIsReady(t *testing.T) {
 		{"product block", formWithConfig(FormStatusDraft, FormModePayment, map[string]any{
 			"blocks": []any{productBlock("76109c58-0000-0000-0000-000000000000")},
 		})},
+		// Card t_983425e5: a pricing block is a line item when it paints a
+		// CHOICE the buyer can pick. This case used to carry `price_sen` alone
+		// with no `choices` — and the block renderer paints that as a select with
+		// nothing but its empty placeholder, so the buyer could never add it
+		// (measured for t_bfdcafbc). The write rule now agrees with the page.
 		{"priced option block", formWithConfig(FormStatusDraft, FormModePayment, map[string]any{
-			"blocks": []any{map[string]any{"id": "o1", "type": "option", "value": "Extra", "price_sen": float64(500)}},
+			"blocks": []any{map[string]any{"id": "o1", "type": "option", "value": "Extra",
+				"choices": []any{map[string]any{"label": "Gift wrap", "value": "wrap", "price_sen": float64(500)}}}},
 		})},
 		{"priced shipping choice", formWithConfig(FormStatusDraft, FormModePayment, map[string]any{
 			"blocks": []any{map[string]any{"id": "s1", "type": "shipping", "value": "Postage", "choices": []any{
@@ -149,7 +164,7 @@ func TestPaymentFormWithSomethingToSellIsReady(t *testing.T) {
 			if PaymentFormWithoutProducts(tc.form) {
 				t.Errorf("%s: reported as a payment form with nothing to sell", tc.name)
 			}
-			if PublishNeedsAck(tc.form, FormStatusPublished) {
+			if publishNeedsAck(tc.form, FormStatusPublished) {
 				t.Errorf("%s: publish required an acknowledgement", tc.name)
 			}
 		})

@@ -150,9 +150,9 @@ Environment overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IMAGE` | `jomform-api` | image name (and tarball name) |
-| `CONTEXT` | `api` | build context directory — **`api` for the api image, `.` (the repo root) for the web image** |
-| `DOCKERFILE` | `api/Dockerfile` | Dockerfile path |
+| `IMAGE` | `jomform-api` | image name (and tarball name). **This alone decides the next two rows**: `*web*` → `web/Dockerfile` with context `.`, `*api*` → `api/Dockerfile` with context `api`. An image name that is neither requires both to be set explicitly |
+| `CONTEXT` | derived from `IMAGE` — `api`, or `.` (the repo root) for the web image | build context directory. An explicit value that contradicts the image is **refused** (exit 1), never silently corrected |
+| `DOCKERFILE` | derived from `IMAGE` — `api/Dockerfile`, or `web/Dockerfile` | Dockerfile path. An explicit value that names the **other** image's Dockerfile is **refused** (exit 1) before the preflight gate and before any build |
 | `OUT_DIR` | `/tmp` | tarball output (kept **outside** the repo on purpose — anything inside the repo would trip the dirty-tree guard) |
 | `SSH_HOST` | unset | the deploy host: scps the tarball, and (with `--ship`) runs the load/tag/recreate/proof there. **Required for `--ship`** on a local build |
 | `SSH_USER` / `SSH_PORT` / `SSH_PATH` | `root` / `22` / `/tmp` | scp destination details |
@@ -160,11 +160,29 @@ Environment overrides:
 | `REQUIRE_SHIP` | `0` | same as `--ship` |
 | `LOCK_FILE` | `/tmp/jomform-build.lock` | single-writer lock path |
 
-Example — build the web image instead:
+The pair is one decision, so the image name is enough:
+
+```bash
+IMAGE=jomform-web ./deploy/build-and-ship.sh
+```
+
+`IMAGE=*web*` derives `DOCKERFILE=web/Dockerfile` and `CONTEXT=.`; `IMAGE=*api*` derives
+`api/Dockerfile` and `api`. The explicit form is equivalent and is what
+`deploy/cut-release.sh`'s web half runs:
 
 ```bash
 IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
 ```
+
+**Stating the other image's Dockerfile is refused, not corrected.**
+`IMAGE=jomform-web DOCKERFILE=api/Dockerfile` exits 1 before the gate and before any build,
+naming the image and the Dockerfile it must be built from — and the reverse pair is refused the
+same way. The image name is written into the OCI label and the tag, so a mismatch does not fail
+the build: it ships one unit's bytes under the other unit's name. That is exactly what happened
+once — the API's Go binary was tagged `jomform-web`, the web container crash-looped on a missing
+`DATABASE_URL`, and the public site answered 502 until the tag was re-pointed by hand. The
+`release_selftest.sh` cases R7-R11 pin the derivation, both refusals, and the two controls (the
+explicit web pair and the api default) so the guard cannot be silently dropped.
 
 ### Why the web image is built from the repo root
 

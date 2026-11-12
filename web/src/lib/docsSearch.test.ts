@@ -36,7 +36,7 @@ import { gzipSync } from "node:zlib";
 
 import ts from "typescript";
 
-import { PAGE_TEXT_BUDGET, SEARCH_PAYLOAD_BUDGET, proseText, readPage } from "../../scripts/docsNav.mjs";
+import { PAGE_TEXT_BUDGET, PAGE_TEXT_TAIL_BUDGET, SEARCH_PAYLOAD_BUDGET, proseText, readPage } from "../../scripts/docsNav.mjs";
 import {
   flattenHits,
   searchDocs,
@@ -178,11 +178,56 @@ test("every converted page indexes its SECTIONS body, not only its lead and head
   }
 });
 
+test("a word that only a page's CLOSING section carries still finds that page (t_d80ad142)", () => {
+  // The card's reproduction, derived rather than hand-listed: /docs/mcp/connect rendered a
+  // note about the proxy renewing the token, and ⌘K answered "No page matches "proxy"" — the
+  // word sat past the per-page cut, so it was absent from the index and the page could not
+  // match it. A quarter of the tree (25 of 40 pages) is long enough to be cut, so this walks
+  // every page that is, derives a word from the REGION THE TAIL KEEPS that appears nowhere
+  // else on that page and in no other entry, and requires the search to reach the page.
+  //
+  // The word is taken from the last 200 characters, well inside the tail window, so an
+  // implementation that keeps the END of the page is what passes — not one that happens to
+  // re-include a particular paragraph.
+  let probed = 0;
+  for (const page of docsPages()) {
+    const whole = readPage(page.file, page.route, Number.MAX_SAFE_INTEGER).body;
+    if (whole.length <= PAGE_TEXT_BUDGET) continue; // nothing was dropped, nothing to prove
+    const doc = DOCS.find((entry) => entry.path === page.route);
+    assert.ok(doc, `${page.route} is on disk but not in the search index`);
+
+    const head = whole.slice(0, whole.length - PAGE_TEXT_TAIL_BUDGET).toLowerCase();
+    const closing = whole.slice(-200).toLowerCase();
+    const others = DOCS.filter((entry) => entry.path !== page.route).map((entry) =>
+      [entry.title, entry.description, ...entry.headings, entry.text].join(" ").toLowerCase(),
+    );
+    const words: string[] = closing.match(/[a-z][a-z0-9-]{5,}/g) ?? [];
+    const word = words
+      .filter((candidate) => !head.includes(candidate) && !others.some((text) => text.includes(candidate)))
+      .sort((a, b) => b.length - a.length)[0];
+    if (!word) continue;
+    probed += 1;
+
+    assert.ok(
+      doc.text.toLowerCase().includes(word),
+      `"${word}" is in the closing section of ${page.route} but not in its index entry — the tail was cut off`,
+    );
+    // The dialog's cap is a ranking concern; this asserts retrieval, so ask for every match.
+    const hits = flattenHits(searchDocs(DOCS, word, DOCS.length)).map((hit) => hit.path);
+    assert.ok(
+      hits.includes(page.route),
+      `"${word}" appears only in the closing section of ${page.route} and matched ${hits.join(", ") || "nothing"}`,
+    );
+  }
+  assert.ok(probed >= 15, `only ${probed} cut pages yielded a closing-section word — this check is not exercising the tail`);
+});
+
 test("the index stays inside its measured payload budget", () => {
   // MEASURED on this tree (38 pages, 8 guides) by running the generator at each budget and
-  // gzipping the file it emitted. This sweep ran BEFORE guides were capped, which is why
-  // 1800 here is not the shipped 77,359 B — the shipped file is the last row of the comment
-  // in docsNav.mjs, and the assertion below is what keeps it there.
+  // gzipping the file it emitted. This sweep drove the HEAD-only cut, which is why its
+  // 1,800 row (88,578 B) is not the shipped file: the guide cap came after it, and
+  // t_d80ad142 added the tail and raised the per-page budget to 2,400. The shipped numbers
+  // are in the comment below and in docsNav.mjs; the assertions here keep them there.
   //
   //   body prose NOT indexed (before t_2799edde)  60,714 B / 17,786 B gzip
   //   PAGE_TEXT_BUDGET  800                       64,535 B / 19,062 B gzip
@@ -192,13 +237,14 @@ test("the index stays inside its measured payload budget", () => {
   //   no cap at all                              194,354 B / 62,731 B gzip
   //
   // 1,800 characters per page is the choice: most pages are indexed whole at that size, the
-  // index lands at 77,359 B / 23,406 B gzip with the guide cap, and the feature costs about
-  // 5.4 KiB gzip over headings-only. Uncapped it is 3.5x that, which is why the generator
-  // REFUSES to emit past SEARCH_PAYLOAD_BUDGET instead of leaving the ceiling to whoever
-  // notices.
+  // index lands at 97,255 B / 30,478 B gzip with the guide cap and the head+tail split of
+  // t_d80ad142 (80,590 B / 24,646 B for the head-only cut it replaces — the +5.8 KiB gzip is
+  // the tail), and the feature costs about 5.4 KiB gzip over headings-only. Uncapped it is
+  // 3.5x that, which is why the generator REFUSES to emit past SEARCH_PAYLOAD_BUDGET instead
+  // of leaving the ceiling to whoever notices.
   const rawBytes = INDEX_BYTES.byteLength;
   const gzipBytes = gzipSync(INDEX_BYTES).byteLength;
-  const GZIP_BUDGET = 26 * 1024; // measured 22.9 KiB + room for five more pages
+  const GZIP_BUDGET = 32 * 1024; // measured 29.8 KiB + room for three more pages
 
   assert.ok(
     rawBytes <= SEARCH_PAYLOAD_BUDGET,
@@ -214,6 +260,12 @@ test("the index stays inside its measured payload budget", () => {
     assert.ok(
       doc.text.length <= PAGE_TEXT_BUDGET,
       `${doc.path} indexed ${doc.text.length} characters, over the ${PAGE_TEXT_BUDGET}-character page budget`,
+    );
+    // The omission mark joins a kept head to a kept tail; an entry that ENDS with it has a
+    // head and no tail, i.e. the half of the fix this card is about did not happen.
+    assert.ok(
+      !doc.text.endsWith("…"),
+      `${doc.path} ends with the omission mark — the tail of the page was dropped, not kept`,
     );
   }
 });

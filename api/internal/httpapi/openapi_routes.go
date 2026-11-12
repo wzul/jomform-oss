@@ -249,7 +249,7 @@ var restRouteDocs = []restRouteDoc{
 		Desc: "Only a form already in the trash can be destroyed. The body must repeat the form's own slug as confirm_slug; a mismatch is refused with 400. A form that has ever been sold is refused with 409 and sales_count, because sales history is never destroyed. The destroyed form's share card and QR PNG are dropped from the CDN in the same request and the reply names the outcome in edge."},
 	{Method: "POST", Path: "/v1/rest/forms/{id}/publish", Handler: "publishForm", Tag: "Forms",
 		Summary: "Publish a form", Access: AccessWrite, Resp: "FormStatus", Body: true,
-		Desc: "The form goes live at its URL. A payment form with no products is refused with 409 and requires_ack=true, because it could never take money; send {\"acknowledge\":true} or ?acknowledge=1 to publish it anyway."},
+		Desc: "The form goes live at its URL. A payment form that cannot take money is refused with 409 and requires_ack=true, because it could never sell anything; send {\"acknowledge\":true} or ?acknowledge=1 to publish it anyway. The body's code says which shape: no_products (no product block at all) or no_product_selected (a product block exists but names no product — its block_id names the block, and buyers are served \"This form is not accepting orders right now\")."},
 	{Method: "POST", Path: "/v1/rest/forms/{id}/status", Handler: "setFormStatus", Tag: "Forms",
 		Summary: "Set a form's status (draft | private | published)", Access: AccessWrite, Body: true, Resp: "FormStatus",
 		Desc: "status=private also sets an access password if one is supplied (hashed, never returned). Leaving a publicly served status (published or unlisted) drops the form's cached share card (/og/{slug}.png) and QR PNG (/qr/{slug}.png) at the CDN in the SAME request: the reply then carries edge (purged | not_configured | out_of_zone | failed) and, when nothing was purged, edge_max_age_s, the freshness window that then bounds how long the old copies can still be served. The status change itself never fails because the purge did."},
@@ -610,7 +610,7 @@ var restSpecTags = []string{
 var restComponentSchemas = map[string]map[string]any{
 	"Error": {
 		"type":        "object",
-		"description": "Every failure body is `{\"error\": \"...\"}`. A few routes add fields: publish adds `code` and `requires_ack` when a payment form has no products.",
+		"description": "Every failure body is `{\"error\": \"...\"}`. A few routes add fields: publish adds `code`, `requires_ack` and (for `no_product_selected`) `block_id` when a payment form cannot take money.",
 		"properties": map[string]any{
 			"error":        map[string]any{"type": "string"},
 			"code":         map[string]any{"type": "string"},

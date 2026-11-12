@@ -21,6 +21,10 @@
 #   Q8. control: a verified ship does reach the mirror
 #   R. build-and-ship performs the server half and PROVES it (or refuses before building);
 #      a build-only run still works and never claims a ship
+#   R7-R11. the IMAGE↔DOCKERFILE pair is DERIVED from the image name (web -> web/Dockerfile +
+#      context `.`, api -> api/Dockerfile + `api`) and an explicit contradiction is REFUSED
+#      before the gate and before any build, in both directions; the explicit web pair and the
+#      api default still build
 #   O3/O4/O5/P/R5/T. the caller's RELEASE ENVIRONMENT (VERSION_OVERRIDE, SSH_HOST,
 #      REMOTE_BUILD_HOST, REQUIRE_SHIP, IMAGE, CONTEXT, DOCKERFILE, SERVICE, SSH_USER, SSH_PORT,
 #      SSH_PATH) is dropped at the call site, inside this file, and in every sandbox helper — and
@@ -1050,14 +1054,20 @@ fi
 #   R5  a release environment exported in THIS shell does not change the sandbox run.
 #   R6  an exported SSH_USER/SSH_PORT/SSH_PATH does not rewrite the sandbox's scp destination:
 #       the copy still goes to root@<stub>:22:/tmp, not deploy@<stub>:2222:/srv/jomform.
+#   R7-R11 the IMAGE<->DOCKERFILE pair: derived from the image when the caller gives nothing
+#       (web -> web/Dockerfile + context `.`), refused when an explicit pair contradicts it in
+#       EITHER direction, and the two controls (explicit web pair, api default) still build.
 # ============================================================================
 echo "== R. build-and-ship: a ship is performed and PROVEN (or refused)"
 RWS="$S/shipws"
 RBIN="$RWS/bin"
 rm -rf "$RWS" "$S/shipws-state"
-mkdir -p "$RWS/deploy" "$RWS/api" "$RWS/compose" "$RBIN" "$S/shipws-state"
+mkdir -p "$RWS/deploy" "$RWS/api" "$RWS/web" "$RWS/compose" "$RBIN" "$S/shipws-state"
 cp "$HERE/build-and-ship.sh" "$HERE/require-release-tag.sh" "$HERE/ship_proof.sh" "$RWS/deploy/"
 : > "$RWS/api/Dockerfile"
+# The web pair has to exist for the derivation controls (R7-R11) to reach a build at
+# all: build-and-ship checks the Dockerfile is in the tree before it builds.
+: > "$RWS/web/Dockerfile"
 cat > "$RBIN/docker" <<'DOCKER'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -1274,6 +1284,89 @@ grep -q 'root@stub-deploy-host:/tmp/' "$RLOG" \
 ! grep -Eq 'deploy@|/srv/jomform' "$RLOG" \
   && ok "R6 …and the caller's user/path never appear" \
   || bad "R6 the caller's SSH_USER/SSH_PATH reached scp"
+
+# ---------------------------------------------------------------------------
+# R7-R11. THE IMAGE↔DOCKERFILE PAIR IS ONE DECISION.
+#
+# `IMAGE=jomform-web` on its own used to be accepted and built the API
+# Dockerfile: the Go binary went out labelled and tagged jomform-web, so the web
+# container crash-looped on a missing DATABASE_URL and the site answered 502.
+# The pair is now DERIVED from the image, and an explicit contradiction is
+# REFUSED before the gate and before any build. These cases pin all four shapes:
+# derived, refused (both directions), and the two controls that must keep
+# building (the explicit web pair cut-release's web half runs, and the api
+# default that every other release runs).
+# ---------------------------------------------------------------------------
+
+# R7 — the image name ALONE is enough, and it must not quietly keep the api pair.
+RLOG="$S/r7.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$(rship "$RLOG" "" IMAGE=jomform-web); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R7 IMAGE=jomform-web alone builds (exit 0)" || bad "R7 expected exit 0, got $RC"
+grep -q 'building jomform-web:v1.0.0 from web/Dockerfile (context: .)' <<<"$OUT" \
+  && ok "R7 …from the DERIVED pair, web/Dockerfile with context ." \
+  || bad "R7 the pair was not derived from the image"
+grep -Eq -- '-f web/Dockerfile( |$)' "$RLOG" \
+  && ok "R7 …and docker is handed -f web/Dockerfile" || bad "R7 docker was not given web/Dockerfile"
+! grep -q 'api/Dockerfile' "$RLOG" \
+  && ok "R7 …never the api Dockerfile (the bytes this case exists for)" \
+  || bad "R7 the api Dockerfile was still used for the web image"
+
+# R8 — an explicit contradiction is REFUSED, and refused BEFORE the gate/build.
+# SKIP_TESTS=0 on purpose: in this sandbox the preflight does not exist, so if the
+# guard did not fire first the run would die at "scripts/preflight.sh not found".
+# That message being absent is what proves the ordering the card asks for.
+RLOG="$S/r8.docker.log"
+OUT=$(rship "$RLOG" "" IMAGE=jomform-web DOCKERFILE=api/Dockerfile SKIP_TESTS=0); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 1 ] && ok "R8 IMAGE=jomform-web + DOCKERFILE=api/Dockerfile exits 1" \
+  || bad "R8 expected exit 1, got $RC"
+grep -q 'must be built from web/Dockerfile' <<<"$OUT" \
+  && ok "R8 …naming the Dockerfile the image must be built from" \
+  || bad "R8 the refusal does not name web/Dockerfile"
+grep -q 'IMAGE=jomform-web' <<<"$OUT" && ok "R8 …and the image it contradicts" \
+  || bad "R8 the refusal does not name the image"
+[ ! -s "$RLOG" ] && ok "R8 …before any build (docker was never invoked)" \
+  || bad "R8 it built something before refusing"
+! grep -q 'scripts/preflight.sh not found' <<<"$OUT" \
+  && ok "R8 …and before the gate (it never reached the missing preflight)" \
+  || bad "R8 it gated first and only then noticed the contradiction"
+
+# R9 — the same contradiction the other way round, which is the mirror image and
+# must not be one-directional: web/Dockerfile cannot be tagged jomform-api either.
+RLOG="$S/r9.docker.log"
+OUT=$(rship "$RLOG" "" IMAGE=jomform-api DOCKERFILE=web/Dockerfile); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 1 ] && ok "R9 IMAGE=jomform-api + DOCKERFILE=web/Dockerfile exits 1" \
+  || bad "R9 expected exit 1, got $RC"
+grep -q 'must be built from api/Dockerfile' <<<"$OUT" \
+  && ok "R9 …naming api/Dockerfile" || bad "R9 the refusal does not name api/Dockerfile"
+[ ! -s "$RLOG" ] && ok "R9 …and nothing was built" || bad "R9 it built something before refusing"
+
+# R10 — CONTROL: the explicit web pair (what cut-release's web half runs, and what
+# DEPLOY.md documented before the derivation) still builds, unchanged.
+RLOG="$S/r10.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$(rship "$RLOG" "" IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R10 the explicit web pair still builds (exit 0)" \
+  || bad "R10 expected exit 0, got $RC"
+grep -q 'building jomform-web:v1.0.0 from web/Dockerfile (context: .)' <<<"$OUT" \
+  && ok "R10 …from web/Dockerfile with context ." || bad "R10 the pair was not honoured"
+
+# R11 — CONTROL: the api default, which every non-web release runs, is unchanged.
+RLOG="$S/r11.docker.log"
+rm -rf "$S/shipws-state"; mkdir -p "$S/shipws-state"
+OUT=$(rship "$RLOG" ""); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "R11 IMAGE defaults to jomform-api and builds (exit 0)" \
+  || bad "R11 expected exit 0, got $RC"
+grep -q 'building jomform-api:v1.0.0 from api/Dockerfile (context: api)' <<<"$OUT" \
+  && ok "R11 …from the DERIVED api pair, api/Dockerfile with context api" \
+  || bad "R11 the api default was not derived"
+! grep -q 'web/Dockerfile' "$RLOG" && ok "R11 …never web/Dockerfile" \
+  || bad "R11 the web Dockerfile was used for the api image"
 
 # Q9 — --no-ship with the mirror is a contradiction, and it is refused rather than "released".
 # The header has always said "nothing public points at a tree that did not ship"; this is the

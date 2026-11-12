@@ -83,17 +83,37 @@ import type { Key } from "../components/i18n";
 export const PUBLISH_NEEDS_ACK = "no_products";
 
 /**
+ * Mirrors `dbstore.PublishWarningNoProductSelected` in the Go API (card
+ * t_983425e5). The form HAS a product block; the block is just not pointed at a
+ * product (its `product_id` is empty, or the product was purged). It is a
+ * separate code from `no_products` because the remedy is different — the
+ * merchant does not need to create a product, they need to pick one in the block
+ * — and because the refusal names the block (`block_id`) so the builder can link
+ * straight to it.
+ */
+export const PUBLISH_NO_PRODUCT_SELECTED = "no_product_selected";
+
+/**
  * The dictionary key that holds the merchant-facing sentence for the no-products
  * refusal. It is a KEY, not a string: the sentence has to follow the dashboard
  * language, which only `t()` knows (rule 3 above).
  */
 export const PUBLISH_NEEDS_ACK_KEY = "bld.noProductsWarn";
 
+/**
+ * The sentence for `PUBLISH_NO_PRODUCT_SELECTED`. It quotes what the buyer is
+ * served ("This form is not accepting orders right now") because that is the fact
+ * the merchant could not see, and names the empty product block.
+ */
+export const PUBLISH_NO_PRODUCT_SELECTED_KEY = "bld.noProductSelectedWarn";
+
 export type PublishOutcome =
   | { kind: "published"; url: string; hasUrl: boolean }
   // Deliberately message-less: the refusal is rendered from the dictionary by
   // `publishConfirmText`, because the API's own prose for it is Malay (rule 3).
-  | { kind: "needs_ack" }
+  // `code` picks WHICH refusal this is; `blockId` is the product block to link to
+  // (empty when the form has no product block at all).
+  | { kind: "needs_ack"; code: string; blockId: string }
   // ALSO message-less, and for the same reason. It carries the parsed response
   // body so the sentence can be derived from the machine `code` at render time
   // (`publishErrorText`) — a pre-rendered string here is exactly how the API's
@@ -129,10 +149,20 @@ export function publishOutcome(res: PublishResponse, url: string): PublishOutcom
   if (res.ok) {
     return { kind: "published", url: url || "", hasUrl: Boolean(liveLink(url)) };
   }
-  if (res.status === 409 && errorCode(res.body) === PUBLISH_NEEDS_ACK) {
-    return { kind: "needs_ack" };
+  const code = errorCode(res.body);
+  if (res.status === 409 && (code === PUBLISH_NEEDS_ACK || code === PUBLISH_NO_PRODUCT_SELECTED)) {
+    return { kind: "needs_ack", code, blockId: errorBlockID(res.body) };
   }
   return { kind: "error", body: res.body };
+}
+
+/** The product block id a refusal names, or "" when it names none. */
+function errorBlockID(body: unknown): string {
+  if (body && typeof body === "object") {
+    const b = (body as { block_id?: unknown }).block_id;
+    if (typeof b === "string") return b;
+  }
+  return "";
 }
 
 /**
@@ -217,7 +247,8 @@ export type Translate = (key: Key) => string;
  * dashboard, in the merchant's language, with no path back to the server's prose.
  */
 export function publishConfirmText(o: PublishOutcome, t: Translate): string {
-  return o.kind === "needs_ack" ? t(PUBLISH_NEEDS_ACK_KEY) : "";
+  if (o.kind !== "needs_ack") return "";
+  return t(o.code === PUBLISH_NO_PRODUCT_SELECTED ? PUBLISH_NO_PRODUCT_SELECTED_KEY : PUBLISH_NEEDS_ACK_KEY);
 }
 
 /**

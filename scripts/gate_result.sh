@@ -91,6 +91,13 @@
 #     "log": "<log path, optional>", "finished_at": "<iso>"
 #   }
 #
+#   `log_tail` (a LATER field, next to `log`) carries the LAST ~80 LINES of a red
+#   gate's kept output, escaped into one JSON string (`\n`, `\t`, `\"`). A reader
+#   with only this file can therefore say WHICH package/spec failed, without the
+#   second file the `log` path names. It belongs to that path: it is carried over
+#   between flushes only while `log` still names the same file, and a carried value
+#   is emitted verbatim because it is already escaped.
+#
 #   READERS ARE jq-FREE ON PURPOSE. The file is written by THIS library in a fixed
 #   shape, so every read below is an anchored `sed` expression. Anchoring is the
 #   point: a line that does not match yields the empty string, and an empty string
@@ -183,6 +190,10 @@ GR_PASSED=0
 GR_FAILED=0
 GR_SKIPPED=0
 GR_LOG=""
+# The last lines of a RED gate's output, inline in the record (see `log_tail`
+# below and gate_result.sh's FORMAT block). Empty for a green run and for any run
+# that did not preserve a failure log.
+GR_LOG_TAIL=""
 GR_PID=""
 GR_FORMAT=1
 # 1 only when the runner has reached the END of its inventory; every intermediate
@@ -200,6 +211,20 @@ gr_ttl() { printf '%s\n' "${PREFLIGHT_RESULT_TTL:-86400}"; }
 gr_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 gr_json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# gr_json_escape_text — escape a MULTI-LINE value into the body of ONE JSON string.
+# gr_json_escape above only doubles backslashes and quotes, which is enough for the
+# single-line fields. A gate's tail carries newlines, and emitting them raw would
+# produce a file no JSON reader accepts (and would break the record's one-field-per-
+# line shape that every reader in this library is anchored on). Newlines become the
+# two-character escape `\n`; a tab becomes `\t`; other C0 controls are dropped rather
+# than escaped (they carry no meaning in a gate log and JSON forbids them raw).
+gr_json_escape_text() {
+  printf '%s' "$1" \
+    | tr -d '\001-\010\013-\037\177' \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' \
+    | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
 
 # gr_tree_sha [repo] — the sha of the WORKING TREE at <repo> (default: $PWD).
 # A private index is used so this can run next to a live gate in another worktree
@@ -889,15 +914,28 @@ gr_flush() {
   # wrote, so a 23-gate run reports 1 run and a second run on the same tree reports 2.
   # Under a DIFFERENT key the count restarts at 1, for the same reason the gate
   # entries are not carried: the file's verdict then stands on this run alone.
-  local runs=1 log="${GR_LOG:-}"
+  local runs=1 log="${GR_LOG:-}" log_tail="" prev_log=""
   if [ -r "$file" ]; then
+    prev_log="$(gr_read_field "$file" log)"
     if [ "${prev_ok:-0}" = 1 ]; then
       runs="$(gr_read_int "$file" runs)"
       case "$runs" in ''|*[!0-9]*) runs=0 ;; esac
       [ "${GR_RUN_COUNTED:-0}" = 1 ] || runs=$((runs + 1))
       [ "$runs" -ge 1 ] || runs=1
     fi
-    [ -n "$log" ] || log="$(gr_read_field "$file" log)"
+    [ -n "$log" ] || log="$prev_log"
+    # `log_tail` BELONGS TO THE LOG PATH IT WAS TAKEN FROM. Write this run's tail
+    # when it has one; otherwise carry the previous tail only while the effective
+    # `log` still names that same file. A carried value is ALREADY JSON-escaped and
+    # is emitted verbatim — running it through gr_json_escape_text again would turn
+    # every `\n` into `\\n` and every quote into a broken escape.
+    if [ -n "${GR_LOG_TAIL:-}" ]; then
+      log_tail="$(gr_json_escape_text "$GR_LOG_TAIL")"
+    elif [ -n "$log" ] && [ "$log" = "$prev_log" ]; then
+      log_tail="$(gr_read_field "$file" log_tail)"
+    fi
+  elif [ -n "${GR_LOG_TAIL:-}" ]; then
+    log_tail="$(gr_json_escape_text "$GR_LOG_TAIL")"
   fi
 
   tmp="$file.tmp.$$"
@@ -935,6 +973,7 @@ gr_flush() {
     printf '  "verdict": "%s",\n' "$verdict"
     printf '  "complete": %s,\n' "$complete_json"
     printf '  "log": "%s",\n' "$(gr_json_escape "$log")"
+    printf '  "log_tail": "%s",\n' "$log_tail"
     printf '  "finished_at": "%s"\n' "$now"
     printf '}\n'
   } > "$tmp" 2>/dev/null || { rm -f "$tmp"; echo "gate-result: cannot write $tmp" >&2; return 1; }

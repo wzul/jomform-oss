@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -539,6 +540,61 @@ func TestDeviceAuthorizationRejectsUnknownClient(t *testing.T) {
 	}
 	if len(mailer.all()) != 0 {
 		t.Fatalf("mail sent for an unknown client")
+	}
+}
+
+// TestDCRGrantTypesMatchASMetadata is the drift guard for the two documents
+// that describe the same credential: the RFC 8414 `grant_types_supported` a
+// client discovers, and the RFC 7591 registration response's `grant_types`.
+//
+// RFC 7591 §3.2.1 makes the registration response the authoritative statement
+// of what the server will accept from THIS client, and RFC 8628 §5 lets a
+// harness pick the device flow from it. /oauth/device_authorization only looks
+// the client up by id and never consults grant_types, so a client registered
+// with a narrower list could still use the device grant — the server would
+// simply have under-described the credential it just issued.
+func TestDCRGrantTypesMatchASMetadata(t *testing.T) {
+	o, store, _ := testOAuthHandlers(t)
+	body := strings.NewReader(`{"client_name":"harness","redirect_uris":["https://client.example.com/cb"]}`)
+	req := httptest.NewRequest("POST", "/oauth/register", body)
+	rec := httptest.NewRecorder()
+	o.register(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var reg struct {
+		ClientID   string   `json:"client_id"`
+		GrantTypes []string `json:"grant_types"`
+	}
+	decodeJSONBody(t, rec, &reg)
+	if reg.ClientID == "" {
+		t.Fatal("no client_id in the registration response")
+	}
+
+	advertised, ok := authorizationServerDocument("mcp.jomform.com")["grant_types_supported"].([]string)
+	if !ok {
+		t.Fatal("grant_types_supported is not a string list")
+	}
+	if !slices.Contains(advertised, oauthmeta.DeviceGrantType) {
+		t.Fatalf("AS metadata advertises %v, missing %s — device discovery is broken", advertised, oauthmeta.DeviceGrantType)
+	}
+	if !slices.Equal(reg.GrantTypes, advertised) {
+		t.Fatalf("DCR grant_types = %v, AS metadata grant_types_supported = %v — the two documents describe one credential and must be one list", reg.GrantTypes, advertised)
+	}
+
+	// The response must describe what was actually stored, not a narrower set.
+	store.mu.Lock()
+	client, ok := store.clients[reg.ClientID]
+	var stored []string
+	if ok {
+		stored = client.GrantTypes
+	}
+	store.mu.Unlock()
+	if !ok {
+		t.Fatalf("registered client %s was not stored", reg.ClientID)
+	}
+	if !slices.Equal(stored, reg.GrantTypes) {
+		t.Fatalf("stored oauth_clients.grant_types = %v, registration response said %v", stored, reg.GrantTypes)
 	}
 }
 

@@ -143,9 +143,19 @@
 #
 # Overridable via environment:
 #   SKIP_TESTS  1 = same as --skip-tests  (default: 0)
-#   IMAGE       image name            (default: jomform-api)
-#   CONTEXT     build context dir     (default: api)
-#   DOCKERFILE  Dockerfile path       (default: api/Dockerfile)
+#   IMAGE       image name            (default: jomform-api). This is the ONLY
+#               setting that decides which Dockerfile and context are used:
+#               `*web*` -> web/Dockerfile with context `.`, `*api*` ->
+#               api/Dockerfile with context `api`. An image name that is
+#               neither requires BOTH of the next two to be set.
+#   CONTEXT     build context dir     (default: derived from IMAGE, see above)
+#   DOCKERFILE  Dockerfile path       (default: derived from IMAGE, see above)
+#               Both may still be given explicitly — but a pair that CONTRADICTS
+#               the image is refused with exit 1 before the gate and before any
+#               build, never silently corrected. That is the combination that
+#               built the Go binary, labelled it jomform-web and shipped it: the
+#               web container crash-looped on a missing DATABASE_URL and the site
+#               answered 502 until the tag was re-pointed by hand.
 #   OUT_DIR     local tarball output  (default: /tmp — keep OUTSIDE the repo
 #                                     so the clean-tree guard stays valid)
 #   SSH_HOST    set to enable scp of the tarball (e.g. 203.0.113.10); REQUIRED for --ship
@@ -165,10 +175,14 @@
 #   REMOTE_BUILD_DIR       where the source is unpacked there (default /root/jomform-build)
 #   REMOTE_BUILD_SSH_USER  (default: root)   REMOTE_BUILD_SSH_PORT (default: 22)
 #
-# Example — build the web image instead (context is the repo ROOT: the web
-# unit tests, which `npm run build` runs first, read api/ sources — see
-# web/Dockerfile and deploy/DEPLOY.md):
+# Example — build the web image instead. The IMAGE NAME ALONE IS ENOUGH: the
+# Dockerfile and the context are derived from it (web/Dockerfile, context `.`,
+# the repo ROOT — the web unit tests, which `npm run build` runs first, read
+# api/ sources — see web/Dockerfile and deploy/DEPLOY.md):
+#   IMAGE=jomform-web ./deploy/build-and-ship.sh
+# The explicit form is equivalent, and is what deploy/cut-release.sh runs:
 #   IMAGE=jomform-web CONTEXT=. DOCKERFILE=web/Dockerfile ./deploy/build-and-ship.sh
+# Stating the OTHER image's Dockerfile here is refused, not fixed.
 #
 # Example — the same, built on the deployment server:
 #   REMOTE_BUILD_HOST=217.216.39.61 ./deploy/build-and-ship.sh --remote-build
@@ -188,8 +202,6 @@ IMAGE="${IMAGE:-jomform-api}"
 # Derive the service from the image (jomform-api -> api, jomform-web -> web); set
 # SERVICE explicitly if the compose service is ever renamed.
 SERVICE="${SERVICE:-${IMAGE##*-}}"
-CONTEXT="${CONTEXT:-api}"
-DOCKERFILE="${DOCKERFILE:-api/Dockerfile}"
 OUT_DIR="${OUT_DIR:-/tmp}"
 SSH_HOST="${SSH_HOST:-}"
 SSH_USER="${SSH_USER:-root}"
@@ -245,6 +257,87 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # reading both as a generic 1.
 die_rc() { local rc=$1; shift; echo "ERROR: $*" >&2; exit "$rc"; }
 info() { echo "==> $*"; }
+
+# ---------------------------------------------------------------------------
+# IMAGE -> DOCKERFILE + CONTEXT: ONE DECISION, NOT TWO.
+#
+# These used to be resolved SEPARATELY (`CONTEXT="${CONTEXT:-api}"`,
+# `DOCKERFILE="${DOCKERFILE:-api/Dockerfile}"`), so `IMAGE=jomform-web` on its own
+# was accepted and built the API Dockerfile: the Go binary went out carrying
+# `org.opencontainers.image.title=jomform-web` and tagged `jomform-web:<version>`.
+# The web container then crash-looped on a missing DATABASE_URL and the public site
+# answered 502 until the tag was re-pointed by hand. The only check on the pair was
+# that the file exists — and `api/Dockerfile` exists.
+#
+# So the image name alone decides the pair, and an EXPLICIT pair that contradicts
+# it is REFUSED (never silently corrected: the operator believed something
+# different from what this script would have done, and that is worth saying out
+# loud). The refusal happens here, before the release-selftest, the gate and any
+# build.
+#   *web*  -> web/Dockerfile, context `.`  (the repo root: the web unit tests that
+#             `npm run build` runs first read api/ sources — see web/Dockerfile)
+#   *api*  -> api/Dockerfile, context `api`
+# An image name that is neither needs BOTH given explicitly; guessing is exactly
+# how the wrong bytes got shipped.
+# ---------------------------------------------------------------------------
+# `./api/Dockerfile`, `api/Dockerfile` and `$REPO_ROOT/api/Dockerfile` are the same
+# file; normalise before comparing so the guard cannot be spelled past.
+normalize_rel_path() {
+  local p="$1"
+  while [ "${p#./}" != "$p" ]; do p="${p#./}"; done
+  if [ -n "$REPO_ROOT" ] && [ "${p#"$REPO_ROOT"/}" != "$p" ]; then
+    p="${p#"$REPO_ROOT"/}"
+  fi
+  printf '%s' "$p"
+}
+# Which unit a Dockerfile builds. Empty for anything that is not one of the two
+# (a sandbox fixture path, for instance): there is then no cross-unit claim to check.
+dockerfile_unit() {
+  case "$(normalize_rel_path "$1")" in
+    api/Dockerfile) printf 'api' ;;
+    web/Dockerfile) printf 'web' ;;
+  esac
+}
+
+REQUESTED_DOCKERFILE="${DOCKERFILE:-}"
+REQUESTED_CONTEXT="${CONTEXT:-}"
+
+case "$IMAGE" in
+  *web*) IMAGE_UNIT=web ;;
+  *api*) IMAGE_UNIT=api ;;
+  *)     IMAGE_UNIT="" ;;
+esac
+
+PAIR_DOCKERFILE=""
+PAIR_CONTEXT=""
+case "$IMAGE_UNIT" in
+  web) PAIR_DOCKERFILE=web/Dockerfile; PAIR_CONTEXT=. ;;
+  api) PAIR_DOCKERFILE=api/Dockerfile; PAIR_CONTEXT=api ;;
+  *)
+    { [ -n "$REQUESTED_DOCKERFILE" ] && [ -n "$REQUESTED_CONTEXT" ]; } || die \
+      "cannot derive a build pair from IMAGE=$IMAGE — it names neither the *web* nor the *api* image, so set DOCKERFILE=... and CONTEXT=... explicitly (guessing the Dockerfile is how one unit's bytes get tagged as another's)"
+    ;;
+esac
+
+DOCKERFILE="${REQUESTED_DOCKERFILE:-$PAIR_DOCKERFILE}"
+CONTEXT="${REQUESTED_CONTEXT:-$PAIR_CONTEXT}"
+
+# The pair the image DOES build from, checked against what the caller stated.
+if [ -n "$IMAGE_UNIT" ] && [ -n "$REQUESTED_DOCKERFILE" ]; then
+  DF_UNIT="$(dockerfile_unit "$REQUESTED_DOCKERFILE")"
+  if [ -n "$DF_UNIT" ] && [ "$DF_UNIT" != "$IMAGE_UNIT" ]; then
+    die "IMAGE=$IMAGE is the $IMAGE_UNIT image and must be built from $PAIR_DOCKERFILE, but DOCKERFILE=$REQUESTED_DOCKERFILE builds the $DF_UNIT image — refusing to tag one unit's bytes as the other's"
+  fi
+  if [ -n "$DF_UNIT" ] && [ -n "$REQUESTED_CONTEXT" ]; then
+    case "$DF_UNIT" in
+      web) DF_CONTEXT=. ;;
+      api) DF_CONTEXT=api ;;
+    esac
+    if [ "$(normalize_rel_path "$REQUESTED_CONTEXT")" != "$(normalize_rel_path "$DF_CONTEXT")" ]; then
+      die "IMAGE=$IMAGE DOCKERFILE=$DOCKERFILE must be built with CONTEXT=$DF_CONTEXT, but CONTEXT=$REQUESTED_CONTEXT was given"
+    fi
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # purge_static_edge — drop the CDN's cached `/_next/static/*` entries (step 8c).
@@ -478,7 +571,7 @@ if [ -n "$REMOTE_BUILD_HOST" ]; then
   command -v ssh >/dev/null 2>&1 || die "ssh not found in PATH — required for REMOTE_BUILD_HOST"
   command -v tar >/dev/null 2>&1 || die "tar not found in PATH — required to unpack the source archive"
 fi
-[ -f "$DOCKERFILE" ] || die "$DOCKERFILE not found — the api image Dockerfile lives on the Dockerfile branch (issue #25); merge/checkout it first"
+[ -f "$DOCKERFILE" ] || die "$DOCKERFILE not found in $(pwd) — the image cannot be built from a Dockerfile that is not in the tree (the api Dockerfile lives on the Dockerfile branch, issue #25; merge/checkout it first)"
 mkdir -p "$OUT_DIR"
 
 # The gate inventory is READ FROM THE RUNNER, never copied into this file (the

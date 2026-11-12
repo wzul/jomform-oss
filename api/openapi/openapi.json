@@ -52,7 +52,7 @@
         "type": "object"
       },
       "Error": {
-        "description": "Every failure body is `{\"error\": \"...\"}`. A few routes add fields: publish adds `code` and `requires_ack` when a payment form has no products.",
+        "description": "Every failure body is `{\"error\": \"...\"}`. A few routes add fields: publish adds `code`, `requires_ack` and (for `no_product_selected`) `block_id` when a payment form cannot take money.",
         "properties": {
           "code": {
             "type": "string"
@@ -4230,7 +4230,7 @@
     },
     "/v1/rest/forms/{id}/publish": {
       "post": {
-        "description": "The form goes live at its URL. A payment form with no products is refused with 409 and requires_ack=true, because it could never take money; send {\"acknowledge\":true} or ?acknowledge=1 to publish it anyway.",
+        "description": "The form goes live at its URL. A payment form that cannot take money is refused with 409 and requires_ack=true, because it could never sell anything; send {\"acknowledge\":true} or ?acknowledge=1 to publish it anyway. The body's code says which shape: no_products (no product block at all) or no_product_selected (a product block exists but names no product — its block_id names the block, and buyers are served \"This form is not accepting orders right now\").",
         "operationId": "publishForm",
         "parameters": [
           {

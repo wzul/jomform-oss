@@ -52,6 +52,7 @@ it is not what a merger needs when it decides to squash.
   "seconds": 1338,
   "verdict": "red",
   "log": "/root/.hermes/profiles/qa/cache/scratch/preflight.log",
+  "log_tail": "<last ~80 lines of a RED gate's kept output, newlines escaped as \\n>",
   "complete": true,
   "finished_at": "2026-09-27T07:35:02Z"
 }
@@ -182,6 +183,21 @@ it is not what a merger needs when it decides to squash.
   observed `pass`; **`red`** if any gate holds a `fail`; otherwise `partial`.
   `in_progress` while the run that wrote the file has not finished — the field a
   human reads, while `complete: false` is the machine-readable half.
+* **`log` / `log_tail`** — where the evidence is. A run given `--log <path>` records
+  that path. A **red** run also keeps the failing gate's own captured output: it is
+  copied BEFORE the temp file is deleted to
+  `${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/logs/<tree>-<gate>-<utc>-<pid>.log`,
+  and the record's `log` names that copy. `log_tail` carries the same output's **last
+  ~80 lines** inline (newlines escaped as `\n`), so a reader holding only the JSON can
+  name the package or spec that failed. This exists because the failure path used to
+  keep the output only long enough to classify it and then delete it, leaving
+  `"log": ""`: on the v1.36.0 release tree (`db4cae6`) a `test` red after 710s and an
+  `e2e-core` red after 850s could not be attributed to any package or spec, and both
+  had to be re-run blind (426s + 391s, both passing on the identical tree). A red
+  is evidence, not a rerun prompt. The kept-log store is pruned by the preserve step
+  (see the overrides table): logs older than `PREFLIGHT_LOG_KEEP_DAYS`, beyond
+  `PREFLIGHT_LOG_KEEP_MAX` files, and anything over `PREFLIGHT_LOG_KEEP_BYTES` per
+  file is bounded, so it cannot grow without limit.
 
 ## The harness cache — one gate on a fixed file set, one on the whole tree
 
@@ -278,7 +294,11 @@ the same question. The runner does this itself on its own reuse path, so
 `--only vet --reuse-record` asks about `vet` and reports (and ledgers) only `vet`.
 
 `--log <path>` records where the run's output is being captured, so the next lane
-reads the evidence and not just the verdict.
+reads the evidence and not just the verdict. On a **red** gate the record's `log`
+instead names the per-gate copy kept under `${PREFLIGHT_RESULT_DIR}/logs/` (the run
+that produced the red is over; that copy is the precise evidence), and `log_tail`
+carries its last lines inline. The banner prints the kept path at the moment of
+failure.
 
 ## The safety rules (do not "simplify" these away)
 
@@ -364,6 +384,7 @@ reads the evidence and not just the verdict.
 | `scripts/preflight_reuse.sh` | the consumer a lane runs **before** queueing |
 | `scripts/preflight.sh` | writes the record per gate, and `--reuse-record` |
 | `${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/reuse-ledger.jsonl` | one line per reuse, with the host-seconds it avoided |
+| `${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/logs/` | a RED gate's kept output (`log` in the record names one of these) |
 
 ## The measured saving
 
@@ -385,6 +406,9 @@ from real files rather than estimated:
 | `PREFLIGHT_KEY_EXTRA` | *(unset)* | fold anything else into the fingerprint |
 | `PREFLIGHT_ONLY` | *(unset)* | tell the consumer which gates the run will select |
 | `PREFLIGHT_LOG` | *(unset)* | log path recorded as evidence |
+| `PREFLIGHT_LOG_KEEP_DAYS` | `14` | a kept red-gate log older than this is deleted |
+| `PREFLIGHT_LOG_KEEP_MAX` | `200` | kept red-gate logs beyond this many: the oldest go |
+| `PREFLIGHT_LOG_KEEP_BYTES` | `8388608` | per-file ceiling on a kept log (its tail is kept) |
 | `PREFLIGHT_LEDGER_DEDUPE_WINDOW` | `120` | seconds inside which an identical reuse event is not ledgered twice (0 disables) |
 
 ## What this does **not** do

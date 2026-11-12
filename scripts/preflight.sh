@@ -486,6 +486,10 @@ SEL_BASE="${SEL_BASE:-}"
 
 REUSE_RECORD=0
 PREFLIGHT_LOG="${PREFLIGHT_LOG:-}"
+# Where THIS run kept a red gate's output (gate_keep_failure_log), or empty when
+# nothing failed or nothing could be kept. Declared here so the failure banner can
+# name it under `set -u` on every path.
+KEPT_GATE_LOG=""
 # Gates this run REUSED from the per-tree record instead of re-running them.
 # Declared here (not next to PASSED) because the reuse block below the lock fills
 # it before the gate sections run; `summary` prints it on its own line so a
@@ -2941,6 +2945,98 @@ gate_record_pass() {  # $1 = gate, $2 = t0, $3 = t1
   info "gate [$gate]: PASS ($((t1-t0))s)"
 }
 
+# ---- A RED GATE MUST NOT DELETE THE EVIDENCE THAT SAYS WHAT FAILED ----------
+# WHY (card t_e2a3cf23). The failure path used a gate's captured output only to
+# CLASSIFY it (gate_failure_kind) and then deleted it, so a red record carried
+# `"log": ""`. Measured on the release tree of v1.36.0 (db4cae6 / commit
+# 4c7ab94d7): `test` failed after 710s and `e2e-core` after 850s, and nobody —
+# not the lane that produced the red, not the release ledger that followed —
+# could say WHICH package or spec failed. Both were re-run blind (426s + 391s)
+# and both PASSED on the byte-identical tree, so two real reds became
+# unattributable intermittents. "The gate was red yesterday, re-run it" must not
+# be the only option, least of all for a release that may ship on a bypassed gate.
+#
+# The record's `log` field already exists and green runs already use it (`--log`);
+# a red run now points it at a per-gate copy kept under the record directory, so
+# every existing reader keeps working. The copy is bounded (age + count + size),
+# and the last lines are ALSO written into the record as `log_tail` so a reader
+# with only the JSON can name the failing test.
+gate_log_dir() { printf '%s/logs\n' "${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}"; }
+
+# gate_log_prune — bound the kept-log store. Records stop being USEFUL after
+# PREFLIGHT_RESULT_TTL, but nothing deletes the files, so a kept log must carry its
+# own retention or the store grows for ever (1781 records were already on this host
+# when the card was written). Two bounds, both overridable:
+#   * PREFLIGHT_LOG_KEEP_DAYS (default 14) — older kept logs are deleted;
+#   * PREFLIGHT_LOG_KEEP_MAX  (default 200) — beyond that many, the oldest go.
+# Deliberately never fatal: this runs on the failure path, and a host-state problem
+# must not change the gate verdict.
+gate_log_prune() {
+  local dir days max keep n
+  dir="$(gate_log_dir)"
+  [ -d "$dir" ] || return 0
+  days="${PREFLIGHT_LOG_KEEP_DAYS:-14}"
+  max="${PREFLIGHT_LOG_KEEP_MAX:-200}"
+  case "$days" in ''|*[!0-9]*) days=14 ;; esac
+  case "$max" in ''|*[!0-9]*) max=200 ;; esac
+  if [ "$days" -gt 0 ]; then
+    find "$dir" -maxdepth 1 -type f -name '*.log' -mtime +"$days" -exec rm -f -- {} + 2>/dev/null
+  fi
+  [ "$max" -gt 0 ] || return 0
+  n="$(find "$dir" -maxdepth 1 -type f -name '*.log' 2>/dev/null | wc -l)"
+  n="${n//[!0-9]/}"
+  [ "${n:-0}" -gt "$max" ] || return 0
+  keep=$((max + 1))
+  find "$dir" -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +"$keep" | cut -d' ' -f2- \
+    | while IFS= read -r f; do rm -f -- "$f"; done
+  return 0
+}
+
+# gate_keep_failure_log <gate> <captured-log> — keep a red gate's output where a
+# later lane can find it, and leave its last lines for the record. Sets GR_LOG (the
+# stable path the record's `log` field names), GR_LOG_TAIL (written as `log_tail`)
+# and KEPT_GATE_LOG (for the failure banner). Returns non-zero when nothing could be
+# kept; the CALLER announces that rather than hiding it, because an unkept red is
+# exactly the defect this removes.
+gate_keep_failure_log() {
+  local gate="$1" log="$2" dir dest stamp cap size text base
+  [ -s "$log" ] || return 1
+  dir="$(gate_log_dir)"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  # The tree short sha names the BYTES, the UTC stamp and the pid keep two reds of
+  # the same gate on the same tree (in the same second) apart. Read from the
+  # already-computed GR_TREE_SHORT rather than calling gr_short_sha: this path runs
+  # even on a host where scripts/gate_result.sh is missing (the runner warns and
+  # writes no record), and the kept log must still be nameable there.
+  base="${GR_TREE_SHORT:-}"
+  [ -n "$base" ] || base="${GR_TREE:0:7}"
+  [ -n "$base" ] || base=unknown
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  dest="$dir/$base-$gate-$stamp-$$.log"
+  # A per-file ceiling, so one enormous red cannot fill the store on its own. The
+  # TAIL is kept, not the head: a failing run's diagnosis is at the end (the failing
+  # package's output, the summary of failed specs), and the head of a huge log is
+  # mostly progress chatter.
+  cap="${PREFLIGHT_LOG_KEEP_BYTES:-8388608}"
+  case "$cap" in ''|*[!0-9]*) cap=8388608 ;; esac
+  size="$(wc -c < "$log" 2>/dev/null)"
+  size="${size//[!0-9]/}"
+  if [ "$cap" -gt 0 ] && [ "${size:-0}" -gt "$cap" ]; then
+    { echo "preflight: gate [$gate] printed ${size} bytes; only the LAST ${cap} are kept here."
+      tail -c "$cap" "$log"; } > "$dest" 2>/dev/null
+  else
+    cp -f "$log" "$dest" 2>/dev/null
+  fi
+  [ -s "$dest" ] || return 1
+  text="$(tail -n 80 "$log" 2>/dev/null | tail -c 12000)"
+  GR_LOG="$dest"
+  GR_LOG_TAIL="$text"
+  KEPT_GATE_LOG="$dest"
+  gate_log_prune
+  return 0
+}
+
 # Record a FAIL for <gate> and END the run. Also shared: the same classification
 # (timeout vs crash vs failure) has to be printed whichever runner saw the red,
 # or a concurrent gate's failure would lose the "this is a TIMEOUT, not a failed
@@ -2948,6 +3044,14 @@ gate_record_pass() {  # $1 = gate, $2 = t0, $3 = t1
 gate_record_fail_exit() {  # $1 = gate, $2 = label, $3 = t0, $4 = t1, $5 = rc, $6 = log
   local gate="$1" label="$2" t0="$3" t1="$4" rc="$5" log="$6"
   FAILED+=("$gate")
+  # KEEP THE OUTPUT BEFORE THE RECORD IS WRITTEN. The record's `log` field must
+  # name a file that still exists when the record is finalised, and gr_flush below
+  # writes that field — so this has to happen first, not after the verdict.
+  if [ -s "$log" ]; then
+    if ! gate_keep_failure_log "$gate" "$log"; then
+      echo "preflight: WARNING — the red gate's output could NOT be kept under $(gate_log_dir); it is about to be deleted with $log" >&2
+    fi
+  fi
   if declare -F gr_flush >/dev/null 2>&1 && [ -n "${GR_TREE:-}" ]; then
     GR_STATUS["$gate"]="fail"; GR_SECONDS["$gate"]="$((t1-t0))"; GR_AT["$gate"]="$(gr_now)"
     GR_PASSED="${#PASSED[@]}"; GR_FAILED="${#FAILED[@]}"; GR_SKIPPED="${#SKIPPED[@]}"
@@ -2976,6 +3080,12 @@ gate_record_fail_exit() {  # $1 = gate, $2 = label, $3 = t0, $4 = t1, $5 = rc, $
       echo "PREFLIGHT FAIL: gate '$gate' ($label) exited $rc after ${_secs}s" >&2
       ;;
   esac
+  # The human standing at the terminal sees the path AT THE MOMENT of failure, so
+  # attribution does not depend on remembering that a record exists.
+  if [ -n "$KEPT_GATE_LOG" ]; then
+    echo "  full output kept: $KEPT_GATE_LOG" >&2
+    echo "  (its last lines are also in the result record's log_tail field)" >&2
+  fi
   summary
   exit 1
 }

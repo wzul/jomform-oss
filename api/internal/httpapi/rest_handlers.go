@@ -840,6 +840,19 @@ type restForm struct {
 	// configured. The secret itself is never returned.
 	ChipConfigured bool   `json:"chip_configured"`
 	ChipBrandID    string `json:"chip_brand_id,omitempty"`
+
+	// NotAcceptingOrders is true when this payment form's public page is the
+	// submit-less "This form is not accepting orders right now" page — the
+	// shape card t_983425e5 measured: published, but no block sells anything (or
+	// a product block points at a product that was purged). It is dbstore's own
+	// rule (NotAcceptingOrders), the same one the publish guard uses, so the
+	// list cannot disagree with the refusal.
+	//
+	// Omitted when false, so every existing caller keeps the payload it had.
+	NotAcceptingOrders bool `json:"not_accepting_orders,omitempty"`
+	// NoProductBlockID names the product block to fix when the form has one.
+	// Empty when the form has no product block at all (nothing single to blame).
+	NoProductBlockID string `json:"no_product_block_id,omitempty"`
 }
 
 // fmtTime formats a *time.Time as RFC3339, or "" when nil (issue #177).
@@ -958,14 +971,24 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 		respondErr(w, r, err)
 		return
 	}
+	// ONE product-id read for the whole list. The dead-form signal is dbstore's
+	// rule (shared with the publish guard); the ids only feed its purged-product
+	// arm, which is why they are read once per account rather than once per row.
+	live := h.productIDsForAccount(r.Context(), actx.Account.ID)
 	out := make([]restForm, 0, len(forms))
 	for _, f := range forms {
+		blockID, dead := dbstore.NotAcceptingOrders(f, live)
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 			IsPrivate: f.Status == dbstore.FormStatusPrivate,
 			Mode:      formMode(f),
 			URL:       h.formURLForAccount(r.Context(), actx.Account, f.Slug),
 			UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+			// Card t_983425e5: a published-but-dead form must be visible in the
+			// list without opening it. The badge in web/src/app/forms/page.tsx
+			// reads these two fields.
+			NotAcceptingOrders: dead,
+			NoProductBlockID:   blockID,
 		})
 	}
 	respond(w, http.StatusOK, out)
@@ -984,6 +1007,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		chipConfigured = true
 		chipBrandID = b
 	}
+	deadBlockID, dead := dbstore.NotAcceptingOrders(f, h.productIDsForAccount(r.Context(), f.AccountID))
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		IsPrivate: f.Status == dbstore.FormStatusPrivate,
@@ -996,7 +1020,30 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		LimitMessage:   strOrEmpty(f.LimitMessage),
 		ChipConfigured: chipConfigured, ChipBrandID: chipBrandID,
 		Mode: dbstore.FormMode(f),
+		// Card t_983425e5: the SAME signal the list carries, so a page that
+		// loads one form (the builder) and a page that loads the list cannot
+		// disagree about whether this form can take an order.
+		NotAcceptingOrders: dead,
+		NoProductBlockID:   deadBlockID,
 	})
+}
+
+// productIDsForAccount returns every product id the account still has a row for
+// — the input dbstore.NotAcceptingOrders/PublishWarning need to see a block
+// pointing at a PURGED product.
+//
+// nil means "this handler has no product store" (bare-mode tests). The rule
+// treats nil as "skip that arm", never as "the account has no products", so a
+// missing store cannot accuse a healthy form.
+func (h *RESTHandlers) productIDsForAccount(ctx context.Context, accountID string) map[string]bool {
+	if h.Products == nil || accountID == "" {
+		return nil
+	}
+	ids, err := h.Products.ProductIDs(ctx, accountID)
+	if err != nil {
+		return nil
+	}
+	return ids
 }
 
 // workspaceRequiredMessage is the wire refusal for a form CREATE from an account
@@ -1415,7 +1462,14 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	// A response form and an enabled-menu form are never affected (see
 	// dbstore.PaymentFormWithoutProducts).
 	//
-	// Gated on the TRANSITION (dbstore.PublishNeedsAck), not on the raw rule: a
+	// Card t_983425e5: the warning now carries a CODE and the BLOCK to fix. A
+	// payment form whose product block is unpointed (`product_id` empty, or a
+	// product row that was purged) answers `no_product_selected` + `block_id`, so
+	// the builder can name the block and link to it instead of talking about a
+	// form that "has no products" — the sentence the merchant read while their
+	// buyer saw "This form is not accepting orders right now".
+	//
+	// Gated on the TRANSITION (dbstore.PublishWarning), not on the raw rule: a
 	// form that is already live must not ask again on every subsequent publish
 	// call, or the dashboard would nag a merchant who publishes an empty payment
 	// form on purpose.
@@ -1435,8 +1489,8 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	if !hasGalleryAddress(f, dbstore.FormStatusPublished) && !h.refuseWithoutLiveWorkspace(w, r, actx) {
 		return
 	}
-	if dbstore.PublishNeedsAck(f, dbstore.FormStatusPublished) && !publishAcknowledged(r) {
-		writePublishNeedsAck(w)
+	if code, blockID := dbstore.PublishWarning(f, dbstore.FormStatusPublished, h.productIDsForAccount(r.Context(), f.AccountID)); code != dbstore.PublishReady && !publishAcknowledged(r) {
+		writePublishNeedsAck(w, code, blockID)
 		return
 	}
 	if err := h.Forms.SetStatus(r.Context(), actx.Account.ID, id, dbstore.FormStatusPublished); err != nil {
@@ -1454,25 +1508,41 @@ func (h *RESTHandlers) publishForm(w http.ResponseWriter, r *http.Request, actx 
 	respond(w, http.StatusOK, map[string]string{"status": "published"})
 }
 
-// writePublishNeedsAck answers a publish that a payment form with no products
-// cannot complete silently. The status is 409 because nothing was changed: the
-// caller asked for a state it has to confirm first. `code` is the stable token
-// the dashboard matches on (web/src/lib/publishResult.ts holds the same value),
-// so it never has to parse the message.
+// writePublishNeedsAck answers a publish that a payment form that cannot take
+// money cannot complete silently. The status is 409 because nothing was changed:
+// the caller asked for a state it has to confirm first. `code` is the stable
+// token the dashboard matches on (web/src/lib/publishResult.ts holds the same
+// values), so it never has to parse the message.
 //
-// The prose says BOTH halves of the truth, because an agent/curl client reads
-// it and has no dictionary to fall back on (t_39906c0a): such a form cannot take
-// money AND collects nothing (both the legacy and the block payment layouts gate
-// submit on a selected product), so acknowledging the warning is not a way to
-// collect answers. The dashboard renders its own 5-locale sentence from
-// `bld.noProductsWarn` and never prints this prose.
-func writePublishNeedsAck(w http.ResponseWriter) {
-	writeJSON(w, http.StatusConflict, map[string]any{
+// Card t_983425e5 added the `no_product_selected` arm: the form HAS a product
+// block, it just is not pointed at a product. `block_id` names it so the builder
+// can link straight to the control the merchant has to fix. The prose quotes the
+// sentence the BUYER is served ("This form is not accepting orders right now")
+// because that is the fact the merchant was missing — the dashboard renders its
+// own 5-locale sentence from the code and never prints this prose.
+//
+// Both messages say BOTH halves of the truth, because an agent/curl client reads
+// them and has no dictionary to fall back on (t_39906c0a): such a form cannot
+// take money AND collects nothing (both the legacy and the block payment layouts
+// gate submit on a selected product), so acknowledging the warning is not a way
+// to collect answers.
+func writePublishNeedsAck(w http.ResponseWriter, code, blockID string) {
+	out := map[string]any{
 		"error": "This payment form has no products — it cannot accept payment " +
 			"and will not collect anything. Add a product first, or confirm to continue.",
 		"code":         dbstore.PublishWarningNoProducts,
 		"requires_ack": true,
-	})
+	}
+	if code == dbstore.PublishWarningNoProductSelected {
+		out["error"] = "This payment form has a product block with no product selected — " +
+			"buyers are shown \"This form is not accepting orders right now\". " +
+			"Pick a product in the block, or confirm to continue."
+		out["code"] = dbstore.PublishWarningNoProductSelected
+		if blockID != "" {
+			out["block_id"] = blockID
+		}
+	}
+	writeJSON(w, http.StatusConflict, out)
 }
 
 // publishAcknowledged reports whether the caller explicitly accepted the
@@ -1541,8 +1611,8 @@ func (h *RESTHandlers) setFormStatus(w http.ResponseWriter, r *http.Request, act
 	// the dashboard's status control reaches THIS route. Gated on the
 	// transition, so re-saving a form that is already live is never blocked.
 	if dbstore.IsLiveStatus(in.Status) {
-		if dbstore.PublishNeedsAck(f, in.Status) && !in.Acknowledge && r.URL.Query().Get("acknowledge") != "1" {
-			writePublishNeedsAck(w)
+		if code, blockID := dbstore.PublishWarning(f, in.Status, h.productIDsForAccount(r.Context(), f.AccountID)); code != dbstore.PublishReady && !in.Acknowledge && r.URL.Query().Get("acknowledge") != "1" {
+			writePublishNeedsAck(w, code, blockID)
 			return
 		}
 	}

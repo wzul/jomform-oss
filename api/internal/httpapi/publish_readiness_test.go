@@ -109,14 +109,25 @@ func TestPublishRefusesAPaymentFormWithNoProductsUntilAcknowledged(t *testing.T)
 		t.Errorf("re-publishing an already-live form = %d, want 200 (body=%s)", code, raw)
 	}
 
-	// 4. A payment form that HAS something to sell publishes bare.
+	// 4. A payment form that HAS something to sell publishes bare. The product
+	// must be a REAL row (card t_983425e5): the rule now also asks whether the
+	// block's product_id resolves to a product the account still has, so a
+	// made-up UUID would be refused as `no_product_selected` — correctly, since
+	// a buyer page pointing at a non-existent product is the purged-product case
+	// this card is about.
+	prod := &dbstore.Product{
+		AccountID: acc, Name: "Tee", PriceSen: 1000, Type: dbstore.SaleTypeOneTime, Active: true,
+	}
+	if err := dbstore.NewProductStore(pool).Create(ctx, prod); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
 	selling := &dbstore.Form{
 		AccountID: acc, Slug: "ppr-selling-" + acc[:8], Title: "Tee Order",
 		Config: map[string]any{
 			"mode": "payment",
 			"blocks": []any{
 				map[string]any{"id": "b1", "type": "email", "value": "Email"},
-				map[string]any{"id": "b2", "type": "product", "product_id": "3f1e5c58-1111-2222-3333-444455556666"},
+				map[string]any{"id": "b2", "type": "product", "product_id": prod.ID},
 			},
 		},
 		Theme: map[string]any{}, Status: dbstore.FormStatusDraft,
@@ -261,12 +272,20 @@ func TestBulkPublishWithholdsPaymentFormsWithNoProducts(t *testing.T) {
 	forms := dbstore.NewFormStore(pool)
 
 	// A bulk publish must not be a way around the guard: one form with something
-	// to sell, one without.
+	// to sell, one without. Card t_983425e5: the selling form must name a REAL
+	// product row — a made-up id is now (correctly) reported as an unpointed/
+	// purged product block, which would make this fixture test the wrong thing.
+	bulkProd := &dbstore.Product{
+		AccountID: acc, Name: "Tee", PriceSen: 1000, Type: dbstore.SaleTypeOneTime, Active: true,
+	}
+	if err := dbstore.NewProductStore(pool).Create(ctx, bulkProd); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
 	selling := &dbstore.Form{
 		AccountID: acc, Slug: "ppr-bulk-ok-" + acc[:8], Title: "Tee Order",
 		Config: map[string]any{
 			"mode":   "payment",
-			"blocks": []any{map[string]any{"id": "b2", "type": "product", "product_id": "3f1e5c58-1111-2222-3333-444455556666"}},
+			"blocks": []any{map[string]any{"id": "b2", "type": "product", "product_id": bulkProd.ID}},
 		},
 		Theme: map[string]any{}, Status: dbstore.FormStatusDraft,
 	}

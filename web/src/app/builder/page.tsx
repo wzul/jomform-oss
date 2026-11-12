@@ -23,11 +23,18 @@ import {
 } from "../../lib/templateEdit";
 import {
   PUBLISH_NEEDS_ACK_KEY,
+  PUBLISH_NO_PRODUCT_SELECTED,
+  PUBLISH_NO_PRODUCT_SELECTED_KEY,
   acknowledgmentBody,
   liveLink,
   publishErrorText,
   publishOutcome,
 } from "../../lib/publishResult";
+// Card t_983425e5: the product picker must be able to DISPLAY the empty state,
+// and the builder must say the buyer sentence when a block is unpointed. Both
+// decisions live in a plain .ts module so the node test runner can prove them;
+// this file only renders what they answer.
+import { productSelectValue, unpointedProductBlocks } from "../../lib/productPick";
 import TemplatePicker from "../../components/TemplatePicker";
 import FormModeControl, { type FormMode } from "../../components/FormModeControl";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
@@ -51,8 +58,10 @@ import { looksLikeProse, treatAsFieldLabel, treatAsIntro } from "../../lib/textB
 type PublishNotice =
   | { kind: "live"; url: string }
   // Message-less on purpose: the sentence is rendered from the dictionary (see
-  // lib/publishResult.ts), never from the API's Malay prose.
-  | { kind: "needsAck" }
+  // lib/publishResult.ts), never from the API's Malay prose. Card t_983425e5:
+  // `code` picks which sentence, and `blockId` is the product block the refusal
+  // names so the panel can link to it.
+  | { kind: "needsAck"; code: string; blockId: string }
   | { kind: "error"; message: string };
 
 /* Issue #173: Gravity-Forms-style field palette. BlockType is the union of
@@ -677,6 +686,17 @@ export default function Builder() {
     setMobileTab("canvas");
   }
 
+  // Card t_983425e5: put the merchant on the block that has to be fixed — open
+  // its settings AND bring the card into view, so a warning at the top of the
+  // builder is one click from the control it is about (the block card carries
+  // `id={"jf-block-" + b.id}` for exactly this).
+  function focusBlock(id: string) {
+    openBlockPanel(id);
+    if (typeof document === "undefined") return;
+    const el = document.getElementById(`jf-block-${id}`);
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
+  }
+
   function closeBlockPanel() {
     // Keep the block selected: after closing, the canvas keeps the highlight so
     // the user can see which block they were editing (and tap it to return).
@@ -1011,7 +1031,7 @@ export default function Builder() {
         const outcome = publishOutcome({ ok: false, status: sr.status, body: d }, "");
         setPublishNotice(
           outcome.kind === "needs_ack"
-            ? { kind: "needsAck" }
+            ? { kind: "needsAck", code: outcome.code, blockId: outcome.blockId }
             : { kind: "error", message: apiErr(d, t("bld.statusSaveFail"), t) },
         );
         return null;
@@ -1030,7 +1050,7 @@ export default function Builder() {
         // API's prose cannot reach the panel through either branch.
         setPublishNotice(
           outcome.kind === "needs_ack"
-            ? { kind: "needsAck" }
+            ? { kind: "needsAck", code: outcome.code, blockId: outcome.blockId }
             : { kind: "error", message: publishErrorText(outcome, t("bld.saveFail"), t) },
         );
         await load();
@@ -1757,9 +1777,18 @@ export default function Builder() {
             <label htmlFor={fid("productId")} className="text-xs text-[var(--jf-muted)]">
               {t("bld.product")}
             </label>
+            {/* Card t_983425e5: `productSelectValue` answers "" unless the
+                stored id is one the list actually offers, and the FIRST option
+                below is that "". Before this, the list had no empty option at
+                all, so a block with no product id showed the FIRST product
+                ("derma — RM1.00") while its value stayed "" — the merchant read
+                that as a selection, saved, and the buyer was served "This form
+                is not accepting orders right now". The placeholder also covers
+                a product that was purged: the control shows the empty state
+                instead of a product the block no longer names. */}
             <select
               id={fid("productId")}
-              value={b.productId || ""}
+              value={productSelectValue(b.productId, products)}
               onChange={(e) => {
                 // Issue #461: the block label follows the product. Switching to
                 // another product must not leave the previous product's name as
@@ -1768,12 +1797,13 @@ export default function Builder() {
                 const nextId = e.target.value;
                 const prev = products.find((x) => x.id === b.productId);
                 const next = products.find((x) => x.id === nextId);
-                const patch: Partial<Block> = { productId: nextId };
+                const patch: Partial<Block> = { productId: next ? nextId : undefined };
                 if (next && (!b.value || b.value === prev?.name)) patch.value = next.name;
                 upd(patch);
               }}
               className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
             >
+              <option value="">{t("bld.chooseProduct")}</option>
               {products.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} — {money(p.price_sen)}
@@ -1948,6 +1978,12 @@ export default function Builder() {
   // skips product/quantity/option/shipping/total), so the mode dialog states
   // that consequence before the merchant confirms.
   const pricingBlockCount = blocks.filter((b) => pricingTypes.includes(b.type)).length;
+  // Card t_983425e5: the blocks whose product picker shows the placeholder — no
+  // product id, or one the workspace's live product list no longer has. The
+  // banner above the canvas and the publish refusal's link both read this ONE
+  // answer, and it is computed before the early return so the hooks above stay
+  // unconditional.
+  const unpointedBlockIDs = unpointedProductBlocks(blocks, products);
 
   if (sessionError) return <SessionFault />;
 
@@ -2139,6 +2175,36 @@ export default function Builder() {
         </div>
       </header>
 
+      {/* Card t_983425e5: the persistent merchant-side signal. Unlike the
+          publish notice below (which appears only after a publish attempt), this
+          is on screen whenever the form would tell a buyer "This form is not
+          accepting orders right now" — a payment form with a product block that
+          names no product from the workspace's list. It quotes the buyer's
+          sentence, names the block and links to it, and it does not disappear
+          when the notice is dismissed. Acknowledging the publish warning makes
+          the form live; it does not make it sell. */}
+      {mode !== "response" && unpointedBlockIDs.length > 0 && (
+        <div
+          role="alert"
+          data-testid="builder-not-accepting-orders"
+          className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 md:flex-row md:items-center md:px-4"
+        >
+          <span className="min-w-0">
+            {t("bld.noProductSelectedWarn")}
+          </span>
+          <a
+            href={`#jf-block-${unpointedBlockIDs[0]}`}
+            onClick={(e) => {
+              e.preventDefault();
+              focusBlock(unpointedBlockIDs[0]);
+            }}
+            className="shrink-0 font-medium text-[var(--jf-primary)] underline"
+          >
+            {t("bld.goToProductBlock")} →
+          </a>
+        </div>
+      )}
+
       {/* Onboarding gap: the moment the form goes live. Placed directly under
           the builder header — the surface the merchant is already looking at
           when they press Publish — because that is exactly where the missing
@@ -2199,9 +2265,28 @@ export default function Builder() {
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className="text-xs text-[var(--jf-text)]">
                 {publishNotice.kind === "needsAck"
-                  ? t(PUBLISH_NEEDS_ACK_KEY)
+                  ? t(
+                      publishNotice.code === PUBLISH_NO_PRODUCT_SELECTED
+                        ? PUBLISH_NO_PRODUCT_SELECTED_KEY
+                        : PUBLISH_NEEDS_ACK_KEY,
+                    )
                   : publishNotice.message}
               </span>
+              {/* Card t_983425e5: the refusal names the product block the
+                  merchant has to fix, so it gets a link straight to it instead
+                  of leaving them to hunt through the canvas. */}
+              {publishNotice.kind === "needsAck" && publishNotice.blockId && (
+                <a
+                  href={`#jf-block-${publishNotice.blockId}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    focusBlock(publishNotice.blockId);
+                  }}
+                  className="shrink-0 text-xs font-medium text-[var(--jf-primary)] underline"
+                >
+                  {t("bld.goToProductBlock")} →
+                </a>
+              )}
               {/* Docs parity (AGENTS.md rule 4): the "?" beside the field that
                   raises the question deep-links the publish section of the
                   knowledge base. t_d768342e: the publish walk-through now lives
@@ -2400,13 +2485,14 @@ export default function Builder() {
                   }`}
                 />
                 <div
+                  id={`jf-block-${b.id}`}
                   draggable
                   onDragStart={(e) => blockDragStart(e, i)}
                   onDragEnd={endDrag}
                   onDragOver={(e) => canvasDragOver(e, i + 1)}
                   onDrop={(e) => canvasDrop(e, i + 1)}
                   onClick={() => openBlockPanel(b.id)}
-                  className={`cursor-grab rounded-lg border bg-white p-3 transition-colors active:cursor-grabbing ${
+                  className={`scroll-mt-24 cursor-grab rounded-lg border bg-white p-3 transition-colors active:cursor-grabbing ${
                     selected === b.id
                       ? "border-[var(--jf-accent)]/60 shadow-[0_0_0_1px_rgba(113,112,255,0.4)]"
                       : "border-[var(--jf-border)] hover:border-slate-300"

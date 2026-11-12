@@ -180,6 +180,16 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "publishing-no-product",
+    title: "When a form cannot take orders",
+    icon: "⚠️",
+    body: [
+      "A **product block with no product selected** counts as nothing to sell, even when your catalogue has products.",
+      "The builder says so beside the form, quotes the sentence buyers see and links straight to that block.",
+      "A block pointing at a permanently deleted product gets the same signal, and the form list labels the row **Not accepting orders** instead of **LIVE**.",
+    ],
+  },
+  {
     id: "publishing-paths",
     title: "Every path that publishes",
     icon: "🔁",

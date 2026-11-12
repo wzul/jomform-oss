@@ -292,7 +292,7 @@ function flattenJsx(node) {
 }
 
 /**
- * THE PER-PAGE PROSE BUDGET OF THE SEARCH INDEX, in characters (card t_2799edde).
+ * THE PER-PAGE PROSE BUDGET OF THE SEARCH INDEX, in characters (cards t_2799edde, t_d80ad142).
  *
  * The index is a static import in src/app/docs/docsSearch.tsx, so every byte of it is in
  * the docs route's client bundle on every docs page. Measured on this tree by running the
@@ -308,13 +308,40 @@ function flattenJsx(node) {
  * 1,800 is where the curve flattens: most pages are indexed WHOLE at that size (the 90th
  * percentile of a page's prose is just under it), and the handful of 5,000-word reference
  * pages stop paying for prose their headings and lead already cover — a reader who needs
- * more than the first 1,800 characters of a page is on the page already.
+ * the middle of such a page is on the page already.
  *
- * The cut is made at a SENTENCE boundary (trimToBudget), never mid-word, so a phrase is
- * either in the index or wholly absent — a half-indexed phrase matches nothing and makes
- * the stored snippet end in "consi…".
+ * That table was measured with the HEAD-only cut. Both ends of a long page are kept now
+ * (PAGE_TEXT_TAIL_BUDGET): the cut used to keep the head only, so a page's closing section
+ * was not just unranked but unsearchable — /docs/mcp/connect rendered the note about the
+ * proxy renewing the token, and ⌘K answered "No page matches "proxy"" because the word sat
+ * 1,300 characters past the cut. The budget therefore rose by the size of the tail (1,800 →
+ * 2,400) so the head still carries everything it carried before; the trade is the measured
+ * one below, not a silent one.
+ *
+ * The cut is made BETWEEN paragraphs and at sentence boundaries inside one, never mid-word,
+ * so a phrase inside either kept region is whole — a half-indexed phrase matches nothing and
+ * makes the stored snippet end in "consi…".
  */
-export const PAGE_TEXT_BUDGET = 1800;
+export const PAGE_TEXT_BUDGET = 2400;
+
+/**
+ * The characters at the END of an over-budget page that are always kept (card t_d80ad142).
+ *
+ * A cut page is not a rare shape on this tree — 25 of 40 pages overran the old 1,800 — and
+ * every one of them used to lose its whole closing section. On a task page that is exactly
+ * where "what do I do when the token expires / how do I sign out" lives, i.e. the paragraph a
+ * reader most often comes to search for.
+ *
+ * 600 characters is enough for the closing section of every page on this tree (the longest
+ * such tail is ~450). The head keeps the lead, the opening steps, and now every character it
+ * kept before this card — 1,797 instead of 1,800 minus the cut's sentence rounding.
+ */
+export const PAGE_TEXT_TAIL_BUDGET = 600;
+
+/** The mark between the kept head and the kept tail of an over-budget page. It stops a phrase
+ *  from matching ACROSS the gap (without it "…the" + "proxy renews" would read as the
+ *  adjacency "the proxy renews", which the page does not say) and tokenises to nothing. */
+const OMITTED = " … ";
 
 /**
  * THE WHOLE-INDEX CEILING, in bytes of the generated `docsSearch.gen.json` (t_2799edde).
@@ -326,20 +353,105 @@ export const PAGE_TEXT_BUDGET = 1800;
  * prose was not indexed — the feature costs about 5.4 KiB gzip. The built chunk that carries
  * the index went from 81,000 B / 23,890 B gzip to 97,680 B / 29,451 B gzip.
  *
- * 96 KiB is that measured size plus room for roughly four more pages. A tree that grows past
- * it is not broken — it is a cost decision that has to be made on purpose, which is exactly
- * what a silently-growing index never got.
+ * Keeping the tail as well as the head (PAGE_TEXT_TAIL_BUDGET, t_d80ad142) costs the index
+ * +16.7 KiB raw / +5.8 KiB gzip on this 40-page tree: 97,255 B / 30,478 B gzip, against
+ * 80,590 B / 24,646 B for the head-only cut it replaces. That is the price of making a
+ * page's closing section searchable without taking anything out of the head — measured,
+ * and the ceiling below was raised with it.
+ *
+ * 112 KiB is roughly that measured size plus room for five more pages, the same headroom
+ * the old 96 KiB ceiling kept over the old 78.7 KiB index. A tree that grows past it is not
+ * broken — it is a cost decision that has to be made on purpose, which is exactly what a
+ * silently-growing index never got.
  */
-export const SEARCH_PAYLOAD_BUDGET = 96 * 1024;
+export const SEARCH_PAYLOAD_BUDGET = 112 * 1024;
 
-/** Cut `text` to `budget` characters at a sentence end, or failing that a word end. */
-function trimToBudget(text, budget = PAGE_TEXT_BUDGET) {
+/** The first `budget` characters of `text`, ending at a sentence end or failing that a word end. */
+function cutHead(text, budget) {
+  if (budget <= 0) return "";
   if (text.length <= budget) return text;
   const window = text.slice(0, budget);
   const sentence = window.lastIndexOf(". ");
   if (sentence > budget * 0.5) return window.slice(0, sentence + 1);
   const space = window.lastIndexOf(" ");
   return (space > 0 ? window.slice(0, space) : window).trim();
+}
+
+/** The LAST `budget` characters of `text`, opening at a sentence start when one occurs early
+ *  enough, or failing that a word start — the tail must never begin with half a word. */
+function cutTail(text, budget) {
+  if (budget <= 0) return "";
+  const window = text.slice(Math.max(0, text.length - budget));
+  const sentence = window.indexOf(". ");
+  if (sentence >= 0 && sentence <= budget * 0.25) return window.slice(sentence + 2).trim();
+  const space = window.indexOf(" ");
+  return (space >= 0 ? window.slice(space + 1) : window).trim();
+}
+
+/**
+ * Fit a page's prose into `budget` characters: keep the leading paragraphs, an omission
+ * mark, and the trailing paragraphs (cards t_2799edde, t_d80ad142).
+ *
+ * Both ends are kept because neither is more important to a reader searching — the head
+ * carries the lead and the opening steps, the tail carries the closing section ("sign out",
+ * "the proxy renews the token"). The cut falls between paragraphs where it can and at a
+ * sentence boundary inside one where it cannot, never mid-word, so a word or phrase the page
+ * states is either in the index whole or was never in this region.
+ */
+function fitToBudget(parts, budget = PAGE_TEXT_BUDGET) {
+  const whole = parts.join(" ");
+  if (whole.length <= budget) return whole;
+  const tailBudget = Math.min(PAGE_TEXT_TAIL_BUDGET, Math.round(budget / 2));
+  const headBudget = Math.max(1, budget - tailBudget - OMITTED.length);
+
+  // One blob (a guide's markdown body): there are no paragraph boundaries to respect, so
+  // both ends are cut at a sentence/word edge inside the same text.
+  if (parts.length === 1) {
+    const [text] = parts;
+    return `${cutHead(text, headBudget)}${OMITTED}${cutTail(text, tailBudget)}`;
+  }
+
+  const head = [];
+  let headUsed = 0;
+  for (const part of parts) {
+    const add = (head.length > 0 ? 1 : 0) + part.length;
+    if (headUsed + add > headBudget) break;
+    head.push(part);
+    headUsed += add;
+  }
+
+  // Spend what is left of the head share on the paragraph that did not fit, at a sentence
+  // boundary: dropping it whole because its last sentence overran would lose prose the
+  // head-only cut used to keep.
+  let rest = parts.slice(head.length);
+  if (rest.length > 0) {
+    const room = headBudget - headUsed - (head.length > 0 ? 1 : 0);
+    const partial = cutHead(rest[0], room);
+    if (partial && partial.length < rest[0].length) {
+      head.push(partial);
+      rest = [rest[0].slice(partial.length).trimStart(), ...rest.slice(1)];
+    }
+  }
+
+  const tail = [];
+  let tailUsed = 0;
+  for (let i = rest.length - 1; i >= 0; i--) {
+    const add = (tail.length > 0 ? 1 : 0) + rest[i].length;
+    if (tailUsed + add > tailBudget) break;
+    tail.unshift(rest[i]);
+    tailUsed += add;
+  }
+  // A closing paragraph bigger than the whole tail share: keep its END, cut at a boundary.
+  if (tail.length === 0 && rest.length > 0) tail.push(cutTail(rest[rest.length - 1], tailBudget));
+
+  const text = `${head.join(" ")}${OMITTED}${tail.join(" ")}`;
+  return text.length <= budget ? text : cutHead(text, budget);
+}
+
+/** `fitToBudget` for one blob of text (a guide's markdown body): the paragraph boundaries a
+ *  page has (`body: [...]`) are not known here, so it is cut at sentence/word edges. */
+function trimToBudget(text, budget = PAGE_TEXT_BUDGET) {
+  return fitToBudget([text], budget);
 }
 
 /**
@@ -397,10 +509,11 @@ export function readPage(file, route, budget = PAGE_TEXT_BUDGET) {
   })();
 
   // De-duplicate identical strings (a page often renders the same heading and body line),
-  // normalize the inline markers away, then cut to the page's prose budget so one page
-  // cannot dominate the shared index payload (PAGE_TEXT_BUDGET).
+  // normalize the inline markers away, then fit the page into its prose budget — head AND
+  // tail, so one page cannot dominate the shared index payload (PAGE_TEXT_BUDGET) without
+  // making its closing section unsearchable (PAGE_TEXT_TAIL_BUDGET).
   const seen = new Set();
-  const body = trimToBudget(
+  const body = fitToBudget(
     texts
       .map((t) => proseText(t))
       .filter((t) => {
@@ -410,8 +523,7 @@ export function readPage(file, route, budget = PAGE_TEXT_BUDGET) {
         if (/^(?:[a-z-]+:)?(?:flex|grid|block|inline|hidden|text-|bg-|border|rounded|shadow|p[xy]?-|m[xy]?-|w-|h-|min-|max-|gap-|space-|font-|leading-|tracking-|items-|justify-|overflow|sticky|absolute|relative|uppercase|underline|hover:|sm:|md:|lg:|xl:)/.test(t)) return false;
         if (/^[./@\w-]+\.(?:tsx?|mjs|css|png)$/.test(t)) return false;
         return true;
-      })
-      .join(" "),
+      }),
     budget,
   );
 
