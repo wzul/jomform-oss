@@ -6149,6 +6149,42 @@ else
   rm -rf "$s52_dir"
 fi
 
+# 53. deploy/web_modules.sh: A SYMLINKED web/node_modules IS NOT A DONOR (card
+#     t_eaf5edd4). The seeder hands a fresh worktree its `web/node_modules` with
+#     `cp -a`, and `cp -a` reproduces a symlink AS a symlink — so a donor whose
+#     own web/node_modules was a link (many long-lived worktrees on this host point
+#     it at the main checkout) left the CANDIDATE with a link, `cp -a` exited 0,
+#     `[ -x .bin/next ]` followed the link and agreed the tree was installed, and
+#     three minutes later the `test` gate died in a guard that WALKS the tree:
+#
+#       model_default_guard_test.go: walk <candidate> for model ids:
+#         read <candidate>/web/node_modules: is a directory
+#
+#     (`filepath.Walk` lstats each entry, so a symlink is never a directory and the
+#     skipDirs arm for node_modules never applies.) Measured on the train run of
+#     2026-11-12 14:31 for PR #1733 — the batch went GREEN the moment
+#     TRAIN_NODE_MODULES named a REAL donor, so the seeder was the cause.
+#
+#     That failure lands in a LANE whose own change is innocent, minutes later and
+#     one gate away from the cause, which is exactly the shape this self-test
+#     exists for. The assertions live in deploy/web_modules_test.sh (the seeder's
+#     own suite) so they can be run on their own; this makes the `selftest` gate
+#     run them, because a regression net nobody runs is not a net.
+#
+#     The suite's own bite is inside it (case 7): `wm_is_symlink` is neutered in a
+#     copy of the seeder and the defect must then reappear, so a green here cannot
+#     be a suite whose rule is dead code. Pointed at the PRE-FIX seeder through its
+#     WM_TEST_LIB seam (git show origin/main:deploy/web_modules.sh > /tmp/old.sh,
+#     then WM_TEST_LIB=/tmp/old.sh bash deploy/web_modules_test.sh) it is 0 of 7,
+#     so the suite has been seen to fail on the bytes that caused the measured red.
+if [ ! -r "$LIVE_ROOT/deploy/web_modules_test.sh" ]; then
+  bad "check 53 — $LIVE_ROOT/deploy/web_modules_test.sh is MISSING: nothing proves a symlinked donor is refused, and an absent guard is a failure, never a skip (the seeder would silently re-open the web/node_modules-as-a-link class that reds the model-id guard one gate later)"
+elif out53="$(bash "$LIVE_ROOT/deploy/web_modules_test.sh" 2>&1)"; then
+  ok "check 53 — the seeder refuses a symlinked donor at every door (worktree, WM_TEMPLATE, RELEASE_NODE_MODULES, WM_CACHE_DIR, WM_LOCK_CACHE, and a tree's own link) and the suite's own bite re-creates the defect when the rule is neutered: [$(printf '%s\n' "$out53" | sed -n '$p')]"
+else
+  bad "check 53 — deploy/web_modules_test.sh FAILED: a symlinked web/node_modules can reach a seeded tree again, and the failure will surface in the NEXT lane as 'read .../web/node_modules: is a directory' in the model-id guard: [$(printf '%s\n' "$out53" | sed -n '/FAIL/p' | tr '\n' '|')]"
+fi
+
 echo "---"
 echo "preflight self-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

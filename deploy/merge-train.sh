@@ -68,6 +68,16 @@
 #                    only print the api package set this script would test (no gate, no
 #                    worktree: it reads <base>..HEAD of the CURRENT tree; the selftest seam)
 #
+# THE LANDING RECEIPT (--land only). Every landing appends ONE JSON object per landed PR
+# to ${LANDING_RECEIPT:-${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/landings.jsonl}:
+#   at, pr, ref, head, base_sha, tested_tree, landed_tree, merge_sha, scope, gate_seconds
+# It is APPEND-ONLY and is written only after the landed tree is asserted equal to the
+# tested candidate tree AND every landed commit is asserted to carry
+# $MERGE_AUTHOR_EMAIL — so a receipt never describes a landing that did not happen.
+# It exists because the per-tree record <tree>.json is REWRITTEN by any later run on the
+# same tree, which destroys the record that justified a merge. Read a
+# PR's evidence back with: jq -c 'select(.pr==1732)' <that file>.
+#
 # Exit: 0 green, 1 red (a culprit ref is named), 2 usage, 3 conflict,
 #       4 main moved under us / landed tree != tested tree,
 #       5 the BASE was already red — nothing was attributed to this batch,
@@ -239,6 +249,96 @@ assert_merge_authors() {   # $1 = rev range
   return 0
 }
 
+# ---------------------------------------------------------------- landing receipt
+# WHY THIS EXISTS. The per-tree gate record
+# (${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/<tree>.json) holds ONE record per
+# TREE, and every later run on that tree REWRITES it. So the record that justified a
+# merge dies the moment anything gates the same bytes again. Measured on PR #1732: the
+# train landed tree 690e1d75… at 11:04Z, an unrelated run re-gated that tree at 12:16Z
+# and wrote `verdict: red, failed: 1 (prunehost)` over it — and the surviving record
+# made a cleanly-landed merge read as though it had landed on a red tree. Recovering
+# the truth took a worktree reconstruction.
+#
+# A landing is an EVENT about a PAIR (the tested tree is the landed tree), not a
+# property of a tree. So it gets its own APPEND-ONLY stream: one JSON object per landed
+# PR, never rewritten, never removed, and a later re-gate of the same tree cannot erase
+# it. Nothing depends on <tree>.json surviving.
+LANDING_RECEIPT=${LANDING_RECEIPT:-${PREFLIGHT_RESULT_DIR:-/var/lib/jomform/gate}/landings.jsonl}
+
+# Append ONE line for ONE landed PR: at, pr, ref, head, base_sha, tested_tree,
+# landed_tree, merge_sha, scope, gate_seconds (the card's field order).
+# `pr` and `gate_seconds` are numbers when they are digits, so a reader can compare
+# them; `scope` is the gate's OWN statement of what it ran (see gate_scope_label).
+# The write is one O_APPEND write of one complete line, so two appenders can never
+# interleave a line (landings are serialised by the land token anyway, but the file
+# outlives any one holder).
+landing_receipt_append() {   # $1 pr $2 ref $3 head $4 base_sha $5 tested $6 landed $7 merge $8 scope $9 secs
+  local f=$LANDING_RECEIPT
+  mkdir -p "${f%/*}" 2>/dev/null
+  python3 - "$f" "$@" <<'PY'
+import datetime, json, os, sys
+
+path = sys.argv[1]
+pr, ref, head, base_sha, tested, landed, merge, scope, secs = sys.argv[2:11]
+
+
+def num(v):
+    return int(v) if str(v).isdigit() else v
+
+
+rec = {
+    "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "pr": num(pr),
+    "ref": ref,
+    "head": head,
+    "base_sha": base_sha,
+    "tested_tree": tested,
+    "landed_tree": landed,
+    "merge_sha": merge,
+    "scope": scope,
+    "gate_seconds": num(secs),
+}
+with open(path, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    fh.flush()
+    os.fsync(fh.fileno())
+PY
+}
+
+# The post-landing confirmation AND the receipts, in that order, on ONE code path.
+#   $1 = tested tree (the candidate the gate vouched for)
+#   $2 = landed tree (origin/main's tree)
+#   $3 = author range to certify
+# The receipt is appended ONLY after BOTH assertions have held. A line that survived a
+# failed assertion would be evidence for a landing that did not happen — worse than no
+# receipt at all — which is exactly why this is one function and not two call sites.
+# Returns 4 on the tree mismatch, 6 on the author mismatch, 0 when the lines are written.
+landing_confirm_and_receipt() {
+  local tested=$1 landed=$2 range=$3 i rc=0
+  if [ "$landed" != "$tested" ]; then
+    say "MISMATCH: landed tree $landed != tested tree $tested"
+    say "the gate did not vouch for what is on main — re-run the train on the landed tree"
+    return 4
+  fi
+  say "LANDED tree $landed == tested candidate tree"
+  # The identity is the other half of "what actually landed": the tree can match while the
+  # author does not. Assert it here rather than trusting --author-email to have been honoured.
+  assert_merge_authors "$range" || return 6
+  for i in "${!REFS[@]}"; do
+    landing_receipt_append "${PRS[$i]}" "${REFS[$i]}" "${LAND_HEADS[$i]}" "$BASE_SHA" \
+      "$tested" "$landed" "${LAND_MERGE_SHAS[$i]}" \
+      "${GATE_SCOPE:-unreported}" "${GATE_SECONDS:-0}" || rc=1
+  done
+  # The merge is REAL and has already happened; a receipt that could not be written is
+  # not a reason to exit non-zero and invite a second merge of the same PR. It is said
+  # loudly instead, with the one thing a human needs to record it by hand.
+  if [ "$rc" != 0 ]; then
+    say "WARNING: could not append the landing receipt to $LANDING_RECEIPT"
+    say "  the landing itself is real (main's tree is $landed, base $BASE_SHA) — record it by hand"
+  fi
+  return 0
+}
+
 BASE=origin/main
 ONLY=""
 FULL=0
@@ -259,7 +359,7 @@ while [ $# -gt 0 ]; do
     --bisect-mode) BISECT_MODE=${2:?}; shift 2 ;;
     --check-authors) CHECK_AUTHORS=${2:?--check-authors needs a rev range}; shift 2 ;;
     --select-test-packages) SELECT_PKGS=${2:?--select-test-packages needs a base ref}; shift 2 ;;
-    -h|--help)     sed -n '2,64p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,85p' "$0"; exit 0 ;;
     --)            shift; REFS+=("$@"); break ;;
     -*)            die "unknown flag: $1" ;;
     *)             REFS+=("$1"); shift ;;
@@ -320,6 +420,15 @@ case "$MERGE_AUTHOR_EMAIL" in
   *@users.noreply.github.com) ;;
   *) die "--land refuses '$MERGE_AUTHOR_EMAIL': the merge author must be a *@users.noreply.github.com identity" ;;
 esac
+# A landing must never happen without its receipt: the receipt is the ONLY record of the
+# tested==landed pair that a later re-gate of the same tree cannot overwrite.
+# Checked HERE, with the other --land preconditions, so it cannot cost a gate first.
+if [ "$LAND" = 1 ]; then
+  _rd=${LANDING_RECEIPT%/*}
+  mkdir -p "$_rd" 2>/dev/null
+  [ -d "$_rd" ] && [ -w "$_rd" ] \
+    || die "cannot write the landing receipt directory '$_rd' — a landing whose evidence cannot be recorded is the defect this exists to prevent (point LANDING_RECEIPT at a writable path)"
+fi
 
 # The repo root is the one that owns this script's tree.
 ROOT=$(git rev-parse --show-toplevel) || die "not in a git repo"
@@ -435,7 +544,11 @@ WM_LIB="$ROOT/deploy/web_modules.sh"
 . "$WM_LIB"
 
 seed_web_modules() {
-  [ -x "$CAND/web/node_modules/.bin/next" ] && return 0
+  # A SYMLINK is not an install — deploy/web_modules.sh's wm_have says the same. This
+  # short-circuit is the train's own copy of that question, and with `-x` alone it
+  # answered yes for a link (that is how a candidate seeded from a symlinked donor kept
+  # the link for the rest of the run and the model-id guard died walking it).
+  [ -x "$CAND/web/node_modules/.bin/next" ] && [ ! -L "$CAND/web/node_modules" ] && return 0
   ( WM_PROG=$PROG; WM_REPO=$ROOT; WM_CACHE_DIR="$WORK/web_modules" \
     WM_TEMPLATE="${TRAIN_NODE_MODULES:-}" WM_NPM_LOG="$WORK/npm.log" \
     WM_LAUNCH=("${LAUNCH[@]}"); wm_seed "$CAND" ) || return 1
@@ -464,11 +577,16 @@ fi
 SCOPED_N=0
 SCOPED_TOTAL=0
 SCOPED_KIND=""
+# What the landing receipt records about the gate run: how long it took, and the gate's
+# own statement of what it ran (see gate_scope_label below). Set by gate_candidate, so a
+# bisect's LAST (green) pass is the one a landing reports.
+GATE_SECONDS=0
+GATE_SCOPE=""
 gate_candidate() {   # -> 0 green, 1 red
   if [ "$needs_seed" = 1 ]; then
     seed_web_modules || { say "cannot seed web/node_modules — refusing to gate"; return 1; }
   fi
-  local args=() pkgs="" readers=""
+  local args=() pkgs="" readers="" t0
   SCOPED_N=0; SCOPED_TOTAL=0; SCOPED_KIND=""
   # A bisect re-runs this function, and the first call may have exported a list. Only the
   # api-scoped branch below may leave one set: a stale export would make a LATER full run
@@ -530,10 +648,74 @@ gate_candidate() {   # -> 0 green, 1 red
   local cmd=(./scripts/preflight.sh)
   # Self-test hook: prove WHICH argv the train would run without paying for a real gate.
   [ -n "${TRAIN_GATE_CMD:-}" ] && read -r -a cmd <<<"$TRAIN_GATE_CMD"
+  t0=$(date +%s)
   ( cd "$CAND" && "${LAUNCH[@]}" "${cmd[@]}" "${args[@]}" ) >"$WORK/gate.log" 2>&1
   local rc=$?
+  GATE_SECONDS=$(( $(date +%s) - t0 ))
+  [ "$GATE_SECONDS" -ge 0 ] 2>/dev/null || GATE_SECONDS=0
   tail -3 "$WORK/gate.log" | sed 's/^/    | /'
   return $(( rc == 0 ? 0 : 1 ))
+}
+
+# THE SCOPE A LANDING'S EVIDENCE WAS OBSERVED UNDER — in the vocabulary a merge record
+# uses: full | scoped … | reused … | partial ….
+#
+# Read from the GATE'S OWN summary (preflight prints PASS / REUSE / SKIP), never inferred
+# from $MODE alone. `full` in particular is a claim that would be a lie the moment a gate
+# was REMEMBERED from a record instead of run: preflight reuses a recorded pass for the
+# same tree, and a diff-mapped run skips every gate the diff does not map to. A merger
+# quoting this receipt must be able to tell "27 gates ran" from "the whole inventory, of
+# which 4 were a record read". So:
+#   * no summary at all        -> `unreported: …` (never guess; only a stub gate lands here)
+#   * nothing ran, all reused  -> `reused: <gates> from the recorded pass on tree <t>`
+#   * some ran, some reused    -> `partial: …; reused <gates> from tree <t>`
+#   * full inventory, a skip   -> `partial: …; never ran <gates>`
+#   * full inventory, nothing skipped or reused -> `full: …`
+#   * narrowed/diff-mapped     -> `scoped: …; never ran <gates>`
+gate_scope_label() {
+  local pass="" reuse="" skip=""
+  if [ -r "$WORK/gate.log" ]; then
+    pass=$(sed -n 's/^  PASS: //p' "$WORK/gate.log" | tail -1)
+    reuse=$(sed -n 's/^  REUSE: //p' "$WORK/gate.log" | tail -1)
+    skip=$(sed -n 's/^  SKIP: //p' "$WORK/gate.log" | tail -1)
+  fi
+  # The REUSE line is "<gates> (REMEMBERED from a recorded pass on tree <short>, NOT re-run this time)".
+  local rgates="" rtree="" ran=0
+  if [ -n "$reuse" ]; then
+    rgates=${reuse%% (*}
+    rtree=$(printf '%s\n' "$reuse" | sed -n 's/.*recorded pass on tree \([^,]*\),.*/\1/p')
+    [ -n "$rtree" ] || rtree="?"
+  fi
+  [ -n "$pass" ] && ran=$(printf '%s\n' "$pass" | wc -w)
+  local why
+  case "$MODE" in
+    full)       why="full inventory" ;;
+    api-scoped) why="scoped: api-scoped, ${SCOPED_N:-?}/${SCOPED_TOTAL:-?} package(s) (changed + importers)" ;;
+    narrowed)   why="scoped: narrowed [$ONLY] (self-test)" ;;
+    *)          if [ "$SCOPED_KIND" = readers ]; then
+                  why="scoped: readers, ${SCOPED_N:-?}/${SCOPED_TOTAL:-?} api package(s) whose tests read the changed data"
+                else
+                  why="scoped: diff-mapped vs $BASE_SHA"
+                fi ;;
+  esac
+  if [ -z "$pass$reuse$skip" ]; then
+    printf 'unreported: the gate printed no PASS/REUSE/SKIP summary — mode was %s\n' "$why"
+  elif [ -z "$pass" ] && [ -n "$rgates" ]; then
+    printf 'reused: %s from the recorded pass on tree %s — no gate ran this time\n' "$rgates" "$rtree"
+  elif [ -n "$reuse" ]; then
+    printf 'partial: %s; ran %s gate(s); reused %s from the recorded pass on tree %s' \
+      "$why" "$ran" "$rgates" "$rtree"
+    [ -n "$skip" ] && printf '; never ran %s' "${skip%% (*}"
+    printf '\n'
+  elif [ -n "$skip" ] && [ "$MODE" = full ]; then
+    printf 'partial: %s; ran %s gate(s); never ran %s\n' "$why" "$ran" "${skip%% (*}"
+  elif [ "$MODE" = full ]; then
+    printf 'full: the whole inventory ran — %s gate(s), no skip, no reuse\n' "$ran"
+  elif [ -n "$skip" ]; then
+    printf '%s; ran %s gate(s); never ran %s\n' "$why" "$ran" "${skip%% (*}"
+  else
+    printf '%s; ran %s gate(s)\n' "$why" "$ran"
+  fi
 }
 
 # Is the BASE itself already red? The record store is keyed on the tree, so a batch that
@@ -672,6 +854,9 @@ fi
 
 say "gate: $WHY $([ ${#LAUNCH[@]} -gt 0 ] && echo "under CPUQuota=$TRAIN_CPU_QUOTA" || echo 'UNCAPPED')"
 if gate_candidate; then
+  # The evidence scope, as the GATE reported it — the value the landing receipt carries.
+  GATE_SCOPE=$(gate_scope_label)
+  say "evidence scope: $GATE_SCOPE"
   if [ "$MODE" = full ]; then
     say "GREEN candidate tree $CAND_TREE (full inventory)"
   elif [ "$MODE" = api-scoped ]; then
@@ -739,25 +924,29 @@ if [ "$LAND" = 1 ]; then
   [ -n "$ONLY" ] && die "--land refuses a narrowed selection: --only exists for self-tests, never for a landing"
   cur=$(git ls-remote origin main | awk '{print $1}')
   [ "$cur" = "$BASE_SHA" ] || die "main moved under us ($cur != $BASE_SHA) — re-run the train"
+  # What each landed PR resolved to, kept so the receipt names the exact bytes that were
+  # matched and the exact squash commit each PR became.
+  LAND_HEADS=()
+  LAND_MERGE_SHAS=()
   for i in "${!REFS[@]}"; do
     pr=${PRS[$i]}
     head=${REFS[$i]}
     [ -n "$pr" ] || die "--land needs <pr>:<ref> entries, got a bare ref: $head"
+    head_sha=$(git rev-parse "$head")
     say "landing #$pr ($head)"
     gh pr merge "$pr" -R wzul/jomform --squash --author-email "$MERGE_AUTHOR_EMAIL" \
-      --match-head-commit "$(git rev-parse "$head")" \
+      --match-head-commit "$head_sha" \
       || die "gh pr merge $pr failed — candidate tree is NOT on main; re-run the train"
+    # The squash commit GitHub just made on main IS this PR's merge_sha. Read it NOW:
+    # once the batch has landed, N squash commits cannot be told apart by ref.
+    _ms=$(git ls-remote origin main 2>/dev/null | awk '{print $1}')
+    LAND_HEADS+=("$head_sha")
+    LAND_MERGE_SHAS+=("${_ms:-unknown}")
   done
   git fetch -q origin main
   LANDED_TREE=$(git rev-parse "origin/main^{tree}")
-  if [ "$LANDED_TREE" != "$CAND_TREE" ]; then
-    say "MISMATCH: landed tree $LANDED_TREE != tested tree $CAND_TREE"
-    say "the gate did not vouch for what is on main — re-run the train on the landed tree"
-    exit 4
-  fi
-  say "LANDED tree $LANDED_TREE == tested candidate tree"
-  # The identity is the other half of "what actually landed": the tree can match while the
-  # author does not. Assert it here rather than trusting --author-email to have been honoured.
-  assert_merge_authors "$BASE_SHA..origin/main" || exit 6
+  # The two assertions AND the receipt live in one function: a failed assertion must not
+  # leave a line behind, so the writer cannot be reached around it.
+  landing_confirm_and_receipt "$CAND_TREE" "$LANDED_TREE" "$BASE_SHA..origin/main" || exit $?
 fi
 exit 0

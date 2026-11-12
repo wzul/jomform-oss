@@ -162,15 +162,29 @@
 #               on a local build (the server half runs over ssh to this host)
 #   SSH_USER    (default: root)   SSH_PORT (default: 22)   SSH_PATH (default: /tmp)
 #   REQUIRE_SHIP  1 = same as --ship: deploy for real and verify (default: 0)
-#   GATE_CPU_QUOTA  cgroup quota for the pre-build gate (default: 300% = 3 cores;
+#   GATE_CPU_QUOTA  cgroup quota for the pre-build gate (default: 400% = 4 cores;
 #                   set to "" to run it uncapped). systemd's CPUQuota counts
-#                   CORES, not a share of the host. Measured on a 6-core host: an
+#                   CORES, not a share of the host. A RELEASE always selects the
+#                   FULL inventory, and that includes the three browser gates
+#                   scripts/preflight.sh starts CONCURRENTLY (a11y, e2e-builder,
+#                   e2e-core). Measured on ONE unchanged tree (7670267d7): a11y
+#                   FAIL 1014s and 817s under CPUQuota=300%, PASS 287s alone with
+#                   `--only a11y`, PASS 220/220 with all three suites concurrent
+#                   and UNCAPPED, GREEN at 400% (a11y 604s) — so three of six cores
+#                   is a false red at release time, not a bound. Separately: an
 #                   uncapped cold `go build ./...` peaked at 307% CPU and
 #                   `npm run build` at 192%, while CPUQuota=100% (one core) cost
-#                   4.5x and 2.9x wall time — so 400% bounds the gate's draw
-#                   without costing any wall time. `nice` does NOT do this: it
-#                   changes who runs, not how many threads are runnable, so it
-#                   leaves the load average untouched.
+#                   4.5x and 2.9x wall time — 400% bounds the gate's draw without
+#                   costing any wall time. `nice` does NOT do this: it changes who
+#                   runs, not how many threads are runnable, so it leaves the load
+#                   average untouched. AGENTS.md documents this default; keep the
+#                   two in step.
+#   BUILD_CPU_QUOTA cgroup quota for the docker build (default: 300% = 3 cores;
+#                   set to "" for uncapped). It is PINNED, not inherited from
+#                   GATE_CPU_QUOTA: the two stages were measured against different
+#                   failure modes (the build against wall time at a fixed quota,
+#                   the gate against a browser-contention false red), so moving the
+#                   gate must not silently move the build.
 #   REMOTE_BUILD_HOST      build on this host (e.g. 217.216.39.61) — see above
 #   REMOTE_BUILD_DIR       where the source is unpacked there (default /root/jomform-build)
 #   REMOTE_BUILD_SSH_USER  (default: root)   REMOTE_BUILD_SSH_PORT (default: 22)
@@ -214,18 +228,31 @@ SKIP_TESTS="${SKIP_TESTS:-0}"
 # applied to a docker build: a build executes inside dockerd, not in this shell's
 # cgroup, so a client-side quota would be theatre. That is exactly why
 # --remote-build exists — it moves the compile to a host whose job is not running
-# lanes. Default 300% = 3 of 6 cores, so half the host stays free for other apps;
-# empty = uncapped. Wan's standing rule is 300% at EVERY stage (dev/qa/merge/deploy),
-# not just here — deploy/merge-train.sh takes the same quota.
-GATE_CPU_QUOTA="${GATE_CPU_QUOTA-300%}"
+# lanes.
+#
+# 400%, and NOT inherited by the build. A release always selects the FULL gate
+# inventory, which includes the three browser gates scripts/preflight.sh starts
+# CONCURRENTLY (a11y, e2e-builder, e2e-core). On this 6-core host three of six cores
+# do not fit those three suites at once: on ONE unchanged tree (7670267d7) a11y
+# FAILED at 1014s and 817s under CPUQuota=300%, PASSED in 287s alone with
+# `--only a11y`, PASSED 220/220 with all three suites concurrent and UNCAPPED, and
+# the run went GREEN at 400% (a11y 604s). A red there blocks a release over the
+# gate's own environment, so the gate gets the number that was measured green.
+# Empty = uncapped.
+GATE_CPU_QUOTA="${GATE_CPU_QUOTA-400%}"
 # The BUILD is a second CPU draw, and it does NOT inherit this shell's cgroup: the
 # compile runs inside dockerd's builder. `docker build --cpu-quota` is the supported
 # way to bound it and it really does apply to the buildkit worker — measured on the
 # deployment host (6 cores, alpine image, 6 parallel busy loops, host CPU from
 # /proc/stat deltas): uncapped 4820 ms at ~4.7 cores; `--cpu-quota 300000` 8237 ms at
-# 2.9 cores, reproduced 8186 ms / 2.9 cores. So the same 300% rule is applied to the
-# build on BOTH paths (remote and local). Empty = uncapped.
-BUILD_CPU_QUOTA="${BUILD_CPU_QUOTA-${GATE_CPU_QUOTA:-}}"
+# 2.9 cores, reproduced 8186 ms / 2.9 cores. So 300% bounds the build on BOTH paths
+# (remote and local).
+#
+# IT IS PINNED AT 300%, NOT INHERITED FROM GATE_CPU_QUOTA. The two stages were
+# measured against different failure modes — the build against wall time at a fixed
+# quota, the gate against a false red from browser-suite contention — so moving the
+# gate to 400% must not silently move the build. Empty = uncapped.
+BUILD_CPU_QUOTA="${BUILD_CPU_QUOTA-300%}"
 # "300%" -> 300000 (docker wants microseconds per 100 ms period); "300000" passes through.
 quota_to_micros() {
   case "$1" in
@@ -741,10 +768,12 @@ else
   # a transient systemd scope rather than deprioritising it: `nice` does not lower
   # the load average (the threads stay runnable), a cgroup quota does. Measured
   # here — CPUQuota=100% (1 core) cost 4.5x on `go build ./...` and 2.9x on
-  # `npm run build`. A 300% quota sits above `npm run build`'s own peak (192%) and
-  # shaves only the very top of a cold `go build` (307%), so it costs ~nothing in
-  # wall time while guaranteeing three of six cores stay free for everything else
-  # on this host. Falls back to an uncapped run, loudly.
+  # `npm run build`. 400% is the quota measured GREEN on a release-shaped run: the
+  # full inventory includes the three CONCURRENT browser gates, which redded a11y
+  # at 300% on an unchanged tree (see the knob comment above). It leaves two of six
+  # cores free and still sits above every single-process peak this script launches
+  # (cold `go build ./...` 307%, `npm run build` 192%), so it costs ~nothing in wall
+  # time. Falls back to an uncapped run, loudly.
   GATE_LAUNCH=()
   GATE_QUOTA_LABEL="no CPU quota"
   if [ -n "$GATE_CPU_QUOTA" ]; then

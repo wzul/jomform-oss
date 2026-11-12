@@ -46,6 +46,34 @@
 # in a gate input, which produces FALSE gate results (the same reason
 # deploy/merge-train.sh copies rather than links).
 #
+# WHY A SYMLINKED DONOR IS REFUSED (card t_eaf5edd4). `cp -a` reproduces a
+# symlink AS a symlink, so a donor whose `web/node_modules` was a LINK (many
+# long-lived worktrees on this host point it at
+# /root/wzul-git/jomform/web/node_modules) handed the candidate a
+# `web/node_modules` that was a link to a directory. Nothing reported a problem:
+# `cp -a` exits 0, and `[ -x .bin/next ]` FOLLOWS the link and also says the
+# tree is installed — the failure lands minutes later inside a guard that walks
+# the tree:
+#
+#   model_default_guard_test.go: walk <candidate> for model ids:
+#     read <candidate>/web/node_modules: is a directory
+#
+# (`filepath.Walk` lstats each entry, so a symlink is never a directory: the
+# skipDirs arm for `node_modules` never applies, and the ReadFile hits EISDIR.)
+# Measured on the train run of 2026-11-12 14:31 for PR #1733 — the same batch
+# went GREEN the moment TRAIN_NODE_MODULES was pointed at a REAL donor, so the
+# seeding path was the cause and the tree was innocent.
+#
+# `cp -aL` would HIDE the same trap instead of fixing it: it silently copies a
+# tree this host does not own for this tree (~1 GB per candidate) and the next
+# link in the chain reproduces it again. So the rule is one line, applied at
+# every door: A SYMLINK IS NOT A DONOR.
+#   * wm_usable is the only test a candidate source may use, so a new source
+#     cannot reintroduce the trap by remembering `[ -x .bin/next ]` instead;
+#   * wm_copy_from refuses a link a second time at the one place that writes;
+#   * a tree whose OWN `web/node_modules` is a link is not "already installed"
+#     (wm_have), it is re-seeded — so a lane cannot gate through one either.
+#
 # CALLERS
 #   deploy/merge-train.sh   seeds its candidate, caching within the run
 #   deploy/cut-release.sh   seeds the tag-pinned release tree
@@ -117,8 +145,51 @@ wm_record_webdeps() {
   printf '%s' "$v"
 }
 
-# wm_have <worktree> — is this tree already installed?
-wm_have() { [ -x "${1:-$PWD}/web/node_modules/.bin/next" ]; }
+# wm_is_symlink <path> — THE ONE PLACE the seeder decides a path is a link. A
+# test/bite-proof can neuter exactly this function and the whole rule goes with
+# it, which is what makes the guard provable instead of merely present.
+wm_is_symlink() { [ -L "${1%/}" ]; }
+
+# wm_link_note <path> [own] — say ONCE per run that a node_modules is a SYMLINK and
+# what that means for the tree: when it is a DONOR (default) it is skipped, with
+# its target named; when it is the tree's OWN (`own`) it is re-seeded. Silence
+# here is how the EISDIR above reached a lane: the copy succeeded, the tree looked
+# installed, and a guard three minutes later reported "is a directory".
+WM_LINK_SAID=${WM_LINK_SAID:-}
+wm_link_note() {
+  local p=${1%/} role=${2:-donor} t
+  case " $WM_LINK_SAID " in *" $p "*) return 0 ;; esac
+  WM_LINK_SAID="$WM_LINK_SAID $p"
+  t="$(readlink "$p" 2>/dev/null)"
+  if [ "$role" = own ]; then
+    wm_note "re-seeding ${p%/web/node_modules}: its web/node_modules is a SYMLINK${t:+ -> $t} — a link is not an install this host owns, and the gate that walks this tree cannot read one"
+    return 0
+  fi
+  wm_warn "not using donor $p: web/node_modules is a SYMLINK${t:+ -> $t}. cp -a would reproduce the LINK instead of the tree, and a walk of the seeded tree then dies with 'read .../web/node_modules: is a directory'. A symlink is not an install this host owns — skipped."
+}
+
+# wm_usable <node_modules-dir> — is this directory a donor worth copying? It must
+# carry `.bin/next` AND be a REAL directory. EVERY candidate source goes through
+# this: not `[ -x "$p/.bin/next" ]`, which FOLLOWS a symlink and therefore says
+# yes to exactly the donor that poisons the candidate.
+wm_usable() {
+  local p=${1%/}
+  [ -x "$p/.bin/next" ] || return 1
+  wm_is_symlink "$p" || return 0
+  wm_link_note "$p"
+  return 1
+}
+
+# wm_have <worktree> — is this tree already installed, as a REAL directory? A tree
+# whose web/node_modules is a SYMLINK is NOT installed as far as the gates are
+# concerned: the walk above cannot read it, so "have" must not short-circuit past
+# the re-seed (that is how one poisoned donor stayed in the tree for the rest of a
+# run). wm_seed replaces the link; `rm -rf`/`rm -f` on a link remove only the link.
+wm_have() {
+  local nm="${1:-$PWD}/web/node_modules"
+  [ -x "$nm/.bin/next" ] || return 1
+  [ ! -L "$nm" ]
+}
 
 # wm_candidates <target-worktree> — fill WM_CANDS with `nmdir<TAB>worktree<TAB>lock`
 # for every copy worth considering, in priority order. The lock is computed
@@ -127,18 +198,18 @@ wm_have() { [ -x "${1:-$PWD}/web/node_modules/.bin/next" ]; }
 wm_candidates() {
   local target=${1:-} p
   WM_CANDS=()
-  if [ -n "${RELEASE_NODE_MODULES:-}" ] && [ -x "${RELEASE_NODE_MODULES%/}/.bin/next" ]; then
+  if [ -n "${RELEASE_NODE_MODULES:-}" ] && wm_usable "${RELEASE_NODE_MODULES}"; then
     WM_CANDS+=("${RELEASE_NODE_MODULES%/}"$'\t\t')
   fi
-  if [ -n "${WM_TEMPLATE:-}" ] && [ -x "${WM_TEMPLATE%/}/.bin/next" ]; then
+  if [ -n "${WM_TEMPLATE:-}" ] && wm_usable "${WM_TEMPLATE}"; then
     WM_CANDS+=("${WM_TEMPLATE%/}"$'\t\t')
   fi
-  if [ -n "${WM_CACHE_DIR:-}" ] && [ -x "${WM_CACHE_DIR%/}/.bin/next" ]; then
+  if [ -n "${WM_CACHE_DIR:-}" ] && wm_usable "${WM_CACHE_DIR}"; then
     WM_CANDS+=("${WM_CACHE_DIR%/}"$'\t\t')
   fi
   if [ -n "${WM_LOCK_CACHE:-}" ] && [ -d "${WM_LOCK_CACHE%/}" ]; then
     for p in "${WM_LOCK_CACHE%/}"/*/node_modules; do
-      [ -x "$p/.bin/next" ] || continue
+      wm_usable "$p" || continue
       WM_CANDS+=("$p"$'\t\t'"$(basename "$(dirname "$p")")")
     done
   fi
@@ -148,7 +219,10 @@ wm_candidates() {
     while IFS= read -r wt; do
       [ -n "$wt" ] || continue
       [ "$wt" = "$target" ] && continue
-      [ -x "$wt/web/node_modules/.bin/next" ] || continue
+      # wm_usable, never `[ -x .bin/next ]`: a worktree that SYMLINKS its
+      # web/node_modules is the exact donor this card measured (two of them are
+      # registered on this host), and `-x` follows the link and says yes.
+      wm_usable "$wt/web/node_modules" || continue
       WM_CANDS+=("$wt/web/node_modules"$'\t'"$wt"$'\t')
     done < <(git -C "$WM_REPO" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
   fi
@@ -182,11 +256,22 @@ wm_cand_lock() {   # $1=nm dir, $2=worktree (may be empty), $3=lock (may be empt
 # wm_copy_from <candidate nm dir> <worktree>
 wm_copy_from() {
   local src=${1:?} wt=${2:?}
-  wm_note "seeding web/node_modules from $src (copy)"
+  src="${src%/}"
+  # BELT AND BRACES: every candidate already passed wm_usable. This refuses a link
+  # a SECOND time, at the one place that writes, so a donor source added later
+  # cannot reintroduce the defect by forgetting the check.
+  if wm_is_symlink "$src"; then
+    wm_link_note "$src"
+    wm_warn "refusing to seed $wt from $src: copying it would put a LINK at $wt/web/node_modules, and the gate that walks that tree then fails with 'is a directory'"
+    return 1
+  fi
+  wm_note "seeding web/node_modules from $src (cp -a of a REAL directory; webdeps $(wm_dir_webdeps "$src" | cut -c1-12))"
   mkdir -p "$wt/web" || return 1
   # Remove a PARTIAL install first: `.bin/next` missing does not mean the
   # directory is absent (an interrupted `npm ci` leaves one behind), and copying
   # onto it would land the payload one level too deep (`node_modules/node_modules`).
+  # A SYMLINK is removed as a link (`rm` never descends into one), which is how a
+  # tree poisoned by an older seeder gets repaired instead of skipped.
   rm -rf "$wt/web/node_modules" 2>/dev/null
   cp -a "$src" "$wt/web/node_modules" || { wm_warn "copy from $src failed"; return 1; }
   wm_have "$wt"
@@ -195,9 +280,21 @@ wm_copy_from() {
 # wm_install <worktree> — npm ci in the tree, then fill the caches.
 wm_install() {
   local wt=${1:?} log="${WM_NPM_LOG:-}" npm="${WM_NPM:-npm}" launch=()
-  if [ "${#WM_LAUNCH[@]}" -gt 0 ] 2>/dev/null; then launch=("${WM_LAUNCH[@]}"); fi
+  # WM_LAUNCH is OPTIONAL (the header says so), and an UNSET array under a caller's
+  # `set -u` is an unbound-variable ERROR, not "no launcher" — measured while proving
+  # this card's fix live: `WM_LAUNCH: unbound variable` aborted the seed instead of
+  # reporting the install's own failure. `${arr[@]+…}` is the expansion the rest of
+  # this file already uses for the same reason.
+  if [ "${WM_LAUNCH[@]+set}" = set ] && [ "${#WM_LAUNCH[@]}" -gt 0 ]; then launch=("${WM_LAUNCH[@]}"); fi
   command -v "$npm" >/dev/null 2>&1 || { wm_warn "cannot seed: $npm is not in PATH"; return 1; }
   [ -r "$wt/web/package-lock.json" ] || { wm_warn "cannot seed: $wt/web/package-lock.json is missing"; return 1; }
+  # A SYMLINK left by an older seeder (or by hand) must go FIRST: `npm ci` would
+  # otherwise install THROUGH the link and mutate another tree's install, and the
+  # tree would still be gated through a link. `rm -f` on a link removes the link.
+  if wm_is_symlink "$wt/web/node_modules"; then
+    wm_link_note "$wt/web/node_modules" own
+    rm -f "$wt/web/node_modules" || { wm_warn "cannot seed: $wt/web/node_modules is a symlink that could not be removed"; return 1; }
+  fi
   wm_note "seeding web/node_modules (npm ci, ~81s)"
   local rc=0
   if [ -n "$log" ]; then
@@ -238,6 +335,11 @@ wm_seed() {
   if [ ! -d "$wt/web" ]; then
     wm_note "$wt has no web/ — nothing to seed"
     return 0
+  fi
+  # A tree whose OWN web/node_modules is a link is not installed (wm_have says so
+  # below); name it here so the re-seed is explained rather than silent.
+  if wm_is_symlink "$wt/web/node_modules"; then
+    wm_link_note "$wt/web/node_modules" own
   fi
   if wm_have "$wt"; then
     WM_SEED_WEBDEPS="$(wm_webdeps "$wt")"

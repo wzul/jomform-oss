@@ -77,6 +77,13 @@ const SECTIONS: Section[] = [
           "The command finishes by itself, stores the grant 0600 and prints the config path.",
         ],
       },
+      // An operator signed in as the platform admin follows this walkthrough and hits
+      // a bare refusal at Approve: the API refuses a super-admin at the mail step AND
+      // at the consent step, so no code is ever emailed and Approve answers 403. The
+      // section has to say that before the command is run.
+      {
+        warn: "**Platform-admin accounts cannot use the device grant.** No code arrives, and **Approve** answers `403` (\"not valid or has expired\"). Use the browser flow in **Connect an agent** above instead.",
+      },
       {
         code: "$ jomform mcp login --headless\nhttps://jomform.com/profile?tab=mcp&user_code=BCDF-GHJK\nBCDF-GHJK\nopen this link and press Approve — you have 10 minutes\n/home/you/.cursor/mcp.json",
         caption: "The link already carries the code; the code is repeated on its own line.",

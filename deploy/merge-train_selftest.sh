@@ -816,5 +816,266 @@ else
 fi
 rm -f "$RLONG_STUB"
 
+echo "== S. --land appends ONE landing receipt per landed PR, and only after the asserts"
+# THE DEFECT THIS GUARDS. The per-tree gate record
+# (${PREFLIGHT_RESULT_DIR}/<tree>.json) is ONE record per TREE, and every later run on
+# that tree REWRITES it — so the record that justified a merge dies the moment anything
+# re-gates the same bytes. Measured on PR #1732: the train landed tree 690e1d75… at
+# 11:04Z, an unrelated run re-gated the same tree at 12:16Z and wrote
+# `verdict: red, failed: 1 (prunehost)` over it, so a cleanly-landed merge read as though
+# it had landed on a red tree. The fix is a landing EVENT stream that nothing rewrites.
+#
+# THIS DRIVES THE REAL LANDING PATH, end to end, with no network and no PR: a local bare
+# repository stands in for GitHub and a fake `gh` writes the squash commit the merge API
+# would write (same tree, same parent, same author). The train's own ls-remote / fetch /
+# tree-compare / author-assert therefore run unmodified, and the receipt is written by
+# the same function the production path uses. The gate is a stub that prints a
+# preflight-shaped SUMMARY, because the receipt's `scope` is parsed from that summary —
+# a stub printing nothing would only exercise the `unreported` fallback.
+LAND_REMOTE=$S/land-remote.git
+git init -q --bare "$LAND_REMOTE"
+git push -q "$LAND_REMOTE" "$BASE:refs/heads/main" \
+  && ok "a local bare remote stands in for GitHub (main = $BASE)" \
+  || bad "cannot seed the local bare remote"
+git remote set-url origin "$LAND_REMOTE"
+RECEIPT=$PREFLIGHT_RESULT_DIR/landings.jsonl
+rm -f "$RECEIPT"
+
+mkdir -p "$S/lbin"
+cat > "$S/lbin/gh" <<'LFAKEGH'
+#!/usr/bin/env bash
+# Fake `gh pr merge` for the merge-train self-test. It writes the squash commit GitHub
+# WOULD write onto the local bare remote: same tree, same parent, same author — so the
+# train's post-landing assertions and its receipt run for real, with no network.
+#   FAKE_GH_MODE=wrongtree  the landed bytes are NOT the tested bytes (the exit-4 path)
+#   FAKE_GH_MODE=foreign    the squash is authored by somebody else (the exit-6 path)
+#   FAKE_GH_TREE=<tree>     push THAT tree (a batch: the tree of the whole candidate)
+set -o pipefail
+pr=""; mail=""; head=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --author-email)      mail=$2; shift 2 ;;
+    --match-head-commit) head=$2; shift 2 ;;
+    -R)                  shift 2 ;;
+    --squash)            shift ;;
+    pr|merge)            shift ;;
+    *)                   [ -z "$pr" ] && pr=$1; shift ;;
+  esac
+done
+[ -n "$head" ] && [ -n "$mail" ] || { echo "fake gh: unexpected argv" >&2; exit 1; }
+tree=$(git rev-parse --verify "$head^{tree}") || exit 1
+case "${FAKE_GH_MODE:-ok}" in
+  wrongtree) tree=$(git rev-parse --verify "$FAKE_GH_BASE^{tree}") || exit 1 ;;
+  foreign)   mail="somebody@example.com" ;;
+esac
+[ -n "${FAKE_GH_TREE:-}" ] && tree=$FAKE_GH_TREE
+parent=$(git --git-dir="$FAKE_GH_REMOTE" rev-parse refs/heads/main) || exit 1
+c=$(GIT_AUTHOR_NAME='Wan Zulkarnain' GIT_AUTHOR_EMAIL="$mail" \
+    GIT_COMMITTER_NAME='GitHub' GIT_COMMITTER_EMAIL="$mail" \
+    git commit-tree "$tree" -p "$parent" -m "squash #$pr") || exit 1
+git push -q "$FAKE_GH_REMOTE" "$c:refs/heads/main" || exit 1
+printf 'fake gh: merged #%s as %s\n' "$pr" "$c"
+LFAKEGH
+chmod +x "$S/lbin/gh"
+
+LSTUB=$S/gate-stub-summary.sh
+cat > "$LSTUB" <<'LSTUBEOF'
+#!/usr/bin/env bash
+# A gate stub that reports a preflight-shaped summary, so the train's scope parser runs
+# on the same shape a real run produces.
+#   LAND_STUB_SHAPE=scoped (default)  a diff-mapped run: some gates pass, the rest skip
+#   LAND_STUB_SHAPE=reused            the whole run was a RECORD READ (the #1732 shape)
+case "${LAND_STUB_SHAPE:-scoped}" in
+  reused)
+    printf 'preflight summary: 0 passed, 0 failed, 0 skipped in 0s\n'
+    printf '  REUSE: build vet test (REMEMBERED from a recorded pass on tree 1234abc, NOT re-run this time)\n'
+    printf '  SKIP: a11y e2e-core (not evidence)\n'
+    ;;
+  *)
+    printf 'preflight summary: 3 passed, 0 failed, 0 skipped in 1s\n'
+    printf '  PASS: build vet gofmt\n'
+    printf '  SKIP: test web a11y e2e-core npmaudit (not evidence)\n'
+    ;;
+esac
+exit 0
+LSTUBEOF
+chmod +x "$LSTUB"
+
+# The train, with the fake gh FIRST on PATH so the merge goes to the local bare remote.
+land_run() {   # $1 = gate stub, rest = train argv
+  local stub=$1; shift
+  PATH="$S/lbin:$PATH" FAKE_GH_REMOTE="$LAND_REMOTE" FAKE_GH_BASE="$BASE" \
+    TRAIN_GATE_CMD="bash $stub" LAND_WAIT=30 run "$@"
+}
+
+# Read field `$2` out of receipt line `$1` (1-based), through a real JSON parser.
+receipt_field() {   # $1 = line number, $2 = field
+  python3 - "$RECEIPT" "$1" "$2" <<'PY'
+import json, sys
+lines = [l for l in open(sys.argv[1], encoding="utf-8") if l.strip()]
+rec = json.loads(lines[int(sys.argv[2]) - 1])
+v = rec.get(sys.argv[3])
+print("" if v is None else v)
+PY
+}
+receipt_lines() { [ -f "$RECEIPT" ] && awk 'NF{n++} END{print n+0}' "$RECEIPT" || printf '0\n'; }
+
+# The tree a squash of these refs onto BASE produces — for the batch case, where the
+# fake gh cannot know which prefix it is being asked to land.
+cand_tree() {
+  local w=$S/candtree
+  git worktree remove --force "$w" >/dev/null 2>&1
+  git worktree add -q --detach "$w" "$BASE" || return 1
+  local r
+  for r in "$@"; do
+    git -C "$w" merge --squash "$r" >/dev/null 2>&1 && git -C "$w" commit -q -m "squash $r" >/dev/null
+  done
+  git -C "$w" rev-parse HEAD^{tree}
+  git worktree remove --force "$w" >/dev/null 2>&1
+}
+
+# --- S1: the success path -----------------------------------------------------
+OUT=$(land_run "$LSTUB" --base "$BASE" --land 9001:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+GTREE=$(sed -n 's/^merge-train\.sh: GREEN candidate tree \([0-9a-f]*\).*/\1/p' <<<"$OUT")
+LANDED_MAIN=$(git --git-dir="$LAND_REMOTE" rev-parse refs/heads/main)
+[ "$RC" -eq 0 ] && ok "a landed PR exits 0" || bad "expected exit 0, got $RC"
+grep -q '^merge-train\.sh: LANDED tree .* == tested candidate tree' <<<"$OUT" \
+  && ok "the landed tree is asserted equal to the tested candidate tree" || bad "no LANDED assertion"
+[ "$(receipt_lines)" = 1 ] && ok "exactly ONE receipt line was appended" \
+  || bad "expected 1 receipt line, got $(receipt_lines)"
+[ "$(receipt_field 1 pr)" = 9001 ] && ok "the line names the PR (pr=9001)" || bad "pr is [$(receipt_field 1 pr)]"
+[ "$(receipt_field 1 ref)" = train-good1 ] && ok "the line names the ref it landed" || bad "ref is [$(receipt_field 1 ref)]"
+[ "$(receipt_field 1 head)" = "$(git rev-parse train-good1)" ] \
+  && ok "head is the sha handed to --match-head-commit" || bad "head is [$(receipt_field 1 head)]"
+[ "$(receipt_field 1 base_sha)" = "$BASE" ] && ok "base_sha is the base the batch was gated on" || bad "base_sha is [$(receipt_field 1 base_sha)]"
+[ -n "$GTREE" ] && [ "$(receipt_field 1 tested_tree)" = "$GTREE" ] \
+  && ok "tested_tree is the tree the gate actually green'd ($GTREE)" || bad "tested_tree is [$(receipt_field 1 tested_tree)], GREEN said [$GTREE]"
+[ "$(receipt_field 1 landed_tree)" = "$(receipt_field 1 tested_tree)" ] \
+  && ok "landed_tree == tested_tree (the receipt cannot claim two trees)" || bad "landed_tree != tested_tree"
+[ "$(receipt_field 1 merge_sha)" = "$LANDED_MAIN" ] \
+  && ok "merge_sha is the squash commit this PR became on main" || bad "merge_sha is [$(receipt_field 1 merge_sha)], main is $LANDED_MAIN"
+SC1=$(receipt_field 1 scope)
+case "$SC1" in
+  "scoped: diff-mapped vs $BASE"*) ok "scope names the gate's own scope: [$SC1]" ;;
+  *) bad "scope does not name a diff-mapped run: [$SC1]" ;;
+esac
+grep -q 'never ran test web a11y e2e-core npmaudit' <<<"$SC1" \
+  && ok "scope names the gates that NEVER ran (a scoped pass is never read as full)" \
+  || bad "scope hides which gates did not run: [$SC1]"
+GS1=$(receipt_field 1 gate_seconds)
+case "$GS1" in ''|*[!0-9]*) bad "gate_seconds is not a number: [$GS1]" ;; *) ok "gate_seconds is a number ($GS1)" ;; esac
+case "$(receipt_field 1 at)" in *Z) ok "at is a UTC timestamp" ;; *) bad "at is not UTC: [$(receipt_field 1 at)]" ;; esac
+
+# --- S2: the gate reported a RECORD READ, and the receipt says so -------------
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+OUT=$(LAND_STUB_SHAPE=reused land_run "$LSTUB" --base "$BASE" --land 9002:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 0 ] && ok "a landing on a REUSED record exits 0" || bad "expected exit 0, got $RC"
+[ "$(receipt_lines)" = 2 ] && ok "a second PR appends a second line (append-only, not rewritten)" \
+  || bad "expected 2 receipt lines, got $(receipt_lines)"
+SC2=$(receipt_field 2 scope)
+case "$SC2" in
+  reused:*) ok "scope says the gates were REUSED from a record, not run: [$SC2]" ;;
+  *) bad "a record-read run is not labelled reused: [$SC2]" ;;
+esac
+grep -q '1234abc' <<<"$SC2" && ok "the reused scope names the tree the record came from" \
+  || bad "the reused scope does not name its source tree: [$SC2]"
+
+# --- S3: the tree mismatch path writes NOTHING --------------------------------
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+OUT=$(FAKE_GH_MODE=wrongtree land_run "$LSTUB" --base "$BASE" --land 9003:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 4 ] && ok "landed tree != tested tree exits 4" || bad "expected exit 4, got $RC"
+grep -q 'MISMATCH: landed tree' <<<"$OUT" && ok "says MISMATCH" || bad "no MISMATCH line"
+[ "$(receipt_lines)" = 2 ] \
+  && ok "NO receipt line for a landing whose bytes the gate did not vouch for" \
+  || bad "the mismatch path wrote a receipt ($(receipt_lines) lines) — evidence for a landing that never happened"
+
+# --- S4: the author mismatch path writes NOTHING -------------------------------
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+OUT=$(FAKE_GH_MODE=foreign land_run "$LSTUB" --base "$BASE" --land 9004:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 6 ] && ok "a landed commit under a foreign identity exits 6" || bad "expected exit 6, got $RC"
+[ "$(receipt_lines)" = 2 ] \
+  && ok "NO receipt line when the author assert failed (the tree alone is not a landing)" \
+  || bad "the author-mismatch path wrote a receipt ($(receipt_lines) lines)"
+
+# --- S5: a batch ejected on red writes NOTHING ---------------------------------
+# Case Q2 runs the REAL preflight with a stubbed `go test` on the base tree, so the
+# sandbox record store still carries a RED record for $BASE_TREE here; the train would
+# then (correctly) refuse to attribute anything to the batch and exit 5. Drop it so this
+# case measures the RED-BATCH path, and S5b keeps it for the base-red path.
+rm -f "$PREFLIGHT_RESULT_DIR/$BASE_TREE.json"
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+OUT=$(land_run "$REDSTUB" --base "$BASE" --land 9005:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 1 ] && ok "a red batch exits 1 (ejected before any landing)" || bad "expected exit 1, got $RC"
+[ "$(receipt_lines)" = 2 ] && ok "NO receipt line for a batch ejected on red" \
+  || bad "a red batch wrote a receipt ($(receipt_lines) lines)"
+
+# --- S5b: a batch ejected on a RED BASE writes NOTHING -------------------------
+python3 - "$PREFLIGHT_RESULT_DIR/$BASE_TREE.json" <<'PY'
+import json, sys
+json.dump({"format": 1, "tree": sys.argv[1].split("/")[-1][:-5], "passed": 0, "failed": 1,
+           "skipped": 0, "gates": {"gofmt": {"status": "fail"}}}, open(sys.argv[1], "w"))
+PY
+OUT=$(land_run "$REDSTUB" --base "$BASE" --land 9008:train-good1); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 5 ] && ok "a batch on a RED BASE exits 5" || bad "expected exit 5, got $RC"
+grep -q 'BASE-RED' <<<"$OUT" && ok "names the red base it refused to attribute to" || bad "no BASE-RED line"
+[ "$(receipt_lines)" = 2 ] && ok "NO receipt line for a batch ejected on a red base" \
+  || bad "a base-red batch wrote a receipt ($(receipt_lines) lines)"
+rm -f "$PREFLIGHT_RESULT_DIR/$BASE_TREE.json"
+
+# --- S5c: a CONFLICTING batch writes NOTHING (exit 3) --------------------------
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+OUT=$(land_run "$LSTUB" --base "$BASE" --land 9009:train-clash 9010:train-clash2); RC=$?
+printf '%s\n' "$OUT" | sed 's/^/    /'
+[ "$RC" -eq 3 ] && ok "a conflicting batch exits 3" || bad "expected exit 3, got $RC"
+[ "$(receipt_lines)" = 2 ] && ok "NO receipt line for a batch ejected on conflict" \
+  || bad "a conflicting batch wrote a receipt ($(receipt_lines) lines)"
+
+# --- S6: a LATER run on the same tree cannot erase the receipt ----------------
+# This is the defect itself: the per-tree record is rewritten by the next run on the
+# same bytes. The receipt is a separate append-only file, so the landing's evidence must
+# survive a re-gate unchanged, byte for byte.
+BEFORE=$(sha256sum "$RECEIPT" | awk '{print $1}')
+OUT=$(TRAIN_GATE_CMD="bash $LSTUB" run --base "$BASE" train-good1); RC=$?
+REGATED=$(sed -n 's/^merge-train\.sh: GREEN candidate tree \([0-9a-f]*\).*/\1/p' <<<"$OUT")
+AFTER=$(sha256sum "$RECEIPT" | awk '{print $1}')
+[ "$RC" -eq 0 ] && ok "the same batch re-gates green (the tree is unchanged)" || bad "re-gate exited $RC"
+[ "$REGATED" = "$GTREE" ] && ok "the re-gate is on the SAME tree ($GTREE) as the landing" \
+  || bad "the re-gate tree ($REGATED) is not the landed tree ($GTREE) — the case measures nothing"
+[ "$BEFORE" = "$AFTER" ] && ok "the landing receipt is byte-identical after a later run on the same tree" \
+  || bad "a later run on the same tree changed the receipt — a landing's evidence must not be rewritable"
+[ "$(receipt_lines)" = 2 ] && ok "both earlier lines are still there (append-only)" \
+  || bad "$(receipt_lines) line(s) survived the re-gate, expected 2"
+
+# --- S7: a BATCH appends one line PER landed PR -------------------------------
+git --git-dir="$LAND_REMOTE" update-ref refs/heads/main "$BASE"
+BATCH_TREE=$(cand_tree train-good1 train-good2)
+if [ -z "$BATCH_TREE" ]; then
+  bad "cannot compute the batch candidate tree — the batch case would be vacuous"
+else
+  OUT=$(FAKE_GH_TREE="$BATCH_TREE" land_run "$LSTUB" --base "$BASE" --land 9006:train-good1 9007:train-good2); RC=$?
+  printf '%s\n' "$OUT" | sed 's/^/    /'
+  [ "$RC" -eq 0 ] && ok "a two-PR batch lands (exit 0)" || bad "expected exit 0, got $RC"
+  [ "$(receipt_lines)" = 4 ] && ok "a batch of two PRs appends TWO lines (one per landed PR)" \
+    || bad "expected 4 lines in total, got $(receipt_lines)"
+  [ "$(receipt_field 3 pr)" = 9006 ] && [ "$(receipt_field 4 pr)" = 9007 ] \
+    && ok "the two lines name both PRs, in landing order" \
+    || bad "the batch lines name [$(receipt_field 3 pr), $(receipt_field 4 pr)]"
+  [ "$(receipt_field 3 ref)" = train-good1 ] && [ "$(receipt_field 4 ref)" = train-good2 ] \
+    && ok "each line names its own ref" || bad "the batch lines do not name their refs"
+  [ "$(receipt_field 3 tested_tree)" = "$BATCH_TREE" ] && [ "$(receipt_field 4 landed_tree)" = "$BATCH_TREE" ] \
+    && ok "both lines carry the batch's tree as tested AND landed" \
+    || bad "batch trees: tested [$(receipt_field 3 tested_tree)] landed [$(receipt_field 4 landed_tree)] want $BATCH_TREE"
+  M3=$(receipt_field 3 merge_sha); M4=$(receipt_field 4 merge_sha)
+  [ -n "$M3" ] && [ -n "$M4" ] && [ "$M3" != "$M4" ] \
+    && ok "each PR carries its OWN squash sha ($(printf '%.8s' "$M3")…, $(printf '%.8s' "$M4")…)" \
+    || bad "the two PRs share a merge_sha [$M3] [$M4] — the field would identify neither"
+fi
+
 printf '\nmerge-train selftest: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || { _selftest_keep=1; exit 1; }
