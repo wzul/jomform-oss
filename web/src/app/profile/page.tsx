@@ -21,6 +21,7 @@ import {
   beginLookup,
   clearedDevice,
   checkingDevice,
+  deviceCanDecide,
   deviceErrorKey,
   deviceLookupOf,
   newLookupSequence,
@@ -1277,7 +1278,7 @@ export default function ProfilePage() {
                     {deviceErr}
                   </p>
                 )}
-                {deviceConsent && deviceConsent.state === "pending" && (
+                {deviceConsent && deviceCanDecide(deviceConsent) && (
                   <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-white p-3">
                     <p className="text-sm">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceClient")}: </span>
@@ -1368,7 +1369,7 @@ export default function ProfilePage() {
                     </div>
                   </div>
                 )}
-                {deviceConsent && deviceConsent.state !== "pending" && (
+                {deviceConsent && !deviceCanDecide(deviceConsent) && (
                   <p className="mt-3 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
                     {deviceConsent.state === "approved"
                       ? t("prof.deviceApproved")

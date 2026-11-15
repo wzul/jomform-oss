@@ -91,8 +91,8 @@ func availableEventsOf(sl *dbstore.Sale) []lifecycle.AvailableEvent {
 // is the whole table; with it the answer is that RECORD's current state and the
 // actions it accepts (guards evaluated, so a disabled action carries its reason).
 type describeLifecycleIn struct {
-	Aggregate string `json:"aggregate" jsonschema:"the aggregate to describe (sales)"`
-	ID        string `json:"id,omitempty" jsonschema:"optional record id: a sale ref_code. With id the answer is that record's current state and available_events; without it the whole transition table is returned"`
+	Aggregate string `json:"aggregate" jsonschema:"the aggregate to describe (sales, forms)"`
+	ID        string `json:"id,omitempty" jsonschema:"optional record id: a sale ref_code, or a form id (a trashed form answers too). With id the answer is that record's current state and available_events; without it the whole transition table is returned"`
 }
 
 // lifecycleAnswer is the union of the two answers. The table fields are present
@@ -103,6 +103,13 @@ type lifecycleAnswer struct {
 	// State / AvailableEvents are set when the caller named a record.
 	State           string                     `json:"state,omitempty"`
 	AvailableEvents []lifecycle.AvailableEvent `json:"available_events,omitempty"`
+	// AcceptingOrders/Reason/Code are the FORM aggregate's derived buyer state
+	// (card t_3d5a8d32) — the same answer the dashboard list and the public page
+	// give, so an agent asking "can this form take an order" is not guessing
+	// from a 200. Absent for aggregates that have no buyer page.
+	AcceptingOrders *bool  `json:"accepting_orders,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	Code            string `json:"code,omitempty"`
 	// States / Events / Codes are set when the caller asked for the table.
 	States []lifecycle.StateDoc `json:"states,omitempty"`
 	Events []string             `json:"events,omitempty"`
@@ -132,10 +139,15 @@ func (s *Server) describeLifecycle(ctx context.Context, _ *mcp.CallToolRequest, 
 		}, nil
 	}
 
-	// A record id is a sale ref_code today (the only aggregate with a machine).
-	// The lookup is scoped exactly like the write tools: a sale in an account
-	// this call may not touch is "not found", never another merchant's row.
-	if machine.Name != lifecycle.SalesMachine.Name {
+	// A record id is a sale ref_code or a form id — the two aggregates with a
+	// machine. Both lookups are scoped exactly like the write tools: a record
+	// in an account this call may not touch is "not found", never another
+	// merchant's row.
+	switch machine.Name {
+	case lifecycle.FormsMachine.Name:
+		return s.describeFormLifecycle(ctx, id)
+	case lifecycle.SalesMachine.Name:
+	default:
 		return nil, lifecycleAnswer{}, fmt.Errorf("aggregate %q has no record lookup yet", machine.Name)
 	}
 	if s.deps.Sales == nil {
@@ -167,5 +179,50 @@ func (s *Server) describeLifecycle(ctx context.Context, _ *mcp.CallToolRequest, 
 		Aggregate:       machine.Name,
 		State:           sale.LifecycleState(),
 		AvailableEvents: available,
+	}, nil
+}
+
+// describeFormLifecycle answers "what can I do with THIS form" (card t_3d5a8d32).
+//
+// It is the same call as the sale branch — one tool, one table — because the AX
+// half of the one-source rule is that an agent plans from the machine the write
+// paths enforce instead of guessing from a 200.
+//
+// A TRASHED form is a legitimate subject: GetByID filters it out, so the lookup
+// falls back to GetTrashed. Restore and purge are then the only events left, and
+// they are exactly what a caller asking this question needs to learn before it
+// proposes a publish. The account scope is the caller's own (ownedOrScopedAccounts),
+// so another merchant's form id answers "form not found".
+func (s *Server) describeFormLifecycle(ctx context.Context, formID string) (*mcp.CallToolResult, lifecycleAnswer, error) {
+	if s.deps.Forms == nil {
+		return nil, lifecycleAnswer{}, errors.New("forms not available")
+	}
+	accs, err := s.ownedOrScopedAccounts(ctx)
+	if err != nil {
+		return nil, lifecycleAnswer{}, err
+	}
+	var f *dbstore.Form
+	for _, acc := range accs {
+		if got, gerr := s.deps.Forms.GetByID(ctx, acc, formID); gerr == nil {
+			f = got
+			break
+		}
+		if got, gerr := s.deps.Forms.GetTrashed(ctx, acc, formID); gerr == nil {
+			f = got
+			break
+		}
+	}
+	if f == nil {
+		return nil, lifecycleAnswer{}, errors.New("form not found")
+	}
+	order := s.formOrder(ctx, f)
+	accepting := order.Accepting
+	return nil, lifecycleAnswer{
+		Aggregate:       lifecycle.FormsMachine.Name,
+		State:           f.LifecycleState(),
+		AvailableEvents: availableFormEvents(f),
+		AcceptingOrders: &accepting,
+		Reason:          order.Reason,
+		Code:            order.Code,
 	}, nil
 }

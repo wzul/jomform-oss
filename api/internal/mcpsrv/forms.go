@@ -11,6 +11,7 @@ import (
 
 	"github.com/wzul/jomform/api/internal/dbstore"
 	"github.com/wzul/jomform/api/internal/formfields"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 )
 
 type formOut struct {
@@ -26,6 +27,13 @@ type formOut struct {
 	// offering the merchant a sales action.
 	Mode string `json:"mode"`
 	URL  string `json:"url,omitempty"`
+	// AcceptingOrders is the derived buyer state (card t_3d5a8d32): the same
+	// answer the public page and the dashboard list give, so an agent reading a
+	// 200 does not have to guess whether the form's page can be submitted.
+	// Reason explains a false; Code is the stable machine token.
+	AcceptingOrders bool   `json:"accepting_orders"`
+	Reason          string `json:"reason,omitempty"`
+	Code            string `json:"code,omitempty"`
 }
 
 type formDetailOut struct {
@@ -48,6 +56,63 @@ type formDetailOut struct {
 	// that the write actually landed.
 	CreatedAt string `json:"created_at,omitempty"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+
+	// ── What this form can do (card t_3d5a8d32) ─────────────────────────────
+	//
+	// AcceptingOrders/Reason/Code are lifecycle.FormOrders' answer — the ONE
+	// derived buyer state, the same one the dashboard list and the public page
+	// ask. State is the row's lifecycle state (draft/private/published/
+	// unlisted/template_*/trashed), and AvailableEvents is what the form
+	// lifecycle table says the row accepts right now, each with enabled and,
+	// when a guard refuses it, the English reason.
+	AcceptingOrders bool   `json:"accepting_orders"`
+	Reason          string `json:"reason,omitempty"`
+	Code            string `json:"code,omitempty"`
+	// NoProductBlockID names the product block to fix when the refusal is about
+	// a specific block.
+	NoProductBlockID string                     `json:"no_product_block_id,omitempty"`
+	State            string                     `json:"state"`
+	AvailableEvents  []lifecycle.AvailableEvent `json:"available_events"`
+}
+
+// formOrderEnv assembles the facts lifecycle.FormOrders needs that the row
+// cannot carry: the account's product ids (the purged-product arm) and, only
+// when the form HAS an entry limit, the recorded order/submission count.
+func (s *Server) formOrderEnv(ctx context.Context, f *dbstore.Form, liveProductIDs map[string]bool) lifecycle.FormOrderEnv {
+	env := lifecycle.FormOrderEnv{LiveProductIDs: liveProductIDs, Entries: -1, Now: time.Now()}
+	if f.EntryLimit != nil && *f.EntryLimit > 0 {
+		env.Entries = -1
+		accounts := []string{f.AccountID}
+		if dbstore.FormMode(f) == dbstore.FormModeResponse {
+			if s.deps.Submissions != nil {
+				if n, err := s.deps.Submissions.CountByAccountsForm(ctx, accounts, f.ID); err == nil {
+					env.Entries = n
+				}
+			}
+		} else if s.deps.Sales != nil {
+			if n, err := s.deps.Sales.CountByAccountsForm(ctx, accounts, f.ID); err == nil {
+				env.Entries = n
+			}
+		}
+	}
+	return env
+}
+
+// formOrder is the MCP-side single derivation of a form's buyer state. Every
+// form read on this surface uses it, so a tool cannot answer differently from
+// the dashboard or the page.
+func (s *Server) formOrder(ctx context.Context, f *dbstore.Form) lifecycle.FormOrderState {
+	return lifecycle.FormOrders(f, s.formOrderEnv(ctx, f, s.productIDsForAccount(ctx, f.AccountID)))
+}
+
+// availableFormEvents is the row's lifecycle actions, never nil (a nil slice
+// marshals to null, which a schema-strict client would have to special-case).
+func availableFormEvents(f *dbstore.Form) []lifecycle.AvailableEvent {
+	out := lifecycle.FormsMachine.Available(f)
+	if out == nil {
+		return []lifecycle.AvailableEvent{}
+	}
+	return out
 }
 
 func (s *Server) listForms(
@@ -68,6 +133,9 @@ func (s *Server) listForms(
 		if err != nil {
 			return nil, nil, err
 		}
+		// ONE product-id read per account — the dead-form arm needs it, and
+		// reading it per row would make the list N+1.
+		live := s.productIDsForAccount(ctx, acc)
 		// Issue #77: public links are workspace-scoped ({workspace}.jomform.com/{slug}),
 		// never the legacy /f/{slug} form. Issue #83: a verified custom domain
 		// takes precedence over the workspace subdomain.
@@ -76,10 +144,14 @@ func (s *Server) listForms(
 			if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
 				u = s.formPublicURLForAccount(ctx, acc, f.Slug)
 			}
+			order := lifecycle.FormOrders(f, s.formOrderEnv(ctx, f, live))
 			out = append(out, formOut{
 				ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 				IsPrivate: f.Status == dbstore.FormStatusPrivate, URL: u,
-				Mode: dbstore.FormMode(f),
+				Mode:            dbstore.FormMode(f),
+				AcceptingOrders: order.Accepting,
+				Reason:          order.Reason,
+				Code:            order.Code,
 			})
 		}
 	}
@@ -110,6 +182,7 @@ func (s *Server) getForm(
 	if err != nil {
 		return nil, nil, errors.New("form not found")
 	}
+	order := s.formOrder(ctx, f)
 	out := &formDetailOut{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		IsPrivate: f.Status == dbstore.FormStatusPrivate, Config: f.Config,
@@ -117,6 +190,15 @@ func (s *Server) getForm(
 		Mode:      dbstore.FormMode(f),
 		CreatedAt: f.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
+		// Card t_3d5a8d32: what a caller can actually DO with this form, and
+		// whether a buyer could submit it right now — so an agent never has to
+		// infer either from a 200.
+		AcceptingOrders:  order.Accepting,
+		Reason:           order.Reason,
+		Code:             order.Code,
+		NoProductBlockID: order.BlockID,
+		State:            f.LifecycleState(),
+		AvailableEvents:  availableFormEvents(f),
 	}
 	if f.Status == dbstore.FormStatusPublished || f.Status == dbstore.FormStatusUnlisted {
 		out.URL = s.formPublicURLForAccount(ctx, acc, f.Slug)

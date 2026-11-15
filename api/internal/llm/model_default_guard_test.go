@@ -36,22 +36,54 @@
 //     recorded on the card: after a `npm run build`, Turbopack caches the build
 //     shell's own environment (ANTHROPIC_MODEL, BRANCH) into `.next/cache`, which
 //     is a harness artefact rather than a shipped id;
+//   - a SYMLINK is never descended into (filepath.Walk lstat's every entry, so a
+//     directory reached through a link is not a directory to it). A link NAMED for
+//     a skipped tree — a dev worktree's hand-linked `web/node_modules` is the
+//     measured case (card t_f7430361) — is skipped by that same name rule; any
+//     other link to a directory, and a broken link, is REFUSED BY NAME with its
+//     target, because reading it returned EISDIR and aborted the whole guard while
+//     dropping it would narrow the scan. A link to a regular FILE is read through,
+//     as it always was;
 //   - EVERY remaining file is READ. There is no extension whitelist, so a shape
 //     nobody thought of (`.mjs`, `.txt`, `.py`, `.mod`, `.sum`, an extensionless
-//     Dockerfile, a file with no extension at all) is read by default. The only
-//     files not read are `*_test.go` — a fixture must not be able to satisfy a
-//     guard about shipped text — and the explicit BINARY skip list
-//     (skipReadExts: images, fonts, archives, object code);
-//   - a file that cannot be decoded as text is REPORTED BY NAME and fails the
-//     guard rather than being skipped in silence, so the binary skip list cannot
-//     quietly grow to cover a file this guard should have read.
+//     Dockerfile, a file with no extension at all) is read by default. The files
+//     not read are `*_test.go` — a fixture must not be able to satisfy a guard
+//     about shipped text — the explicit BINARY skip list (skipReadExts: images,
+//     fonts, archives, object code), and a file whose FIRST 4 KiB ARE NOT TEXT;
+//   - "not text" is decided by CONTENT, not by name (card t_7a1a902c). The walk
+//     reads the first maxTextProbe bytes; a NUL byte or invalid UTF-8 there means
+//     the file cannot be judged as source, so it is SKIPPED — and every skipped
+//     path is NAMED in scope(), so the skip is visible in each red rather than
+//     silent. WHY CONTENT AND NOT A PATH: the measured case is `make api`, which
+//     writes api/bin/jomform-api into a GITIGNORED tree (.gitignore:2). A fresh
+//     worktree never has it, which is why the full sweep on main is green, and a
+//     machine that built before gating always has it: the scan used to DIE on it,
+//     naming a file the guard was never meant to judge (reproduced on this tree:
+//     both repo-wide tests below failed on
+//     `the scan could not decode api/bin/jomform-api as text`). A path rule
+//     cannot cover the shape — `go build ./cmd/jomform-api` drops the same binary
+//     in api/ — and a NAME rule (`bin`) would skip a `bin/` of shipped scripts;
+//   - reading a compiled binary as text is not merely useless, it is WRONG. Go
+//     folds constant expressions, so this guard's own retiredModelFamily is a
+//     LITERAL in the image (measured on the 79.6 MB binary `make api` wrote in
+//     this worktree: the retired family 1 occurrence, the shipped id 3). A scan
+//     that could decode an image would report the guard's own constant as a stray
+//     mention of the retired id;
+//   - a file whose first 4 KiB DECODE but which is not valid UTF-8 past that is
+//     still REPORTED BY NAME and fails the guard. That shape is a text file with a
+//     corrupt region, not build output, and holding that line is what stops the
+//     content rule from becoming a silent way to lose a file the guard should have
+//     read.
 //
-// The residual is therefore one sentence long: a model id is found only if it is
-// written as plain text in a file that is neither a `*_test.go` file nor on the
-// binary skip list. A dead id baked into an image, or held inside a compressed
-// blob, is out of reach — and nothing on this tree is in that shape today
-// (measured while writing this: 701 files read, 395 skipped by one of the two
-// rules, none of them undecodable).
+// The residual is therefore two sentences long: a model id is found only if it is
+// written as plain text in a file that is neither a `*_test.go` file, nor on the
+// binary skip list, nor non-text in its first 4 KiB — those skips are named in
+// scope(); and a compiled binary whose 4 KiB header happens to decode as text
+// (NUL-free, valid UTF-8) would be read and judged like source. A dead id baked
+// into an image, or held inside a compressed blob, is out of reach. Measured while
+// writing the earlier cut of this header: 701 files read, 395 skipped by the two
+// by-name rules, none of them undecodable; on a built tree the content rule's skip
+// list is exactly the binary under api/bin, and nothing else.
 //
 // A MODEL ID IS NOT ONLY A `deepseek-` ID.
 //
@@ -106,6 +138,13 @@
 // refuses to report a verdict when its two readers are byte-identical (a comparison
 // of a guard with itself proves nothing).
 //
+// CASE 15 IS THE SAME PROOF IN THE OTHER DIRECTION (card t_7a1a902c): the mutation
+// there is a file the OLD reader could not even READ, so the legs invert — BRANCH
+// stays GREEN because it skips the build output and names it, and BASE goes RED
+// because it died on it. The harness also refuses a tree that has been BUILT, for
+// the same reason: every BASE leg predates the content rule, so api/bin's own binary
+// would red every legacy case for a reason that is not its mutation.
+//
 // THE BASE IS DERIVED, NOT `origin/main`. It used to be `origin/main`, and that was
 // correct only until this guard's own rewrite MERGED there: from that merge on,
 // `origin/main` IS the widened reader, so every legacy BASE leg compared two
@@ -116,8 +155,10 @@
 package llm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -481,7 +522,7 @@ func TestEmptyModelResolvesToTheWorkingDefault(t *testing.T) {
 // the scan it excuses.
 func TestModelMentionExemptionsAreRealAndDoNotShelterTheRetiredId(t *testing.T) {
 	root := repoRoot(t)
-	hits, _, _ := readTokenFiles(t, root)
+	hits := readTokenFiles(t, root).hits
 
 	if len(modelMentionExempt) == 0 {
 		t.Fatal("modelMentionExempt is empty — if every mention was really fixed, delete this table and this " +
@@ -690,7 +731,8 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 		t.Fatalf("write prose-compound fixture: %v", err)
 	}
 
-	hits, read, skipped := readTokenFiles(t, root)
+	scan := readTokenFiles(t, root)
+	hits, read, skipped := scan.hits, scan.filesRead, scan.filesSkipped
 	if read != len(fixtures)+2 {
 		t.Fatalf("the scan read %d files under the fixture tree, want %d (the fixtures, the control "+
 			"Makefile and the negative control prose_compound.md) — the walk is reading a different set "+
@@ -746,6 +788,365 @@ func TestScanSeesTheShapesTheOldWhitelistCouldNot(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestScanSkipsNonTextInputsItCannotJudge pins the THIRD way this guard died on a
+// tree it should have judged (card t_7a1a902c): a COMPILED BINARY under
+// api/bin/jomform-api, the 80 MB ELF `make api` writes there.
+//
+// api/bin is GITIGNORED (.gitignore:2), so the file never appears in git and a
+// fresh worktree never has it — which is exactly why the weekly full sweep on main
+// is green and why this was invisible until someone gated a checkout they had
+// already built on. On such a tree BOTH repo-wide tests above failed on one line:
+//
+//	the scan could not decode api/bin/jomform-api as text, so it cannot judge the file
+//
+// That is a red naming a file the guard was never meant to judge, and it is not
+// even the right answer if the scan COULD decode it: Go folds constant
+// expressions, so this guard's own retiredModelFamily is a literal inside the
+// image (measured on that binary: 1 occurrence of the retired family, 3 of the
+// shipped id). Reading build output as text would report the guard's own constant
+// as a stray mention of the retired id.
+//
+// The fixtures are a scratch tree, never the repo: a binary written into this
+// checkout would make the guard's own subject a permanent red — and it would be
+// gitignored, so nothing would tell the next reader why the suite was slow.
+//
+// The four legs, each a different half of the rule:
+//
+//  1. the measured shape — a small ELF at api/bin/jomform-api, in a tree with a
+//     text file BEFORE it and one AFTER it. The walk must finish, the binary must
+//     be SKIPPED AND NAMED, and both siblings must still be judged: `return
+//     filepath.SkipDir` here would drop the rest of the directory silently, which
+//     is the narrowing this guard exists to remove;
+//  2. an image whose 4 KiB header is ASCII — only the NUL bytes give it away. This
+//     leg is why the rule is "NUL or invalid UTF-8" and not "invalid UTF-8": an
+//     ELF's header is largely ASCII, and a binary that decoded would be judged;
+//  3. a text file that stops decoding MID-file is still REFUSED BY NAME. That
+//     shape is a corrupt region in something that is otherwise text rather than
+//     build output, and holding that line is what stops the content rule from
+//     becoming a silent way to drop a file the guard should have read;
+//  4. a text file whose 4096-byte boundary CUTS A RUNE is read, not skipped: the
+//     probe's last byte is a valid start byte with no room for its continuation,
+//     and calling that "not text" would silently lose a real source file.
+func TestScanSkipsNonTextInputsItCannotJudge(t *testing.T) {
+	dead := retiredModelFamily + ":0731"
+
+	t.Run("a compiled binary under api/bin is skipped, named, and does not stop the walk", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "api", "bin"), 0o755); err != nil {
+			t.Fatalf("prepare the build-output tree: %v", err)
+		}
+		// A small ELF: e_ident magic, its NUL padding, a high-byte run, and the
+		// retired id as a literal — the same three properties measured on the real
+		// binary (invalid UTF-8 at byte 96, 3315 NULs in the first 4 KiB, the
+		// retired family folded in once). The id being IN the fixture is what makes
+		// "skipped" different from "read and happened to find nothing".
+		elf := append([]byte("\x7fELF\x02\x01\x01\x00"), make([]byte, 8)...)
+		elf = append(elf, []byte{0xf8, 0xff, 0x80, 0x90}...)
+		elf = append(elf, []byte("\x00model "+dead+"\x00")...)
+		if err := os.WriteFile(filepath.Join(root, "api", "bin", "jomform-api"), elf, 0o755); err != nil {
+			t.Fatalf("write the binary fixture: %v", err)
+		}
+		before := "api/bin/aa_before.ts"
+		after := "api/bin/zz_after.go"
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(before)),
+			[]byte("export const M = \""+workingModel+"\";\n"), 0o644); err != nil {
+			t.Fatalf("write the file before the binary: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(after)),
+			[]byte("// the drafter calls gemini-pro\n"), 0o644); err != nil {
+			t.Fatalf("write the file after the binary: %v", err)
+		}
+
+		res, err := scanTree(root)
+		if err != nil {
+			t.Fatalf("the scan refused a tree holding a compiled binary (%v) — this is the measured red: "+
+				"`make api` writes api/bin/jomform-api into a GITIGNORED tree, so any machine that builds "+
+				"before gating hits it, and the guard dies naming a file it was never meant to judge", err)
+		}
+		if len(res.nonText) != 1 || res.nonText[0] != "api/bin/jomform-api" {
+			t.Fatalf("the scan recorded non-text files %v, want exactly [api/bin/jomform-api] — a skip "+
+				"that is not NAMED is the silence the extension whitelist hid behind", res.nonText)
+		}
+		if res.filesRead != 2 || res.filesSkipped != 1 {
+			t.Errorf("the scan read %d files and skipped %d, want 2 read (both text siblings) and 1 "+
+				"skipped (the binary) — the skip must cost the binary and nothing else",
+				res.filesRead, res.filesSkipped)
+		}
+		if _, judged := res.hits["api/bin/jomform-api"]; judged {
+			t.Errorf("the scan JUDGED api/bin/jomform-api (hits: %v) — a compiled binary is not source, and "+
+				"Go folds this guard's own retiredModelFamily into it, so the verdict would be about the "+
+				"guard's constant rather than about a shipped mention", res.hits["api/bin/jomform-api"])
+		}
+		if why, ok := res.hits[before][workingModel]; !ok || why != "" {
+			t.Errorf("%s (walked BEFORE the binary) was not judged: %v — the skip stopped the walk early", before, res.hits[before])
+		}
+		if why, ok := res.hits[after]["gemini-pro"]; !ok || why == "" {
+			t.Fatalf("%s (walked AFTER the binary) was not judged as a stray id: %v — a skip that answers a "+
+				"file with filepath.SkipDir silently drops the REST of the containing directory", after, res.hits[after])
+		}
+		if scope := res.scope(); !strings.Contains(scope, "api/bin/jomform-api") {
+			t.Fatalf("the scope line does not name the file it skipped: %q. Every red prints this line, so a "+
+				"skip it does not name is invisible to the reader of the red", scope)
+		}
+	})
+
+	t.Run("an image whose header is ASCII is caught by its NUL bytes", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "web", "tools"), 0o755); err != nil {
+			t.Fatalf("prepare the fixture tree: %v", err)
+		}
+		// Valid UTF-8 throughout, and a NUL in it: the shape an "invalid UTF-8"
+		// rule alone would read as a text file and judge.
+		image := "GCC: (GNU) 13.2.0\x00.symtab\x00model " + dead + "\x00"
+		if err := os.WriteFile(filepath.Join(root, "web", "tools", "cli"), []byte(image), 0o755); err != nil {
+			t.Fatalf("write the NUL-carrying fixture: %v", err)
+		}
+		res, err := scanTree(root)
+		if err != nil {
+			t.Fatalf("the scan refused a NUL-carrying image: %v", err)
+		}
+		if len(res.nonText) != 1 || res.nonText[0] != "web/tools/cli" {
+			t.Fatalf("the scan recorded non-text files %v, want exactly [web/tools/cli] — a NUL byte cannot "+
+				"appear in a UTF-8 source file, so this is not text whatever its other bytes look like", res.nonText)
+		}
+		if len(res.hits) != 0 {
+			t.Fatalf("the scan judged a NUL-carrying image: %v", res.hits)
+		}
+	})
+
+	t.Run("a text file that stops decoding mid-file is still refused by name", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+			t.Fatalf("prepare the fixture tree: %v", err)
+		}
+		// The first maxTextProbe bytes are text, so the content rule does not skip
+		// it — and everything after them is not.
+		body := bytes.Repeat([]byte("a"), maxTextProbe)
+		body = append(body, 0xf8, 0xff)
+		if err := os.WriteFile(filepath.Join(root, "api", "notes.md"), body, 0o644); err != nil {
+			t.Fatalf("write the corrupt-text fixture: %v", err)
+		}
+		_, err := scanTree(root)
+		var unreadable *unreadableFileError
+		if !errors.As(err, &unreadable) {
+			t.Fatalf("the scan returned %v, want the by-name refusal for api/notes.md — a file whose 4 KiB "+
+				"header decoded and which stops decoding after that is a text file with a corrupt region, "+
+				"and skipping it would be the silent narrowing the content rule must not add", err)
+		}
+		if unreadable.path != "api/notes.md" {
+			t.Fatalf("the refusal names %q, want api/notes.md", unreadable.path)
+		}
+	})
+
+	t.Run("a text file whose probe boundary cuts a rune is read, not skipped", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+			t.Fatalf("prepare the fixture tree: %v", err)
+		}
+		// 4095 ASCII bytes then a two-byte rune: the probe ends on the rune's FIRST
+		// byte, which is invalid on its own.
+		body := bytes.Repeat([]byte("a"), maxTextProbe-1)
+		body = append(body, []byte("\u00e9 // the drafter calls gemini-pro\n")...)
+		if err := os.WriteFile(filepath.Join(root, "api", "cut_rune.txt"), body, 0o644); err != nil {
+			t.Fatalf("write the cut-rune fixture: %v", err)
+		}
+		res, err := scanTree(root)
+		if err != nil {
+			t.Fatalf("the scan refused a text file whose probe boundary cut a rune: %v", err)
+		}
+		if len(res.nonText) != 0 {
+			t.Fatalf("the scan skipped a TEXT file (%v) because its 4096-byte probe ended mid-rune — that "+
+				"would lose a real source file, and the id after the rune is exactly such a mention", res.nonText)
+		}
+		if why, ok := res.hits["api/cut_rune.txt"]["gemini-pro"]; !ok || why == "" {
+			t.Fatalf("the file was not judged (hits: %v) — it decoded in full, so its mention must be reported",
+				res.hits)
+		}
+	})
+}
+
+// TestScanTreatsASymlinkedSkippedTreeAsSkipped pins the SECOND way this guard
+// died on a tree it should have judged (card t_f7430361): `web/node_modules` as a
+// SYMLINK.
+//
+// filepath.Walk lstats every entry, so a directory reached through a link is not
+// a directory to it — the `node_modules` arm of skipDirs never fired, the entry
+// fell through to os.ReadFile, and that returns EISDIR:
+//
+//	walk <tree> for model ids: read <tree>/web/node_modules: is a directory
+//
+// which aborts both repo-wide guards within seconds of starting, with a message that reads like a
+// broken guard and names no product defect. It is not academic: a dev worktree
+// symlinks its node_modules by hand to skip an ~81s `npm ci` (the same shortcut
+// whose other symptom is Turbopack panicking at `next dev`), and a hand-linked
+// tree is not a seeded one, so deploy/web_modules.sh refusing a symlinked donor
+// (card t_eaf5edd4) never sees it.
+//
+// The fixture is a scratch tree, never the repo: a symlink written into the repo
+// would make the guard's own subject a permanent red. It is deliberately SMALL and
+// the link's TARGET is a second temp dir holding a retired id, so the test proves
+// three things at once:
+//
+//  1. the walk finishes (on the pre-fix bytes this call itself Fatals with the
+//     EISDIR line above — that is the red this test exists to remove);
+//  2. the tree behind the link is NOT judged — its bytes are another tree's, and
+//     following the link is the one thing the fix must not do;
+//  3. the walk keeps going: a file BEFORE the link and one AFTER it are both
+//     read. `filepath.SkipDir` returned for a NON-directory entry skips the rest
+//     of the containing directory, so answering the link with SkipDir would drop
+//     `web/zz_after_the_link.ts` while still passing (1) and (2) — the sibling is
+//     what catches that.
+func TestScanTreatsASymlinkedSkippedTreeAsSkipped(t *testing.T) {
+	root := t.TempDir()
+	// The far side of the link: a node_modules-shaped tree with a retired id in
+	// it, i.e. exactly the id the scan WOULD report if it followed the link.
+	outside := t.TempDir()
+	dead := retiredModelFamily + ":0731"
+	if err := os.MkdirAll(filepath.Join(outside, "left-pad"), 0o755); err != nil {
+		t.Fatalf("prepare the linked tree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "left-pad", "index.js"),
+		[]byte("module.exports = '"+dead+"';\n"), 0o644); err != nil {
+		t.Fatalf("write the linked tree's fixture: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "web"), 0o755); err != nil {
+		t.Fatalf("prepare fixture tree: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "web", "node_modules")); err != nil {
+		t.Fatalf("link the fixture node_modules: %v", err)
+	}
+	before := filepath.Join(root, "web", "app.ts")
+	after := filepath.Join(root, "web", "zz_after_the_link.ts")
+	if err := os.WriteFile(before, []byte("// the default model: "+workingModel+"\n"), 0o644); err != nil {
+		t.Fatalf("write the file before the link: %v", err)
+	}
+	if err := os.WriteFile(after, []byte("// the drafter calls gemini-pro\n"), 0o644); err != nil {
+		t.Fatalf("write the file after the link: %v", err)
+	}
+
+	scan := readTokenFiles(t, root)
+	hits, read, skipped := scan.hits, scan.filesRead, scan.filesSkipped
+
+	if read != 2 {
+		var got []string
+		for rel := range hits {
+			got = append(got, rel)
+		}
+		sort.Strings(got)
+		t.Fatalf("the scan read %d files under a tree with two real files and one symlinked tree, want 2 — "+
+			"the link is not shipped source and the files beside it are (skipped %d, hits %v)", read, skipped, got)
+	}
+	if skipped != 0 {
+		t.Errorf("the scan skipped %d files, want 0: the link is a TREE, so it is never walked at all and "+
+			"must not be counted as a skipped file", skipped)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("the scan reported %d files, want exactly the 2 beside the link: %v — a third means the "+
+			"walk read through the symlink into another tree's bytes", len(hits), hits)
+	}
+	for rel := range hits {
+		if strings.Contains(rel, "node_modules") {
+			t.Errorf("the scan judged %s, which lives behind a symlink — its bytes belong to the tree the "+
+				"link points at (%s), so the verdict would depend on a tree this checkout does not own",
+				rel, outside)
+		}
+	}
+	if why, ok := hits["web/app.ts"][workingModel]; !ok || why != "" {
+		t.Errorf("web/app.ts (the file BEFORE the link) was not read, or its %q was not classified as the "+
+			"shipped default (got %v) — the walk stopped early", workingModel, hits["web/app.ts"])
+	}
+	if why, ok := hits["web/zz_after_the_link.ts"]["gemini-pro"]; !ok || why == "" {
+		t.Fatalf("web/zz_after_the_link.ts (the file AFTER the link) was not judged as a stray id "+
+			"(got %v) — a skip that answers the link with filepath.SkipDir silently drops the REST of the "+
+			"containing directory, which narrows the scan exactly like the extension whitelist did", hits["web/zz_after_the_link.ts"])
+	}
+}
+
+// TestScanRefusesASymlinkedTreeItCannotJudgeByName pins the OTHER half of the
+// symlink rule (card t_f7430361): a link the skip list does not name is not read
+// (the EISDIR abort) and not silently dropped (which would narrow the scan), it is
+// REFUSED by name with its target. Neither case can be a skipped-name tree —
+// `node_modules` is what the test above covers — because the whole point here is
+// that the walk will not follow a link into another checkout and will not pretend
+// it did not see one.
+func TestScanRefusesASymlinkedTreeItCannotJudgeByName(t *testing.T) {
+	t.Run("a symlinked directory the skip list does not name", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Symlink(outside, filepath.Join(root, "not_shipped_source")); err != nil {
+			t.Fatalf("link the fixture directory: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("read by the scan\n"), 0o644); err != nil {
+			t.Fatalf("write the sibling fixture: %v", err)
+		}
+
+		_, err := scanTree(root)
+		if err == nil {
+			t.Fatal("the scan accepted a tree holding a symlinked directory it does not skip — silently " +
+				"not reading it is the narrowing this guard exists to remove, and following it would judge " +
+				"another checkout's bytes")
+		}
+		if strings.Contains(err.Error(), "is a directory") {
+			t.Fatalf("the scan still tried to READ the link (%v) — that read is what aborted both repo-wide "+
+				"guards with `read <tree>/web/node_modules: is a directory`", err)
+		}
+		for _, want := range []string{"not_shipped_source", outside, "symlink"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal %q does not name %q — a red has to say WHICH link and where it points, "+
+					"or it reads like a broken guard", err, want)
+			}
+		}
+	})
+
+	t.Run("a broken symlink", func(t *testing.T) {
+		root := t.TempDir()
+		missing := filepath.Join(t.TempDir(), "gone")
+		if err := os.Symlink(missing, filepath.Join(root, "vendored")); err != nil {
+			t.Fatalf("link the fixture directory: %v", err)
+		}
+
+		_, err := scanTree(root)
+		if err == nil {
+			t.Fatal("the scan accepted a broken symlink — it has no bytes to read, so the verdict would be " +
+				"silently narrower than the tree it claims to cover")
+		}
+		for _, want := range []string{"vendored", missing, "BROKEN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal %q does not name %q", err, want)
+			}
+		}
+	})
+
+	// A link to a regular FILE is still read through, as it always was: a path
+	// that serves readable bytes is judged, a tree the walk declines to enter is
+	// not. Pinned so the directory rule cannot be widened into "every link is an
+	// error" without saying so.
+	t.Run("a symlink to a file is read", func(t *testing.T) {
+		root := t.TempDir()
+		real := filepath.Join(root, "real_notes.md")
+		if err := os.WriteFile(real, []byte("// the drafter calls gemini-pro\n"), 0o644); err != nil {
+			t.Fatalf("write the fixture file: %v", err)
+		}
+		if err := os.Symlink("real_notes.md", filepath.Join(root, "linked_notes.md")); err != nil {
+			t.Fatalf("link the fixture file: %v", err)
+		}
+
+		res, err := scanTree(root)
+		if err != nil {
+			t.Fatalf("the scan refused a symlink to a regular file: %v", err)
+		}
+		hits, read := res.hits, res.filesRead
+		if read != 2 {
+			t.Errorf("the scan read %d files, want 2 (the real file and the link to it): %v", read, hits)
+		}
+		if _, ok := hits["linked_notes.md"]["gemini-pro"]; !ok {
+			t.Errorf("the linked file's id was not judged (hits: %v) — reading a file's bytes is what the "+
+				"scan does at a path; only a TREE is refused", hits)
+		}
+	})
 }
 
 // TestProseCompoundExclusionsAreProseAndDoNotShelterIDs pins the prose-compound
@@ -840,7 +1241,7 @@ func TestProseCompoundExclusionsAreProseAndDoNotShelterIDs(t *testing.T) {
 		}
 	}
 
-	hits, _, _ := readTokenFiles(t, root)
+	hits := readTokenFiles(t, root).hits
 
 	for rel := range prose {
 		if _, ok := hits[rel]; ok {
@@ -917,13 +1318,25 @@ type scanResult struct {
 	hits         map[string]map[string]string
 	filesRead    int
 	filesSkipped int
+	// nonText names every file the walk declined to read because its first
+	// maxTextProbe bytes are not text (card t_7a1a902c). It is a SUBSET of
+	// filesSkipped and it is carried, not counted, because a skip a reader cannot
+	// see is the silence this guard exists to remove: scope() names these files,
+	// so a tree that loses one to the content rule says so in its own red.
+	nonText []string
 }
 
 // scope renders the measured scope of the walk for a failure message, so a red
 // says how much of the tree it actually read.
 func (s scanResult) scope() string {
-	return "this guard read " + strconv.Itoa(s.filesRead) + " files under the repo root and skipped " +
-		strconv.Itoa(s.filesSkipped) + " (*_test.go and the binary skip list); there is no extension whitelist."
+	msg := "this guard read " + strconv.Itoa(s.filesRead) + " files under the repo root and skipped " +
+		strconv.Itoa(s.filesSkipped) + " (*_test.go, the binary skip list and " +
+		strconv.Itoa(len(s.nonText)) + " file(s) whose first bytes are not text); there is no extension whitelist."
+	if len(s.nonText) > 0 {
+		msg += " The non-text files it could not judge, named so the skip cannot hide: " +
+			strings.Join(s.nonText, ", ") + "."
+	}
+	return msg
 }
 
 // skipDirs are the trees that are not shipped source. `.next` is on the list
@@ -994,7 +1407,8 @@ var skipReadNames = map[string]bool{
 // scanRepoForModelIDs walks the repo and judges every model id it finds.
 func scanRepoForModelIDs(t *testing.T, root string) scanResult {
 	t.Helper()
-	hits, read, skipped := readTokenFiles(t, root)
+	res := readTokenFiles(t, root)
+	hits, read := res.hits, res.filesRead
 	if read == 0 {
 		t.Fatalf("the walk read no file under %s — a scan that reads nothing proves nothing", root)
 	}
@@ -1002,59 +1416,147 @@ func scanRepoForModelIDs(t *testing.T, root string) scanResult {
 		t.Fatalf("no file under %s writes a model id (read %d files) — either every mention was removed "+
 			"(then this guard should be removed with it) or the token rule stopped matching", root, read)
 	}
-	return scanResult{hits: hits, filesRead: read, filesSkipped: skipped}
+	return res
 }
 
 // readTokenFiles is the whole scan: walk, read, tokenise, judge. It returns the
 // ids found per file (with the reason when the id is not the shipped default),
-// the number of files actually read, and the number skipped by the two
-// documented rules.
+// the number of files actually read, the number skipped by the documented rules,
+// and — when a skip was decided by CONTENT rather than by name — the paths of the
+// non-text files, so `scope()` can name them.
 //
 // What is read: every file except `*_test.go` (a fixture must not be able to
-// satisfy a guard about shipped text), anything on the binary skip list, and the
-// skipped trees. What a hit means: every id the file writes, so the caller can
-// assert both directions — no stray id anywhere, and the shipped id spelled on
-// the surfaces that must name it.
-func readTokenFiles(t *testing.T, root string) (map[string]map[string]string, int, int) {
+// satisfy a guard about shipped text), anything on the binary skip list, a file
+// whose first maxTextProbe bytes are not text, and the skipped trees. What a hit
+// means: every id the file writes, so the caller can assert both directions — no
+// stray id anywhere, and the shipped id spelled on the surfaces that must name it.
+func readTokenFiles(t *testing.T, root string) scanResult {
 	t.Helper()
 
-	hits := map[string]map[string]string{}
-	read, skipped := 0, 0
+	res, err := scanTree(root)
+	var unreadable *unreadableFileError
+	if errors.As(err, &unreadable) {
+		t.Fatalf("the scan could not decode %s as text, so it cannot judge the file. Its first %d bytes DID "+
+			"decode, so this is NOT one of the compiled build outputs the content rule skips — it is a text "+
+			"file with a corrupt region, or source this guard must judge. Fix the bytes rather than widening "+
+			"the skip list.", unreadable.path, maxTextProbe)
+	}
+	var linked *symlinkedTreeError
+	if errors.As(err, &linked) {
+		t.Fatalf("the scan will not judge %s — %s. This guard reads ONE tree's bytes: following the link would "+
+			"let another checkout's contents decide the verdict, and skipping it in silence would narrow the scan "+
+			"the way the old extension whitelist did. If the link is not shipped source (a dev tree's hand-linked "+
+			"`web/node_modules` is the case this guard met), name it in skipDirs; otherwise put the real bytes in "+
+			"this tree.", linked.path, linked.why())
+	}
+	if err != nil {
+		t.Fatalf("walk %s for model ids: %v — the guard cannot run without reading the tree", root, err)
+	}
+	return res
+}
+
+// scanTree is readTokenFiles without the testing hook: it walks root, reads and
+// judges every file it should judge, and RETURNS the walk error so the three ways
+// this walk can refuse to answer (a text file that stops decoding mid-file, a
+// symlinked tree, an unreadable path) can be reported by name at the one place
+// that reports, and asserted on a scratch tree without a failing test to read a
+// message from.
+//
+// A non-text file is NOT one of those errors: it is a skip, recorded in
+// res.nonText (card t_7a1a902c). It used to be an error, and then a compiled
+// binary in the gitignored api/bin killed both repo-wide guards on any machine
+// that had built before gating.
+func scanTree(root string) (scanResult, error) {
+	res := scanResult{hits: map[string]map[string]string{}}
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+		name := info.Name()
 		if info.IsDir() {
-			if skipDirs[info.Name()] {
+			if skipDirs[name] {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		name := info.Name()
+		// A SYMLINK IS NEITHER A FILE NOR A DIRECTORY HERE (card t_f7430361).
+		// filepath.Walk LSTATs every entry, so a directory reached through a link
+		// is not a directory to it: the skipDirs arm above never fires for
+		// `web/node_modules`, the entry falls through to the read below, and
+		// os.ReadFile answers EISDIR — which aborted BOTH repo-wide guards within
+		// seconds of starting, with `read <tree>/web/node_modules: is a directory`, a message that reads
+		// like a broken guard and names no product defect. A dev worktree links its
+		// `node_modules` by hand to skip an ~81 s `npm ci`; that tree was never
+		// seeded, so refusing a symlinked donor in deploy/web_modules.sh (card
+		// t_eaf5edd4) does not cover it.
+		//
+		// The rule, and the two things it must NOT do:
+		//   - a link to a DIRECTORY is skipped by the same NAME rule as a real
+		//     directory (the guard already intends not to read `node_modules`), and
+		//     `nil` is returned rather than filepath.SkipDir: SkipDir from a
+		//     non-directory entry skips the REST OF THE CONTAINING DIRECTORY, which
+		//     would silently drop the files beside the link;
+		//   - any other link to a directory, and a broken link, is REPORTED by name
+		//     with its target rather than read (the EISDIR abort) or dropped (silent
+		//     narrowing). The walk never descends into a link, so the verdict cannot
+		//     come to depend on another checkout's bytes;
+		//   - a link to a regular FILE is still read through, which is what this
+		//     scan has always done and is not the defect above: a path that serves
+		//     readable bytes is read, a tree the walk declines to enter is not.
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, _ := os.Readlink(path)
+			linked, serr := os.Stat(path)
+			switch {
+			case serr != nil:
+				if skipDirs[name] {
+					return nil // not shipped source by name, resolvable or not
+				}
+				return &symlinkedTreeError{path: relPath(root, path), target: target, broken: true}
+			case linked.IsDir():
+				if skipDirs[name] {
+					return nil
+				}
+				return &symlinkedTreeError{path: relPath(root, path), target: target}
+			}
+		}
+		rel := relPath(root, path)
 		if strings.HasSuffix(name, "_test.go") {
-			skipped++
+			res.filesSkipped++
 			return nil
 		}
 		if skipReadNames[name] {
-			skipped++
+			res.filesSkipped++
 			return nil
 		}
 		if skipReadExts[strings.ToLower(filepath.Ext(name))] {
-			skipped++
+			res.filesSkipped++
 			return nil
 		}
-		raw, rerr := os.ReadFile(path)
+		// THE CONTENT RULE (card t_7a1a902c). A file whose first maxTextProbe
+		// bytes are not text cannot be judged as source, so it is SKIPPED rather
+		// than read — and NAMED in res.nonText so scope() reports it. The header
+		// records why the decision is by CONTENT and not by path, and the measured
+		// case: api/bin/jomform-api, the ELF `make api` writes into a gitignored
+		// tree, which killed both repo-wide guards on any machine that built
+		// before gating.
+		raw, notText, rerr := readIfText(path, rel)
 		if rerr != nil {
 			return rerr
 		}
-		// A file the scan cannot read as text must be REPORTED, not silently
-		// dropped: silence here is how the extension whitelist failed.
-		if !utf8.Valid(raw) {
-			rel, _ := filepath.Rel(root, path)
-			return &unreadableFileError{path: filepath.ToSlash(rel)}
+		if notText {
+			res.filesSkipped++
+			res.nonText = append(res.nonText, rel)
+			return nil
 		}
-		read++
+		// A file whose 4 KiB header DECODED but which is not valid UTF-8 past
+		// that is REPORTED, not silently dropped: that shape is a text file with
+		// a corrupt region rather than build output, and silence here is how the
+		// extension whitelist failed.
+		if !utf8.Valid(raw) {
+			return &unreadableFileError{path: rel}
+		}
+		res.filesRead++
 		text := string(raw)
 
 		ids := map[string]bool{}
@@ -1078,8 +1580,7 @@ func readTokenFiles(t *testing.T, root string) (map[string]map[string]string, in
 			return nil
 		}
 
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
+		rel = relPath(root, path)
 		found := map[string]string{}
 		for id := range ids {
 			if id == workingModel {
@@ -1088,25 +1589,157 @@ func readTokenFiles(t *testing.T, root string) (map[string]map[string]string, in
 			}
 			found[id] = strayReason(id)
 		}
-		hits[rel] = found
+		res.hits[rel] = found
 		return nil
 	})
-	var unreadable *unreadableFileError
-	if errors.As(err, &unreadable) {
-		t.Fatalf("the scan could not decode %s as text, so it cannot judge the file. Either it is not shipped "+
-			"source (add its extension to skipReadExts with that reason) or it holds a model id this guard is "+
-			"blind to — which is the failure this scan exists to remove.", unreadable.path)
-	}
+	return res, err
+}
+
+// maxTextProbe is how much of a file the scan reads before deciding whether the
+// file is source at all (card t_7a1a902c). 4 KiB is the whole of nearly every file
+// this guard judges, and for the ones it is not, it is enough to recognise a
+// compiled binary: measured on the 79.6 MB ELF `make api` writes into api/bin,
+// byte 96 is already invalid UTF-8 and the first 4 KiB hold 3315 NUL bytes.
+const maxTextProbe = 4096
+
+// readIfText reads a file's bytes for judging, and reports whether the file is NOT
+// text — in which case the returned bytes are nil and the caller skips it.
+//
+// WHY A PROBE AND NOT os.ReadFile. The old walk read the WHOLE file and only then
+// discovered it could not decode it, so a 79.6 MB binary was pulled into memory on
+// every repo-wide guard — and the guard then died on it rather than skipping it.
+// Reading at most maxTextProbe first costs 4 KiB for a build output instead of its
+// own size, and a file that fits inside the probe is returned WITHOUT a second
+// read.
+//
+// WHAT "TEXT" MEANS HERE, and why both halves are needed. A NUL byte cannot occur
+// in a UTF-8 file this repo ships, and a compiled binary carries them in its header
+// whatever its other bytes look like (the ELF e_ident padding is NULs) — so NUL is
+// what catches an image whose header happens to be ASCII. Invalid UTF-8 catches the
+// rest. The two are one rule rather than two: both say "this is not text, so it
+// cannot be judged", and neither can be turned into a reason to read an image.
+func readIfText(path, rel string) ([]byte, bool, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("walk %s for model ids: %v — the guard cannot run without reading the tree", root, err)
+		return nil, false, fmt.Errorf("read %s: %w", rel, err)
 	}
-	return hits, read, skipped
+	defer f.Close()
+
+	probe := make([]byte, maxTextProbe)
+	n, rerr := io.ReadFull(f, probe)
+	switch rerr {
+	case nil, io.ErrUnexpectedEOF, io.EOF:
+	default:
+		return nil, false, fmt.Errorf("read %s: %w", rel, rerr)
+	}
+	probe = probe[:n]
+
+	if !probeIsText(probe, n == maxTextProbe) {
+		return nil, true, nil
+	}
+	if n < maxTextProbe {
+		return probe, false, nil // the probe held the whole file
+	}
+	rest, rerr := io.ReadAll(f)
+	if rerr != nil {
+		return nil, false, fmt.Errorf("read %s: %w", rel, rerr)
+	}
+	return append(probe, rest...), false, nil
+}
+
+// probeIsText reports whether a file's leading bytes can be read as text.
+// `truncated` says the probe was filled to maxTextProbe, i.e. the file continues
+// past it.
+//
+// The only forgiveness it grants is at the probe's own boundary: a multi-byte rune
+// the 4 KiB read CUT IN HALF makes an otherwise valid file look invalid, so a
+// trailing INCOMPLETE rune is dropped before the file is called non-text. An
+// invalid byte anywhere else is real, and a NUL is never forgiven.
+func probeIsText(probe []byte, truncated bool) bool {
+	if bytes.IndexByte(probe, 0) >= 0 {
+		return false
+	}
+	if utf8.Valid(probe) {
+		return true
+	}
+	if !truncated {
+		return false
+	}
+	// Walk back to the start of the rune the read may have cut — at most UTFMax-1
+	// bytes — and accept the file as text only when what is left of that rune is a
+	// valid PREFIX of one (a lead byte with room for at least one more continuation
+	// byte) and everything before it decodes. A complete-but-invalid sequence, or
+	// an invalid leading byte, is a real defect rather than a cut.
+	for cut := 1; cut < utf8.UTFMax && cut <= len(probe); cut++ {
+		start := len(probe) - cut
+		if !utf8.RuneStart(probe[start]) {
+			continue // a continuation byte of the cut rune: look further left
+		}
+		want := runePrefixLen(probe[start])
+		if want == 0 || cut >= want {
+			return false
+		}
+		for _, c := range probe[start+1:] {
+			if c < 0x80 || c > 0xBF {
+				return false
+			}
+		}
+		return utf8.Valid(probe[:start])
+	}
+	return false
+}
+
+// runePrefixLen returns how many bytes a multi-byte UTF-8 sequence starts with, or
+// 0 when b is not a lead byte (ASCII, a continuation byte, or an invalid lead such
+// as 0xC0/0xC1/0xF5..).
+func runePrefixLen(b byte) int {
+	switch {
+	case b >= 0xC2 && b <= 0xDF:
+		return 2
+	case b >= 0xE0 && b <= 0xEF:
+		return 3
+	case b >= 0xF0 && b <= 0xF4:
+		return 4
+	}
+	return 0
+}
+
+// relPath renders path relative to root, slash-separated, for both the hits map
+// and the messages that name a file — so a red and the map it is about spell a
+// path the same way.
+func relPath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // unreadableFileError names a file the scan found but could not read as text.
 type unreadableFileError struct{ path string }
 
 func (e *unreadableFileError) Error() string { return "not text: " + e.path }
+
+// symlinkedTreeError names a link the walk declines to judge: a link to a
+// directory whose name is not on skipDirs, or a link whose target is gone. It is
+// an ERROR rather than a silent skip because a directory the scan refuses to
+// enter is exactly the narrowing the extension whitelist used to hide.
+type symlinkedTreeError struct {
+	path   string // repo-relative, for the message
+	target string // the link's own target, as written
+	broken bool   // the target could not be resolved at all
+}
+
+func (e *symlinkedTreeError) Error() string { return e.path + " is " + e.why() }
+
+// why renders the half of the sentence that depends on the link's state, so the
+// two refusals read as what they are rather than as one generic walk error.
+func (e *symlinkedTreeError) why() string {
+	if e.broken {
+		return "a BROKEN symlink (its target " + e.target + " does not exist), so there is no tree to judge"
+	}
+	return "a symlink to the directory " + e.target + ", and this walk does not follow a link into another tree"
+}
 
 // idHasIdSeparator reports whether a family token is followed by an id SEPARATOR:
 // `-` (the shape every hyphenated id uses — `deepseek-coder`, `gemini-pro`,

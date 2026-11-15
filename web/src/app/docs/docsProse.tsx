@@ -21,59 +21,65 @@
 
 import { Fragment, type ReactNode } from "react";
 
-import { parseInline, type Block, type Section } from "./docsProseText";
+import { parseInline, type Block, type Section, type Token } from "./docsProseText";
 
 export type { Block, Section };
 
 
 export function Inline({ text }: { text: string }): ReactNode {
-  return (
-    <>
-      {parseInline(text).map((t, i) => {
-        if (t.kind === "strong") {
-          return (
-            <strong key={i} className="font-semibold text-[var(--jf-text)]">
-              {t.text}
-            </strong>
-          );
-        }
-        if (t.kind === "code") {
-          return (
-            <code
-              key={i}
-              className="rounded bg-[var(--jf-bg-soft)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--jf-text)] [overflow-wrap:anywhere]"
-            >
-              {t.text}
-            </code>
-          );
-        }
-        if (t.kind === "link") {
-          return (
-            <a
-              key={i}
-              href={t.href}
-              className="font-medium text-[var(--jf-primary-strong)] underline decoration-[var(--jf-primary-strong)]/40 underline-offset-2 hover:decoration-[var(--jf-primary-strong)]"
-            >
-              {t.text}
-            </a>
-          );
-        }
-        if (t.kind === "lang") {
-          // Its own `lang`, so a screen reader pronounces the name in its own
-          // language instead of reading 中文 with an English voice (WCAG 3.1.2).
-          return (
-            <span key={i} lang={t.lang}>
-              {t.text}
-            </span>
-          );
-        }
-        // Plain text is NOT wrapped in a span: the docs span-wrap guard
-        // (t_91474d8f) fails an unbreakable run that has no break guard, and the
-        // safest way to keep that true is to add no run at all.
-        return <Fragment key={i}>{t.text}</Fragment>;
-      })}
-    </>
-  );
+  // One token → its element, and the RECURSION POINT for a nested token.
+  //
+  // A bold run can carry tokens of its own: the parser nests the inner text of
+  // `**[label](/href)**` and `**read `x` first**` (card t_e101869b — the link
+  // used to reach the reader as literal markdown), so the strong branch renders
+  // its children through this same function. It stays INSIDE Inline on purpose:
+  // the tree guards read this function's slice to find the one chip render site
+  // and the one anchor render site, and a nested token must get the same
+  // element and the same classes as a top-level one — one render site per kind.
+  const render = (t: Token, i: number): ReactNode => {
+    if (t.kind === "strong") {
+      return (
+        <strong key={i} className="font-semibold text-[var(--jf-text)]">
+          {t.children ? t.children.map(render) : t.text}
+        </strong>
+      );
+    }
+    if (t.kind === "code") {
+      return (
+        <code
+          key={i}
+          className="rounded bg-[var(--jf-bg-soft)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--jf-text)] [overflow-wrap:anywhere]"
+        >
+          {t.text}
+        </code>
+      );
+    }
+    if (t.kind === "link") {
+      return (
+        <a
+          key={i}
+          href={t.href}
+          className="font-medium text-[var(--jf-primary-strong)] underline decoration-[var(--jf-primary-strong)]/40 underline-offset-2 hover:decoration-[var(--jf-primary-strong)]"
+        >
+          {t.text}
+        </a>
+      );
+    }
+    if (t.kind === "lang") {
+      // Its own `lang`, so a screen reader pronounces the name in its own
+      // language instead of reading 中文 with an English voice (WCAG 3.1.2).
+      return (
+        <span key={i} lang={t.lang}>
+          {t.text}
+        </span>
+      );
+    }
+    // Plain text is NOT wrapped in a span: the docs span-wrap guard
+    // (t_91474d8f) fails an unbreakable run that has no break guard, and the
+    // safest way to keep that true is to add no run at all.
+    return <Fragment key={i}>{t.text}</Fragment>;
+  };
+  return <>{parseInline(text).map(render)}</>;
 }
 
 // Three components, each with LITERAL classNames. The /docs span-wrap guard

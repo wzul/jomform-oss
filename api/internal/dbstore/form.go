@@ -63,6 +63,28 @@ type Form struct {
 	// normal reads never populate it: a nil value is how a caller tells a live
 	// form from a trashed one without a second query.
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+
+	// salesCount is how many sales reference this form, and it is populated
+	// ONLY by the trash reads (ListTrashed / GetTrashed), together with
+	// DeletedAt. It is deliberately UNEXPORTED: the column/struct guard in
+	// migration_scan_drift_test.go counts exported fields against the select
+	// constants, and this value is not a column of the forms row — it is a
+	// count taken from another table, and adding it to every live read would
+	// cost a subquery for a fact only the purge guard asks for. Read it through
+	// FormSalesCount.
+	salesCount int64
+}
+
+// FormSalesCount reports how many sales reference this form, when the row was
+// read from the TRASH (the only reads that populate it). The second return is
+// false for a live read, so a caller can tell "no sales" from "not asked" —
+// which is what keeps the lifecycle table's purge guard from refusing a purge
+// on the strength of a zero nobody measured.
+func (f *Form) FormSalesCount() (int64, bool) {
+	if f == nil || f.DeletedAt == nil {
+		return 0, false
+	}
+	return f.salesCount, true
 }
 
 // ErrFormNotFound indicates a missing form.
@@ -1520,6 +1542,11 @@ func (s *FormStore) CountSalesByForm(ctx context.Context, accountID, formID stri
 // nothing (the issue #98 regression class). The columns are formSelect's plus
 // deleted_at, which is what the trash UI shows and what the purge confirmation
 // needs to know.
+//
+// The sales count is NOT a column here: it lives in another table, and
+// migration_scan_drift_test.go pins every select constant to the struct's
+// exported fields. The trash reads fetch it in one extra query (see
+// attachSalesCounts) and keep it in Form's unexported salesCount.
 const trashedFormSelect = `SELECT id, account_id, slug, title, config, theme, status, is_main, redirect_success, redirect_failure, allow_embed, logo_url, is_template, failure_message, start_at, end_at, entry_limit, pending_message, expired_message, limit_message, created_at, updated_at, deleted_at
 	FROM forms WHERE deleted_at IS NOT NULL`
 
@@ -1532,6 +1559,23 @@ func (s *FormStore) scanTrashed(row rowScanner) (*Form, error) {
 		&f.EntryLimit, &f.PendingMessage, &f.ExpiredMessage, &f.LimitMessage,
 		&f.CreatedAt, &f.UpdatedAt, &f.DeletedAt)
 	return f, err
+}
+
+// attachSalesCounts fills the trashed rows' salesCount in ONE query, so a trash
+// list is not N+1 and the lifecycle table's purge guard can answer from the row.
+// SalesCountsByForm omits forms with no sale, so a missing key is a real zero.
+func (s *FormStore) attachSalesCounts(ctx context.Context, accountID string, forms []*Form) error {
+	if len(forms) == 0 {
+		return nil
+	}
+	counts, err := s.SalesCountsByForm(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	for _, f := range forms {
+		f.salesCount = counts[f.ID]
+	}
+	return nil
 }
 
 // ListTrashed lists soft-deleted forms for an account (explicit trash read —
@@ -1553,7 +1597,15 @@ func (s *FormStore) ListTrashed(ctx context.Context, accountID string) ([]*Form,
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The purge guard asks "was this form ever sold?"; answer it here, in one
+	// query for the whole page, so no caller has to.
+	if err := s.attachSalesCounts(ctx, accountID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetTrashed reads ONE trashed form, account-scoped. A live form, another
@@ -1569,6 +1621,14 @@ func (s *FormStore) GetTrashed(ctx context.Context, accountID, formID string) (*
 	if err != nil {
 		return nil, err
 	}
+	// One extra read: whether this form was ever sold. It is what the purge
+	// guard answers from, and the purge door already asks the same question
+	// again in its own store call, so no new cost is added to that path.
+	n, cerr := s.CountSalesByForm(ctx, accountID, formID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	f.salesCount = n
 	return f, nil
 }
 

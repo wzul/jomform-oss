@@ -43,7 +43,13 @@ export type Section = {
 
 export type Token =
   | { kind: "text"; text: string }
-  | { kind: "strong"; text: string }
+  // A bold run. `children` holds the tokens of its INNER text when that text
+  // carries a marker of its own (`**[label](/href)**`, `**read `x` first**`):
+  // the `**…**` alternative matches across the inner marker, so without the
+  // nested parse the inner marker used to reach the reader as literal markdown
+  // (card t_e101869b). Absent when the run is plain text, so the renderer's
+  // common path stays one string.
+  | { kind: "strong"; text: string; children?: Token[] }
   | { kind: "code"; text: string }
   | { kind: "link"; text: string; href: string }
   | { kind: "lang"; text: string; lang: string };
@@ -57,7 +63,20 @@ export function parseInline(text: string): Token[] {
   for (const part of text.split(MARKER)) {
     if (!part) continue;
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-      out.push({ kind: "strong", text: part.slice(2, -2) });
+      // A bold run can CONTAIN a marker: `**[label](/href)**`, `**read `x` first**`.
+      // The `**…**` alternative matches the whole run in one piece (and `[^*]+`
+      // happily matches a link), so the inner marker is only found by parsing the
+      // slice. Without this the inner text was handed to the renderer as-is and
+      // the reader saw `[label](/href)` with no anchor (card t_e101869b). One
+      // level is enough: `[^*]+` cannot contain `*`, so the inner slice can hold
+      // no bold run of its own.
+      const inner = part.slice(2, -2);
+      const children = parseInline(inner);
+      out.push(
+        children.length === 1 && children[0].kind === "text"
+          ? { kind: "strong", text: inner }
+          : { kind: "strong", text: inner, children },
+      );
     } else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
       out.push({ kind: "code", text: part.slice(1, -1) });
     } else if (LANG.test(part)) {
@@ -73,7 +92,30 @@ export function parseInline(text: string): Token[] {
   return out;
 }
 
+// A marker that survived parsing: a stray `**`, a lone backtick, an unclosed
+// `[[`, or a whole `[label](href)` that no link token consumed.
+const LEAKED = /\*\*|`|\[\[|\[[^\]]*\]\([^)]*\)/;
+
+/**
+ * Does this token still SHOW a marker to the reader?
+ *
+ * It looks INSIDE a token, not just at the `text` kind. The defect this closes
+ * (card t_e101869b) was a link written inside **bold**: the `**…**` alternative
+ * swallows the whole run into ONE strong token, so a guard that counted only
+ * `text` tokens scored it 0 while /docs/mcp/connect printed
+ * `[Profile → MCP agents](/profile?tab=mcp)` at the reader. A guard that cannot
+ * see the marker cannot fail on it, which is how it shipped green.
+ *
+ * A `code` token is skipped on purpose: its text is verbatim by definition and
+ * cannot hold a marker (the alternation stops at the first backtick).
+ */
+function leaks(t: Token): boolean {
+  if (t.kind === "code") return false;
+  if (t.kind === "strong" && t.children) return t.children.some(leaks);
+  return LEAKED.test(t.text);
+}
+
 /** How many markers survive parsing as literal text — must always be 0. */
 export function leakedMarkers(text: string): number {
-  return parseInline(text).filter((t) => t.kind === "text" && /\*\*|`|\[\[/.test(t.text)).length;
+  return parseInline(text).filter(leaks).length;
 }

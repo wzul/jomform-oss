@@ -318,6 +318,16 @@ func redirectURIAllowed(client *dbstore.OAuthClient, uri string) bool {
 // Non-5xx responses keep the previous behaviour exactly (logged only when
 // props are supplied).
 func oauthErr(w http.ResponseWriter, status int, code, desc string, props ...any) {
+	oauthErrWith(w, status, code, desc, nil, props...)
+}
+
+// oauthErrWith is oauthErr plus ADDITIVE fields that an agent can act on
+// (card t_c6ca84a7). The device grant's token endpoint answers its refusals with
+// the state the code is in and the seconds it has left, so a harness reading
+// `expired_token` can also see "0 seconds left, nothing available" instead of
+// being left with a bare 400. The RFC's two keys are written last and can never
+// be shadowed by a caller's map.
+func oauthErrWith(w http.ResponseWriter, status int, code, desc string, extra map[string]any, props ...any) {
 	attrs := append([]any{"code", code, "desc", desc}, props...)
 	switch {
 	case status >= http.StatusInternalServerError:
@@ -325,7 +335,16 @@ func oauthErr(w http.ResponseWriter, status int, code, desc string, props ...any
 	case len(props) > 0:
 		slog.Warn("oauth_error", attrs...)
 	}
-	writeJSON(w, status, map[string]string{"error": code, "error_description": desc})
+	body := make(map[string]any, len(extra)+2)
+	for k, v := range extra {
+		if k == "error" || k == "error_description" {
+			continue
+		}
+		body[k] = v
+	}
+	body["error"] = code
+	body["error_description"] = desc
+	writeJSON(w, status, body)
 }
 
 // ─── GET /oauth/authorize ────────────────────────────────────────────────────

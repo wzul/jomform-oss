@@ -71,7 +71,18 @@ type Guard func(Entity) error
 // Transition is one event's outcome from one state.
 type Transition struct {
 	// To is the state the aggregate lands in. It must be a declared state.
+	//
+	// It is empty when Target is set: the landing state is then read off the
+	// aggregate itself. That exists for exactly one shape — a RESTORE, which
+	// returns a row to the state it was trashed FROM (a published form comes
+	// back published, a draft comes back draft) — and modelling it as a static
+	// target would either invent an edge the product does not have (restore →
+	// draft) or multiply every trashed variant by every live state.
 	To string
+	// Target resolves the landing state from the aggregate, for a transition
+	// whose destination the row itself remembers. It overrides To; the state it
+	// returns must still be declared.
+	Target func(Entity) string
 	// Guard is the precondition, or nil for an unconditional move.
 	Guard Guard
 	// LabelKey is the dashboard's i18n key for this action's button. Empty
@@ -178,8 +189,19 @@ func (m *Machine) Apply(e Entity, event string) (Result, error) {
 			}
 		}
 	}
-	res.To = tr.To
-	res.Changed = tr.To != from
+	to := tr.To
+	if tr.Target != nil {
+		to = tr.Target(e)
+		if _, ok := m.States[to]; !ok {
+			// The table's own target resolved to a state it does not declare.
+			// That is a broken table, never a caller's mistake, so it fails
+			// loudly instead of landing a row in an unknown state.
+			return res, fmt.Errorf("%s: event %q from %q resolved to undeclared state %q (%s)",
+				m.Name, event, from, to, CodeIllegalTransition)
+		}
+	}
+	res.To = to
+	res.Changed = to != from
 	return res, nil
 }
 
@@ -253,12 +275,14 @@ func (m *Machine) Validate() error {
 				broken = append(broken, fmt.Sprintf("%s: empty event name", state))
 				continue
 			}
-			if tr.To == "" {
+			if tr.To == "" && tr.Target == nil {
 				broken = append(broken, fmt.Sprintf("%s %q: no target state", state, event))
 				continue
 			}
-			if _, ok := m.States[tr.To]; !ok {
-				broken = append(broken, fmt.Sprintf("%s %q: target %q is not a declared state", state, event, tr.To))
+			if tr.To != "" {
+				if _, ok := m.States[tr.To]; !ok {
+					broken = append(broken, fmt.Sprintf("%s %q: target %q is not a declared state", state, event, tr.To))
+				}
 			}
 		}
 	}
@@ -318,9 +342,9 @@ func (m *Machine) Allows(state, event string) bool {
 // a name lookup. A copy elsewhere would pass its own tests and drift from the
 // machine the write paths actually enforce.
 
-// Machines returns every aggregate this package describes. One aggregate so
-// far (sales), added one at a time in its own change.
-func Machines() []*Machine { return []*Machine{SalesMachine} }
+// Machines returns every aggregate this package describes. Aggregates are added
+// one at a time, each in its own change.
+func Machines() []*Machine { return []*Machine{SalesMachine, FormsMachine} }
 
 // MachineByName returns the machine for an aggregate name, or nil. Callers turn
 // nil into a refusal that names the aggregates that DO exist, so an agent
@@ -340,7 +364,12 @@ func MachineByName(name string) *Machine {
 // person's action.
 type EventDoc struct {
 	Event string `json:"event"`
-	To    string `json:"to"`
+	// To is the landing state. Empty for a dynamic target (see DynamicTarget).
+	To string `json:"to,omitempty"`
+	// DynamicTarget marks an edge whose landing state is read off the row
+	// itself (a restore returns a form to the state it was trashed from), so
+	// To cannot be stated once for the whole edge.
+	DynamicTarget bool `json:"dynamic_target,omitempty"`
 	// Guarded reports that the edge has a precondition. The precondition's
 	// SENTENCE is record-specific (it is the `reason` on a disabled
 	// AvailableEvent), so it is not part of the table description.
@@ -392,11 +421,13 @@ func (m *Machine) Describe() Table {
 		}
 		for _, event := range sortedEventNames(st.Events) {
 			tr := st.Events[event]
-			if tr.To != name {
+			dynamic := tr.Target != nil
+			if dynamic || tr.To != name {
 				doc.Terminal = false
 			}
 			doc.Events = append(doc.Events, EventDoc{
-				Event: event, To: tr.To, Guarded: tr.Guard != nil, LabelKey: tr.LabelKey,
+				Event: event, To: tr.To, DynamicTarget: dynamic,
+				Guarded: tr.Guard != nil, LabelKey: tr.LabelKey,
 			})
 		}
 		t.States = append(t.States, doc)

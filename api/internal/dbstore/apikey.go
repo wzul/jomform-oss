@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wzul/jomform/api/internal/statemachine"
 )
 
 // APIKey models the api_keys table.
@@ -30,17 +32,56 @@ type APIKeyStore struct{ pool *pgxpool.Pool }
 func NewAPIKeyStore(pool *pgxpool.Pool) *APIKeyStore { return &APIKeyStore{pool: pool} }
 
 // LookupByKeyHash resolves an API key by its sha256 hash. Returns
-// ErrAPIKeyInvalid when missing/revoked.
+// ErrAPIKeyInvalid when the key may not authenticate.
+//
+// WHETHER IT MAY IS THE TABLE'S ANSWER (card t_df243a6e): the row is read by its
+// unique hash and statemachine.APIKeyAuthenticateStep decides, instead of a
+// `revoked_at IS NULL` predicate here and a second one in ListByAccount. The
+// error value is frozen — ErrAPIKeyInvalid → 401, unchanged — and so is the
+// blanket mapping of any read error onto it.
 func (s *APIKeyStore) LookupByKeyHash(ctx context.Context, hash string) (*APIKey, error) {
 	k := &APIKey{}
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, account_id, key_hash, name, scopes, last_used_at, revoked_at, created_at
-		 FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, hash,
+		 FROM api_keys WHERE key_hash = $1`, hash,
 	).Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.Name, &k.Scopes, &k.LastUsedAt, &k.RevokedAt, &k.CreatedAt)
 	if err != nil {
 		return nil, ErrAPIKeyInvalid
 	}
+	if step := statemachine.APIKeyAuthenticateStep(k.Facts(), time.Now().UTC()); !step.Allowed {
+		return nil, apiKeyErrFor(step.Answer)
+	}
 	return k, nil
+}
+
+// Facts renders the row's state-bearing column for the ONE derivation
+// (statemachine.APIKeyStateOf). last_used_at is not one of them: it records that
+// the key was used, never whether it may be.
+func (k *APIKey) Facts() statemachine.APIKeyFacts {
+	return statemachine.APIKeyFacts{RevokedAt: k.RevokedAt}
+}
+
+// StateAt derives the key's state. API keys carry no deadline, so the clock is
+// only there for symmetry with the other aggregates.
+func (k *APIKey) StateAt(now time.Time) statemachine.APIKeyState {
+	return statemachine.APIKeyStateOf(k.Facts(), now)
+}
+
+// State is StateAt(time.Now()).
+func (k *APIKey) State() statemachine.APIKeyState { return k.StateAt(time.Now().UTC()) }
+
+// Status is the whole answer to "may this key authenticate / be listed".
+func (k *APIKey) Status(now time.Time) statemachine.APIKeyStatus {
+	return statemachine.APIKeyStatusOf(k.Facts(), now)
+}
+
+// apiKeyErrFor is the ONE place a state-machine answer becomes a key store
+// error. The value is unchanged by card t_df243a6e — only its source moved.
+func apiKeyErrFor(reason statemachine.APIKeyReason) error {
+	if reason == statemachine.APIKeyReasonNone {
+		return nil
+	}
+	return ErrAPIKeyInvalid
 }
 
 // Create stores a new API key (hash only).
@@ -58,20 +99,29 @@ func (s *APIKeyStore) Create(ctx context.Context, accountID, keyHash, name strin
 	return k, nil
 }
 
-// ListByAccount lists active (non-revoked) keys for the account.
+// ListByAccount lists the account's ACTIVE keys — the inventory both
+// GET /v1/rest/keys and the list_api_keys MCP tool render.
+//
+// "Active" is statemachine.APIKeyStatusOf's Listed (card t_df243a6e), the same
+// table LookupByKeyHash authenticates with, so the list can never show a key
+// whose calls are refused.
 func (s *APIKeyStore) ListByAccount(ctx context.Context, accountID string) ([]*APIKey, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, account_id, key_hash, name, scopes, last_used_at, revoked_at, created_at
-		 FROM api_keys WHERE account_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC`, accountID)
+		 FROM api_keys WHERE account_id=$1 ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	now := time.Now().UTC()
 	var out []*APIKey
 	for rows.Next() {
 		k := &APIKey{}
 		if err := rows.Scan(&k.ID, &k.AccountID, &k.KeyHash, &k.Name, &k.Scopes, &k.LastUsedAt, &k.RevokedAt, &k.CreatedAt); err != nil {
 			return nil, err
+		}
+		if !k.Status(now).Listed {
+			continue
 		}
 		out = append(out, k)
 	}

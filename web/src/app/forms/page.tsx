@@ -33,6 +33,24 @@ type FormRow = {
   // product. `no_product_block_id` names the block to fix.
   not_accepting_orders?: boolean;
   no_product_block_id?: string;
+  // Card t_3d5a8d32: the ONE derived buyer state (lifecycle.FormOrders) and the
+  // actions the server says this row accepts. `reason` explains a false
+  // accepting_orders; `available_events` is what the row's buttons are rendered
+  // FROM, so the page can never offer an action the API refuses.
+  accepting_orders?: boolean;
+  reason?: string;
+  code?: string;
+  available_events?: FormEvent[];
+};
+
+// FormEvent is one entry of the lifecycle table's answer for a row. An entry
+// with an empty label_key is not a person's action (the table says so) and is
+// not rendered as a button.
+type FormEvent = {
+  event: string;
+  label_key?: string;
+  enabled: boolean;
+  reason?: string;
 };
 
 // A row in the Trash view. `can_purge` is false when the form has sales —
@@ -332,6 +350,53 @@ export default function FormsPage() {
       return;
     }
     setErr("");
+    load();
+  }
+
+  // unpublish is the lifecycle's `unpublish` event: status → draft. It is
+  // rendered from the row's available_events (card t_3d5a8d32), so a form the
+  // table says cannot be unpublished never shows the button.
+  async function unpublish(id: string) {
+    setErr("");
+    let res: Response;
+    try {
+      res = await fetch(`/api/rest/forms/${id}/status${workspaceQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "draft" }),
+      });
+    } catch {
+      setErr(t("forms.unpublishFail"));
+      return;
+    }
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      setErr(apiErr(d, t("forms.unpublishFail"), t));
+      return;
+    }
+    setNotify(t("forms.unpublished"));
+    load();
+  }
+
+  // trashForm is the lifecycle's `delete` event: the row goes to the bin and can
+  // be restored (see the trash view). It is a soft delete, so it asks once and
+  // names the destination rather than warning about destruction.
+  async function trashForm(f: FormRow) {
+    if (!window.confirm(t("forms.deleteConfirm", { title: f.title }))) return;
+    setErr("");
+    let res: Response;
+    try {
+      res = await fetch(`/api/rest/forms/${f.id}${workspaceQuery()}`, { method: "DELETE" });
+    } catch {
+      setErr(t("forms.deleteFail"));
+      return;
+    }
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      setErr(apiErr(d, t("forms.deleteFail"), t));
+      return;
+    }
+    setNotify(t("forms.deleted"));
     load();
   }
 
@@ -662,6 +727,38 @@ export default function FormsPage() {
             // delay, so a longer list renders static — the card's bounds forbid
             // motion on a table longer than eight rows.
             const view = formViewAction(f, workspaceHost);
+            // Card t_3d5a8d32: the row's ACTIONS and its buyer-facing pill now
+            // come from the server, not from `status`:
+            //   - available_events is the forms lifecycle table's answer for
+            //     THIS row (publish/unpublish/delete, each with enabled + a
+            //     reason), so the page cannot offer a button the API refuses;
+            //   - accepting_orders is the ONE derived buyer state, so a
+            //     published form whose page would refuse every buyer cannot wear
+            //     a clean "LIVE" pill.
+            // An older payload without available_events falls back to the rule
+            // this page used before, so a mixed deploy does not blank the row.
+            const isLive = f.status === "published" || f.status === "unlisted";
+            const evs = new Map<string, FormEvent>(
+              (f.available_events ?? []).map((e: FormEvent): [string, FormEvent] => [e.event, e]),
+            );
+            const evAllowed = (name: string): boolean => {
+              const e = evs.get(name);
+              if (e) return e.enabled;
+              if (f.available_events === undefined) {
+                if (name === "publish") return !isLive;
+                if (name === "unpublish" || name === "delete") return true;
+              }
+              return false;
+            };
+            // A live form the server says is NOT accepting orders: either the
+            // product rule (the amber pill's original meaning) or a live-form
+            // restriction (schedule, entry limit). The server's sentence is the
+            // tooltip, so the row never explains the wrong cause.
+            const notAccepting =
+              isLive &&
+              (f.accepting_orders === false ||
+                (f.accepting_orders === undefined && !!f.not_accepting_orders));
+            const notAcceptingHint = f.reason || t("forms.notAcceptingHint");
             return (
             <li
               key={f.id}
@@ -690,17 +787,23 @@ export default function FormsPage() {
                       Publish). */}
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="min-w-0 truncate text-sm font-medium">{f.title}</p>
-                    {f.status === "published" || f.status === "unlisted" ? (
+                    {isLive ? (
                       // Card t_983425e5: a LIVE pill is a promise. When the API
                       // says this form's buyer page answers "This form is not
                       // accepting orders right now", the row says THAT instead —
                       // the published-but-dead form used to look perfectly
                       // healthy here, which is how Wan demoed a form that could
                       // not take a donation.
-                      f.not_accepting_orders ? (
+                      //
+                      // Card t_3d5a8d32: the promise is now the SERVER's one
+                      // derived answer (accepting_orders), so a form closed by its
+                      // schedule, at its entry limit, or with nothing to sell is
+                      // amber too — and the tooltip is the server's own sentence
+                      // instead of a guess about products.
+                      notAccepting ? (
                         <span
-                          title={t("forms.notAcceptingHint")}
-                          aria-label={t("forms.notAcceptingHint")}
+                          title={notAcceptingHint}
+                          aria-label={notAcceptingHint}
                           className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-jf-2xs font-medium text-amber-800"
                         >
                           {t("forms.notAcceptingOrders")}
@@ -722,7 +825,7 @@ export default function FormsPage() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                {f.status === "published" || f.status === "unlisted" ? (
+                {isLive ? (
                   <>
                     {canWrite && (
                       <Link href={`/builder?form=${f.id}`} className="jf-btn-ghost">
@@ -766,6 +869,22 @@ export default function FormsPage() {
                         {t("bld.view")}
                       </button>
                     )}
+                    {/* Card t_3d5a8d32: the row's write actions come from the
+                        server's available_events, not from `status`. A disabled
+                        event is not offered at all (the table said the guard
+                        refuses it); its `reason` is available to the caller that
+                        asks why. Unpublish is the lifecycle's "unpublish" edge
+                        (status → draft); Delete is its "delete" edge (→ trash). */}
+                    {canWrite && evAllowed("unpublish") && (
+                      <button onClick={() => unpublish(f.id)} className="jf-btn-ghost">
+                        {t("forms.unpublish")}
+                      </button>
+                    )}
+                    {canWrite && evAllowed("delete") && (
+                      <button onClick={() => trashForm(f)} className="jf-btn-ghost text-rose-700">
+                        {t("forms.delete")}
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>
@@ -789,9 +908,14 @@ export default function FormsPage() {
                         {t(entries.labelKey)}
                       </Link>
                     )}
-                    {canWrite && (
+                    {canWrite && evAllowed("publish") && (
                       <button onClick={() => publish(f.id)} className="jf-btn-primary min-h-[44px] sm:min-h-10">
                         {t("builder.publish")}
+                      </button>
+                    )}
+                    {canWrite && evAllowed("delete") && (
+                      <button onClick={() => trashForm(f)} className="jf-btn-ghost text-rose-700">
+                        {t("forms.delete")}
                       </button>
                     )}
                   </>

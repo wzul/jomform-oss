@@ -32,6 +32,7 @@ import (
 	"github.com/wzul/jomform/api/internal/emailtext"
 	"github.com/wzul/jomform/api/internal/httpapi/middleware"
 	"github.com/wzul/jomform/api/internal/oauthmeta"
+	"github.com/wzul/jomform/api/internal/statemachine"
 )
 
 const (
@@ -314,11 +315,18 @@ func deviceScopeProse(lang string, scope []string) string {
 // what the RFC says it means:
 //
 //	authorization_pending — the person has not decided yet; keep polling
-//	slow_down             — polled faster than `interval`; the interval has
-//	                        been extended by 5s and the client must honour it
+//	slow_down             — polled faster than `interval`; the interval
+//	                        has been extended by 5s and the client must honour it
 //	access_denied         — the person denied it; stop
 //	expired_token         — past expires_in; stop and start over
 //	invalid_grant         — unknown or already-consumed device_code
+//
+// WHAT COMES WITH THOSE ERRORS (card t_c6ca84a7). Every answer that is about
+// this code also carries `state`, `usable`, `remaining_seconds` and
+// `available_events` — the same derivation the consent card renders from — so an
+// agent asking "is this still usable" reads an answer instead of a bare 400.
+// The `error` string is unchanged; the extra members are additive, and a client
+// that only knows the RFC ignores them.
 func (o *OAuthHandlers) tokenDevice(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.Form.Get("device_code"))
 	if raw == "" {
@@ -326,32 +334,60 @@ func (o *OAuthHandlers) tokenDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d, err := o.Store.PollDeviceCode(r.Context(), hashToken(raw), strings.TrimSpace(r.Form.Get("client_id")))
+	status := deviceStatusFields(d)
 	switch {
 	case errors.Is(err, dbstore.ErrDevicePending):
-		oauthErr(w, http.StatusBadRequest, "authorization_pending",
-			"the user has not approved this request yet")
+		oauthErrWith(w, http.StatusBadRequest, "authorization_pending",
+			"the user has not approved this request yet", status)
 		return
 	case errors.Is(err, dbstore.ErrDeviceSlowDown):
-		oauthErr(w, http.StatusBadRequest, "slow_down",
-			"polled faster than the advertised interval")
+		oauthErrWith(w, http.StatusBadRequest, "slow_down",
+			"polled faster than the advertised interval", status)
 		return
 	case errors.Is(err, dbstore.ErrDeviceDenied):
-		oauthErr(w, http.StatusBadRequest, "access_denied", "the user denied this request")
+		oauthErrWith(w, http.StatusBadRequest, "access_denied", "the user denied this request", status)
 		return
 	case errors.Is(err, dbstore.ErrDeviceExpired):
-		oauthErr(w, http.StatusBadRequest, "expired_token", "the device code has expired")
+		oauthErrWith(w, http.StatusBadRequest, "expired_token", "the device code has expired", status)
 		return
 	case err != nil:
-		oauthErr(w, http.StatusBadRequest, "invalid_grant", "the device code is invalid or has already been used")
+		// invalid_grant. A wrong client_id or an unknown code yields no row, so
+		// the refusal says nothing (answering otherwise would let a caller use
+		// this endpoint as an oracle). A SPENT code is a code the caller has
+		// already proved it holds, so it is described like any other: the agent
+		// learns "used, nothing available" instead of guessing from a 400.
+		oauthErrWith(w, http.StatusBadRequest, "invalid_grant",
+			"the device code is invalid or has already been used", status)
 		return
 	}
-	if d.UserID == "" {
+	if d == nil || d.UserID == "" {
 		// An approved row always carries the approver. Defensive: never mint a
 		// token whose principal is blank.
 		oauthErr(w, http.StatusBadRequest, "access_denied", "the user denied this request")
 		return
 	}
 	o.issueTokenPair(w, r, d.ClientID, d.UserID, d.AccountID, d.Scope)
+}
+
+// deviceStatusFields is the agent-readable half of a device-grant refusal: the
+// state the code is in, whether the flow can still complete, and the seconds it
+// has left. It is rendered from statemachine.DeviceStatusOf — the same call the
+// consent card makes — so an agent and a person are looking at one answer.
+//
+// A nil row means "the store would not tell us about this code" (unknown, or a
+// wrong client_id); the refusal then carries no state at all. Every other
+// refusal — including a spent code — travels with its row and so with its state.
+func deviceStatusFields(d *dbstore.OAuthDeviceCode) map[string]any {
+	if d == nil {
+		return nil
+	}
+	st := d.Status(time.Now().UTC())
+	return map[string]any{
+		"state":             st.State.DeviceWireName(),
+		"usable":            st.Usable,
+		"remaining_seconds": st.RemainingSeconds,
+		"available_events":  statemachine.DeviceAvailableEventNames(st.State),
+	}
 }
 
 // ─── the dashboard's consent card ────────────────────────────────────────────
@@ -377,7 +413,22 @@ type deviceConsentOut struct {
 	Scopes    []string `json:"scopes"`
 	Scope     string   `json:"scope_prose"`
 	ExpiresAt string   `json:"expires_at"`
-	State     string   `json:"state"` // pending | approved | denied | expired | used
+	// State is the DERIVED state (statemachine.DeviceStateOf), spelled the way
+	// this payload has always spelled it: pending | approved | denied | used |
+	// expired. Card t_c6ca84a7 removed the fifth opinion: the card, the token
+	// endpoint and the MCP surface all read the same derivation, so an
+	// approved-but-expired code says "expired" here exactly as the token
+	// endpoint answers expired_token.
+	State string `json:"state"`
+	// AvailableEvents is every event the state still allows, from the same
+	// transition table the store obeys — so the card can decide whether it may
+	// draw Approve/Deny instead of guessing from the state string. A terminal
+	// state answers an empty array, never null.
+	AvailableEvents []string `json:"available_events"`
+	// RemainingSeconds is the wall-clock life left, floored at zero. It is a
+	// different fact from the state: a consumed code still has time on the
+	// clock, and a denial does not shorten it.
+	RemainingSeconds int `json:"remaining_seconds"`
 	// Choices is the set of scopes the PERSON may approve this request as, in
 	// the order the card should show them. It is oauthmeta.ScopesSupported() —
 	// the same list the server advertises and can mint — so a card cannot offer
@@ -429,18 +480,11 @@ func (a *AuthHandlers) getDeviceConsent(w http.ResponseWriter, r *http.Request) 
 	} else {
 		out.Client = emailtext.Phrase(lang, emailtext.PhraseUnnamedClient)
 	}
-	switch {
-	case d.ConsumedAt != nil:
-		out.State = "used"
-	case d.DeniedAt != nil:
-		out.State = "denied"
-	case d.ApprovedAt != nil:
-		out.State = "approved"
-	case !time.Now().Before(d.ExpiresAt):
-		out.State = "expired"
-	default:
-		out.State = "pending"
-	}
+	now := time.Now().UTC()
+	st := d.Status(now)
+	out.State = st.State.DeviceWireName()
+	out.AvailableEvents = statemachine.DeviceAvailableEventNames(st.State)
+	out.RemainingSeconds = st.RemainingSeconds
 	writeJSON(w, http.StatusOK, out)
 }
 

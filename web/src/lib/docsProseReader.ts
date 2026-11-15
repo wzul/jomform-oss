@@ -122,6 +122,65 @@ export type ProseTable = {
   rows: number | null;
 };
 
+/** One callout block of a converted page: the section it sits in, its kind, its text. */
+export type ProseCallout = {
+  section: string;
+  kind: "tip" | "note" | "warn";
+  /** The block's text as the page writes it; the prose markers are still in it. */
+  text: string;
+};
+
+/**
+ * The `{ tip }` / `{ note }` / `{ warn }` blocks a converted page declares, in
+ * source order, each tagged with the section that holds it.
+ *
+ * `sectionsOf()` flattens a section's body to its strings, which is all a CONTENT
+ * guard needs — and all it should depend on. But it also drops the block KIND,
+ * and "this sentence must be a WARNING, not a quiet aside" is a claim about how
+ * the page renders, not about the words. A guard that has to hold both reads the
+ * blocks here, instead of matching `warn: "` in the source: that would be
+ * pinning the markup shape the rest of this module exists to stay out of.
+ */
+export function calloutsOf(source: string, file = "page.tsx"): ProseCallout[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: ProseCallout[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText() === "SECTIONS" &&
+      node.initializer &&
+      ts.isArrayLiteralExpression(node.initializer)
+    ) {
+      for (const sectionNode of node.initializer.elements) {
+        if (!ts.isObjectLiteralExpression(sectionNode)) continue;
+        const idProp = sectionNode.properties.find(
+          (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === "id",
+        );
+        const sectionId = idProp ? (stringOf(idProp.initializer) ?? "") : "";
+        for (const prop of sectionNode.properties) {
+          if (!ts.isPropertyAssignment(prop) || prop.name.getText() !== "body") continue;
+          if (!ts.isArrayLiteralExpression(prop.initializer)) continue;
+          for (const block of prop.initializer.elements) {
+            if (!ts.isObjectLiteralExpression(block)) continue;
+            for (const field of block.properties) {
+              if (!ts.isPropertyAssignment(field)) continue;
+              const kind = field.name.getText();
+              if (kind !== "tip" && kind !== "note" && kind !== "warn") continue;
+              const text = stringOf(field.initializer);
+              if (text === null) continue;
+              out.push({ section: sectionId, kind, text });
+            }
+          }
+        }
+      }
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 /**
  * The table BLOCKS a converted page declares, so a guard written against
  * hand-written `<table>` markup can still count (and judge) the tables that are

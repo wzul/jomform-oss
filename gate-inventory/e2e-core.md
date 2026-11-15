@@ -14,9 +14,41 @@ every feature end-to-end spec under `web/e2e/` that is neither an `a11y*` spec (
 `a11y` gate), a `builder-*` spec (the `e2e-builder` gate), nor a spec owned by another
 gate (`web/e2e/menu-checkout-option-group.spec.ts`, owned by `menufixture` and
 `testIgnore`d here — card `t_440c9417`) — playwright project `feature-core`,
-**327 tests in 62 files**: sales, chat, forms, form settings, settings/workspaces,
+**333 tests in 64 files**: sales, chat, forms, form settings, settings/workspaces,
 products, media, templates, deliveries, activity, landing, login, session, profile,
 docs and the cross-page presentation specs.
+
+The 328 in 63 → 333 in 64 growth is card `t_c6ca84a7` (state machine, PR #1748), which
+adds ONE spec FILE, `web/e2e/device-consent-state.spec.ts` with 5 arms on the
+device-consent card (`/profile?tab=mcp&user_code=…`): the server's `available_events` is
+what draws Approve/Deny (a pending code), an approved-but-never-collected code past its
+deadline shows no buttons and the card says expired, a terminal state offers nothing even
+when the state string is not the reason (`state: "pending"` carrying a table that allows
+no approve/deny), and an API without `available_events` — a rolling deploy — keeps the old
+`state === "pending"` rule exactly, in both directions (a pending card still offers
+Approve/Deny, an approved card stays read-only). Measured on this MERGED tree (`origin/main`
+`d90b92ad0` merged into PR #1748) with
+`cd web && ./node_modules/.bin/playwright test --project=feature-core --list`, which reads
+**333 in 64**; the same command reads **328 in 63** on this SAME tree with that one file
+removed, so the delta is exactly it. Its `areas.tsv` row maps it to `web/src/app/profile/**`,
+`web/src/lib/deviceConsent.ts` and `web/src/components/i18nDict.ts`.
+
+The figure before it was **328 tests in 63 files**: card `t_3d5a8d32` (the forms state
+machine, PR #1747) adds ONE spec FILE, `web/e2e/forms-lifecycle-events.spec.ts` with 1 arm
+on the `/forms` row: the LIVE pill, the amber `Not accepting orders` pill and the Publish /
+Unpublish / Delete buttons all come from the SERVER's answer (`available_events` and
+`accepting_orders`, not a client guess), a published-but-unsellable form gets the amber pill
+carrying the server's own reason sentence, a draft gets Publish + Delete and no Unpublish, a
+template whose publish guard refuses has no Publish button, and the two buttons really drive
+the edges — Unpublish POSTs `{"status":"draft"}` to `/forms/{id}/status`, Delete issues
+`DELETE /forms/{id}` against a stubbed wire. Measured on `origin/main` `d90b92ad0` with
+`cd web && ./node_modules/.bin/playwright test --project=feature-core --list`, which reads
+**328 in 63** there and **327 in 62** with that one file removed, so the delta is exactly it;
+on this MERGED tree the same two readings are the 328 in 63 above (#1748's file aside) and
+327 in 62 with both new files aside — all four measured here, so neither card's delta is
+inferred from the other.
+
+The figure before it was **327 tests in 62 files**.
 
 The 322 in 61 → 327 in 62 growth is card `t_cf45b84c`, which adds ONE spec FILE,
 `web/e2e/device-consent-scope.spec.ts` with 5 arms on the RFC 8628 consent card

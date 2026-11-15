@@ -123,3 +123,117 @@ export const DARK_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-chart-grid", bg: "--jf-surface", ratio: 1.23, min: 1.0, role: "a chart's gridline" },
   { fg: "--jf-primary-strong", bg: "--jf-surface", ratio: 8.73, min: 4.5, role: "the indigo text step on a dark card" },
 ];
+
+// ── the pairs that are FORBIDDEN as text (card t_46ae7ad7) ───────────────────
+//
+// WHY THIS IS A SECOND TABLE AND NOT MORE ROWS ABOVE. `ContrastPair.min` says
+// "this pairing is held to this floor and measures what it claims" — a row in
+// `LIGHT_CONTRASTS` at `min: 4.5` must PASS 4.5. The rows below are the opposite
+// claim: each one is a pairing someone DOES reach for, that FAILS the floor for
+// normal-size text, and that has a named replacement which clears the floor ON THE
+// SAME SURFACE. They cannot live in the table above without inverting its meaning.
+//
+// WHY THEY ARE RECORDED AT ALL. The failure is invisible in code review: the same
+// class list is fine on white and under the floor on a tint —
+// `--jf-primary` is 4.70:1 on `--jf-surface` and 4.20:1 on `--jf-surface-2` — so a
+// page can pass axe on the card it was written against and fail on the row it was
+// copied into. A token can only be judged against the surface it LANDS on, which
+// is why every row names its `bg` and why the replacement ratio is measured on
+// that same `bg` rather than on white.
+//
+// THE UNIT TEST IS THE MEASUREMENT. `designTokens.test.ts` recomputes both numbers
+// from `globals.css` on every run and fails three ways: the forbidden ratio moved
+// (re-measure), it no longer FAILS its floor (then it may move up into
+// `LIGHT_CONTRASTS`), or the replacement does not clear 4.5 on the same surface (a
+// "use this instead" that does not pass is worse than no advice at all).
+export type ForbiddenPair = {
+  /** The token people reach for. Held to `min` BECAUSE it is being used as text. */
+  fg: string;
+  /** The surface it actually lands on — never assumed to be white. */
+  bg: string;
+  /** Measured, rounded to 2dp. Re-derived by the unit test. */
+  ratio: number;
+  /** The floor it fails: WCAG 2.2 AA for normal-size text. */
+  min: number;
+  /** What the pairing is, and why the failure is easy to miss. */
+  why: string;
+  /** The token that IS measured to clear `min` on this same `bg`. */
+  use: string;
+  /** Measured `use` on `bg`, rounded to 2dp. Re-derived by the unit test. */
+  useRatio: number;
+};
+
+export const FORBIDDEN_TEXT_PAIRS: readonly ForbiddenPair[] = [
+  {
+    fg: "--jf-primary",
+    bg: "--jf-surface-2",
+    ratio: 4.2,
+    min: 4.5,
+    why: "brand text on the second surface — a striped row, a nested card, a code block's backdrop",
+    use: "--jf-primary-strong",
+    useRatio: 5.62,
+  },
+  {
+    fg: "--jf-primary",
+    bg: "--jf-bg",
+    ratio: 4.42,
+    min: 4.5,
+    why: "brand text straight on the page background; it passes on a white card and fails here",
+    use: "--jf-primary-strong",
+    useRatio: 5.91,
+  },
+  {
+    fg: "--jf-primary",
+    bg: "--jf-bg-soft",
+    ratio: 4.43,
+    min: 4.5,
+    why: "brand text on the soft page tint — the card body's own example of a ratio that only fails on its real surface",
+    use: "--jf-primary-strong",
+    useRatio: 5.92,
+  },
+  {
+    fg: "--jf-primary",
+    bg: "--jf-primary-tint",
+    ratio: 3.97,
+    min: 4.5,
+    why: "brand text on the selected/active tint (the row you just clicked)",
+    use: "--jf-primary-on-tint",
+    useRatio: 6.68,
+  },
+  {
+    fg: "--jf-muted",
+    bg: "--jf-surface-2",
+    ratio: 4.32,
+    min: 4.5,
+    why: "muted copy on a striped row or a nested card; it is 4.83:1 on a white card",
+    use: "--jf-muted-on-tint",
+    useRatio: 5.34,
+  },
+  {
+    fg: "--jf-accent",
+    bg: "--jf-surface",
+    ratio: 3.84,
+    min: 4.5,
+    why: "the interactive accent used as a LABEL — it is a border, a ring and a drag target, never text",
+    use: "--jf-primary-strong",
+    useRatio: 6.29,
+  },
+  {
+    fg: "--jf-danger",
+    bg: "--jf-surface",
+    ratio: 3.76,
+    min: 4.5,
+    why: "the danger MARKER used as a label; the marker is a dot or an icon, a label is --jf-danger-text",
+    use: "--jf-danger-text",
+    useRatio: 6.52,
+  },
+  {
+    fg: "--jf-warning",
+    bg: "--jf-surface",
+    ratio: 3.19,
+    min: 4.5,
+    why: "the warning MARKER used as a label",
+    use: "--jf-warning-text",
+    useRatio: 5.02,
+  },
+];

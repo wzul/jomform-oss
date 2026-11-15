@@ -2431,8 +2431,24 @@ func (h *PublicHandlers) serveForm(w http.ResponseWriter, r *http.Request, f *db
 	// Issue #207: form restrictions. A scheduled form shows a pending/expired
 	// message outside its window; a form at its entry limit shows a
 	// limit-reached message. Either way the form itself is not rendered.
-	if st := h.checkRestrictionsRender(r, f); st != restrictionOpen {
-		h.renderRestriction(w, r, f, st)
+	//
+	// Card t_3d5a8d32: these are no longer a separate check. The page asks the
+	// ONE derived predicate (lifecycle.FormOrders) the dashboard list and the
+	// MCP reads ask — live status, trash, the schedule window, the entry limit
+	// and whether the config sells anything — so a row cannot read "accepting"
+	// on one surface and "not accepting" on another. The two renderer-level
+	// checks further down stay as fail-loud backstops: if the shared rule and
+	// the renderer ever disagree, the buyer still gets the honest page instead
+	// of a checkout that cannot be submitted.
+	if order := h.formOrder(r.Context(), f); !order.Accepting {
+		if st, ok := restrictionStateForOrder(order.Code); ok {
+			h.renderRestriction(w, r, f, st)
+			return
+		}
+		// Not publishable at all (a draft or a trashed row) — the status checks
+		// above answer that with a 404, so this arm exists only so a state
+		// neither of them knows cannot fall through to a payment page.
+		plainErr(w, http.StatusNotFound, h.buyerLang(r.Context(), f, f.AccountID), buyertext.CodeFormNotFound)
 		return
 	}
 	// Issue #497: the restaurant menu is a PER-FORM setting. When the form's

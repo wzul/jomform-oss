@@ -101,10 +101,28 @@ type deviceFlowEnv struct {
 	mail   *deviceMailSpy
 }
 
+// deviceFlowEnvOpts tweaks the booted server. The zero value is the wiring every
+// walk below uses unless it is about the platform-admin class.
+type deviceFlowEnvOpts struct {
+	// platformAdmin puts the test account on cfg.SuperAdminEmails. That is the
+	// ONE source of the platform-admin class in production — SUPER_ADMIN_EMAILS
+	// → config.IsSuperAdmin → every handler — so a test that sets it here walks
+	// the same wiring a real deployment has, rather than hand-pinning a handler
+	// field the boot can leave nil.
+	platformAdmin bool
+}
+
 // newDeviceFlowEnv boots the production wiring against Postgres + Valkey: the
 // OAuth handlers (with a capturing mailer), the dashboard auth routes and the
 // MCP transport, all behind one httptest listener.
 func newDeviceFlowEnv(t *testing.T) *deviceFlowEnv {
+	t.Helper()
+	return newDeviceFlowEnvWith(t, deviceFlowEnvOpts{})
+}
+
+// newDeviceFlowEnvWith is newDeviceFlowEnv with the deployment knobs a card
+// needs changed (card t_c94bb976: the platform-admin allowlist).
+func newDeviceFlowEnvWith(t *testing.T, opts deviceFlowEnvOpts) *deviceFlowEnv {
 	t.Helper()
 	ctx := context.Background()
 	pool := testdb.Open(t)
@@ -153,6 +171,9 @@ func newDeviceFlowEnv(t *testing.T) *deviceFlowEnv {
 	mail := newDeviceMailSpy()
 	cfg := &config.Config{
 		Port: "0", DatabaseURL: os.Getenv(testdb.DSNEnv), AppBaseURL: "http://localhost:8080", Env: "dev",
+	}
+	if opts.platformAdmin {
+		cfg.SuperAdminEmails = []string{email}
 	}
 	oauthStore := dbstore.NewOAuthStore(pool)
 	users := dbstore.NewUserStore(pool)

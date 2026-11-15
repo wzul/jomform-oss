@@ -47,7 +47,11 @@ checked per case rather than assumed.
 
 REFUSAL, NOT A FALSE GREEN. If the base revision's guard file is byte-identical to
 the working tree's, every BASE leg compares a guard with itself and the "missed
-this" column means nothing, so the harness exits 2 without a verdict.
+this" column means nothing, so the harness exits 2 without a verdict. A tree that
+has been BUILT is refused the same way: `make api` leaves a compiled binary in the
+GITIGNORED api/bin/, every BASE reader here predates the content rule and dies on a
+file it cannot decode, so every legacy case would read RED naming that binary rather
+than its own mutation (card t_7a1a902c).
 
 Restore is signal-safe: originals are held in memory, restored in a finally, a
 SIGTERM/SIGINT handler restores before exiting, and the files this harness CREATES
@@ -240,13 +244,18 @@ def show(ref, rel):
 
 
 def write(path, text):
+    write_bytes(path, text.encode())
+
+
+def write_bytes(path, body):
+    """write() for a fixture that is not text, e.g. a compiled-binary probe."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if path not in originals:
         originals[path] = None if not os.path.exists(path) else open(path, "rb").read()
     if originals[path] is None and path not in created:
         created.append(path)
     with open(path, "wb") as fh:
-        fh.write(text.encode())
+        fh.write(body)
 
 
 def swap_guard(text):
@@ -574,6 +583,38 @@ def probe_prose_compound():
           "package qaprobe\n\n// %s\n" % PROSE_COMPOUND)
 
 
+def probe_non_text_build_output():
+    # THE BUILD OUTPUT `make api` WRITES INTO A GITIGNORED TREE (card t_7a1a902c).
+    # `api/bin/` is on .gitignore line 2, so api/bin/jomform-api is never in git and
+    # a fresh worktree never has it — which is why the full sweep on main is green,
+    # and why this defect appears only on a machine that BUILT before gating.
+    #
+    # The bytes are a small ELF: the magic, the e_ident NUL padding and a high-byte
+    # run — the three properties measured on the real 79.6 MB binary (invalid UTF-8
+    # at byte 96, 3315 NULs in the first 4 KiB) — with the retired id inside them.
+    # The id is there on purpose: a compiled binary really does carry it, because the
+    # compiler folds the guard's own constant expression into a literal (measured on
+    # that binary: 1 occurrence of the retired family, 3 of the shipped id). So "the
+    # scan skipped it" is a different claim from "the scan read it and found
+    # nothing".
+    #
+    # BRANCH must stay GREEN — the file is not source, so the scan skips it and NAMES
+    # it in its scope line — and BASE must go RED on it: the pre-fix reader read every
+    # file and died with `the scan could not decode api/bin/<file> as text`, which is
+    # the exact red this card was filed on.
+    #
+    # WHY THE NEEDLE IS THE DIRECTORY AND NOT THIS PROBE'S FULL PATH (measured while
+    # writing the case). A pre-fix reader dies on the FIRST non-text file it meets, and
+    # `api/bin/jomform-api` sorts before `api/bin/qa_probe_build_output` — so on a tree
+    # where the operator has already built (the population this card is about) the old
+    # reader names ITS OWN binary, not this probe, and a probe-shaped needle would fail
+    # the case on exactly those trees. `could not decode api/bin/` is the claim that is
+    # true either way, and it still cannot be satisfied by a red for some other reason.
+    elf = (b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8 + b"\xf8\xff\x80\x90" +
+           b"\x00model " + RETIRED_TAGGED.encode() + b"\x00")
+    write_bytes(os.path.join(REPO, "api/bin/qa_probe_build_output"), elf)
+
+
 CASES = [
     {
         "name": "case 1: a NEW .mjs file naming the retired id (the old whitelist had no .mjs)",
@@ -675,6 +716,22 @@ CASES = [
         "base_expect": True,
         "base_needles": ["api/internal/qa_probe_prose_compound.go", PROSE_COMPOUND_TOKEN],
     },
+    {
+        "name": "case 15: a compiled build output in the gitignored api/bin is SKIPPED, not fatal",
+        "mutate": probe_non_text_build_output,
+        # GREEN: a compiled binary is not source, so the scan skips it (and names it
+        # in its scope line) instead of judging it.
+        "branch_red": False,
+        # RED at every reader before this card, which read every file and died on
+        # the one it could not decode — naming a file the guard was never meant to
+        # judge. The needle is the directory-qualified decode failure (see the probe
+        # above for why it is not this probe's full path), so a red for some other
+        # reason does not count. No `base_ref` pin: unlike the prose case this leg's
+        # premise is not a specific revision, it is EVERY reader that predates the
+        # content rule, so the run-wide derived base is exactly the reader it wants.
+        "base_expect": True,
+        "base_needles": ["could not decode api/bin/"],
+    },
 ]
 
 # KNOWN STALENESS IN THE RUN-WIDE DERIVATION (NOT this card's change; measured
@@ -692,8 +749,61 @@ CASES = [
 # the run-wide derivation, so its leg does not depend on the broken premise.
 
 
+def non_text_files_in_api_bin():
+    """The compiled build outputs sitting in api/bin, if the tree has been built.
+
+    WHY THE RUN REFUSES ON THESE (card t_7a1a902c). Every BASE leg swaps in a guard
+    file that PREDATES the content rule, and such a reader reads every file and dies
+    on the first one it cannot decode — so on a tree where `make api` has run, the
+    legacy cases all read RED naming api/bin/jomform-api, for a reason that has
+    nothing to do with their mutation. A harness that answered "BITEPROOF FAIL" there
+    would be reporting a defect it did not find, so it refuses instead (exit 2, no
+    verdict) and says what to move.
+
+    api/bin is GITIGNORED (.gitignore:2), so this file is invisible to `git status`
+    and costless to remove — and on a fresh worktree (where the full sweep runs) it
+    does not exist at all, which is why the instrument was never seen to be sensitive
+    to it. The probe in case 15 is written AFTER this check.
+    """
+    d = os.path.join(REPO, "api", "bin")
+    out = []
+    if not os.path.isdir(d):
+        return out
+    for name in sorted(os.listdir(d)):
+        path = os.path.join(d, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+        if b"\x00" in head:
+            out.append(path)
+            continue
+        # The same boundary forgiveness the guard grants a truncated rune: a text
+        # file whose 4096-byte boundary lands mid-rune is still text.
+        for cut in range(0, 4):
+            try:
+                (head[:len(head) - cut] if cut else head).decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            out.append(path)
+    return out
+
+
 def main():
     global BASE_REF, BASE_GUARD
+
+    prebuilt = non_text_files_in_api_bin()
+    if prebuilt:
+        print("REFUSING (exit 2, NO VERDICT): api/bin holds compiled build output (%s). Every BASE leg "
+              "here swaps in a reader that PREDATES the content rule, and that reader dies on a file it "
+              "cannot decode — so on a built tree the legacy cases would read RED for a reason that has "
+              "nothing to do with the mutation, and this run would report a bite count it cannot back. "
+              "`make api` writes that file into a GITIGNORED tree, so moving api/bin aside costs nothing: "
+              "do that, re-run, and `make api` afterwards." %
+              ", ".join(os.path.relpath(p, REPO) for p in prebuilt))
+        return 2
 
     if DERIVED_BASE:
         derived, why = derive_base()
@@ -765,14 +875,26 @@ def main():
     _, status_after = git("status", "--porcelain")
     drifted = [l for l in status_after.splitlines()
                if l.strip() and l not in status_before.splitlines()]
+    # EVERY FILE THIS RUN CREATED MUST BE GONE, and `git status` cannot say so for
+    # one class of them: a fixture under a GITIGNORED tree — case 15's
+    # api/bin/qa_probe_build_output — is invisible to git, so a restore that missed
+    # it would leave a build-output file in the worktree with no signal at all.
+    # Ask the filesystem instead, which covers every case rather than only this one.
+    left_behind = [p for p in created if os.path.exists(p)]
     print()
     if drifted:
         print("TREE DRIFTED during the run (harness bug — a file it did not restore):")
         for l in drifted[:20]:
             print("   " + l)
-    print("cases: %d, failed: %d, tree unchanged: %s (restored byte-identically)" % (
-        len(results), len(bad), not drifted))
-    if bad or drifted:
+    if left_behind:
+        print("FIXTURE LEFT BEHIND during the run (harness bug — git cannot see a file under a "
+              "GITIGNORED tree, so this is checked on the filesystem):")
+        for p in left_behind:
+            print("   " + p)
+    print("cases: %d, failed: %d, tree unchanged: %s (restored byte-identically; %d fixture file(s) "
+          "created)" % (
+              len(results), len(bad), not drifted, len(created)))
+    if bad or drifted or left_behind:
         return 1
     print("ALL CASES BITES (BRANCH) / STAYED GREEN (BASE) AS EXPECTED, sources restored byte-identically")
     return 0

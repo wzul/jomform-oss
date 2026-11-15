@@ -53,6 +53,19 @@ Parity checklist (dashboard → MCP):
   silently orphan the sale.
   REST: `GET /v1/rest/forms/trash`, `POST /v1/rest/forms/{id}/restore`,
   `DELETE /v1/rest/forms/{id}/purge`.
+- Form lifecycle + the one derived buyer state → `describe_lifecycle`
+  (aggregate=forms, and with a form id it answers that row's state and
+  available_events), plus the state, available_events, accepting_orders,
+  reason and code fields on `get_form` and `list_forms`.
+  The forms table is the same declarative machine the sales aggregate uses —
+  publish, unpublish, unlist, make_private, delete, restore, purge — with the
+  gallery-metadata publish guard and the "a sold form cannot be purged" guard.
+  accepting_orders is ONE server-side predicate over the live status, the
+  trash, the schedule window, the entry limit and whether the config sells
+  anything, so the public page, the dashboard list and MCP cannot disagree; a
+  refusal carries a stable code and an English reason. A trashed form is a
+  legitimate subject, so restore/purge are discoverable before an agent
+  proposes one.
 - Form slug rename (the Form Settings slug field → the slug parameter on
   `upsert_form`; same validation, same per-workspace uniqueness, same temporary
   301 for the old URL)

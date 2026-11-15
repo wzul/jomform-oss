@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/statemachine"
 )
 
 // ─── in-memory fakes ─────────────────────────────────────────────────────────
@@ -169,6 +170,39 @@ func (f *fakeOAuthUsers) ByEmail(_ context.Context, email string) (*dbstore.User
 // mappings are what the handler tests assert. The SQL semantics themselves
 // (row locks, single-use UPDATE, the persisted +5s penalty) are exercised
 // against a real Postgres in dbstore/oauth_device_test.go.
+//
+// THE STATE IS NOT RE-DERIVED HERE (card t_c6ca84a7). The fake used to carry its
+// own copy of the pending/approved/denied/expired/consumed switch, which is how
+// four readers drifted apart in the first place. It now asks the same
+// statemachine table the SQL store asks, so a handler test exercises the mapping
+// from the REAL answer to the RFC's error codes — and the state logic itself is
+// pinned once, in statemachine/devicecode_test.go and dbstore's Postgres tests.
+//
+// WHERE IT STILL DIFFERS FROM POSTGRES, deliberately: no row lock and no
+// consumed_at UPDATE predicate (the fake is single-goroutine under f.mu), so
+// single-use is not proven here — it is proven against the real store.
+
+// deviceErrForReason mirrors dbstore's deviceErrFor so the fake returns the same
+// error values the SQL store returns.
+func deviceErrForReason(step statemachine.DeviceStep) error {
+	switch step.Answer {
+	case statemachine.DeviceReasonNone:
+		return nil
+	case statemachine.DeviceReasonAuthorizationPending:
+		return dbstore.ErrDevicePending
+	case statemachine.DeviceReasonAccessDenied:
+		return dbstore.ErrDeviceDenied
+	case statemachine.DeviceReasonExpiredToken:
+		return dbstore.ErrDeviceExpired
+	default:
+		return dbstore.ErrDeviceCodeInvalid
+	}
+}
+
+func deviceStep(d *dbstore.OAuthDeviceCode, event statemachine.DeviceEvent) (statemachine.DeviceStep, error) {
+	step := statemachine.DeviceTransition(d.State(), event)
+	return step, deviceErrForReason(step)
+}
 
 func (f *fakeOAuthStore) CreateDeviceCode(_ context.Context, d *dbstore.OAuthDeviceCode) error {
 	f.mu.Lock()
@@ -198,14 +232,12 @@ func (f *fakeOAuthStore) ApproveDeviceCode(_ context.Context, userCodeHash, user
 			continue
 		}
 		now := time.Now().UTC()
-		switch {
-		case d.ConsumedAt != nil, d.ApprovedAt != nil:
-			return nil, dbstore.ErrDeviceCodeInvalid
-		case d.DeniedAt != nil:
-			return nil, dbstore.ErrDeviceDenied
-		case !now.Before(d.ExpiresAt):
-			return nil, dbstore.ErrDeviceExpired
-		case d.UserID != "" && d.UserID != userID:
+		// The same frozen precedence the SQL store uses: an already-approved
+		// row answers invalid, not expired, even past its deadline.
+		if step := statemachine.DeviceApproveStep(d.Facts(), now); !step.Allowed {
+			return nil, deviceErrForReason(step)
+		}
+		if d.UserID != "" && d.UserID != userID {
 			return nil, dbstore.ErrDeviceCodeInvalid
 		}
 		d.UserID, d.AccountID, d.Scope = userID, accountID, scope
@@ -220,11 +252,16 @@ func (f *fakeOAuthStore) DenyDeviceCode(_ context.Context, userCodeHash, userID 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, d := range f.devices {
-		if d.UserCodeHash != userCodeHash || d.ConsumedAt != nil || d.ApprovedAt != nil || d.DeniedAt != nil {
+		if d.UserCodeHash != userCodeHash {
 			continue
 		}
+		if step := statemachine.DeviceTransition(d.State(), statemachine.DeviceEventDeny); !step.Allowed {
+			// Frozen value, exactly like the SQL store: a denial that cannot
+			// be recorded is ErrDeviceCodeInvalid whatever the reason.
+			return dbstore.ErrDeviceCodeInvalid
+		}
 		if d.UserID != "" && d.UserID != userID {
-			continue
+			return dbstore.ErrDeviceCodeInvalid
 		}
 		now := time.Now().UTC()
 		d.DeniedAt = &now
@@ -240,24 +277,25 @@ func (f *fakeOAuthStore) PollDeviceCode(_ context.Context, deviceHash, clientID 
 	if !ok {
 		return nil, dbstore.ErrDeviceCodeInvalid
 	}
-	if d.ConsumedAt != nil || (clientID != "" && d.ClientID != clientID) {
+	if clientID != "" && d.ClientID != clientID {
 		return nil, dbstore.ErrDeviceCodeInvalid
 	}
-	if d.DeniedAt != nil {
-		return nil, dbstore.ErrDeviceDenied
-	}
 	now := time.Now().UTC()
-	if !now.Before(d.ExpiresAt) {
-		return nil, dbstore.ErrDeviceExpired
+	state := d.State()
+	step, err := deviceStep(d, statemachine.DeviceTokenEvent(state))
+	if err != nil && !step.Allowed {
+		// The row travels with the refusal, exactly as the SQL store returns
+		// it: the handler reports the derived state instead of a bare 400.
+		return d, err
 	}
 	if d.LastPolledAt != nil && now.Sub(*d.LastPolledAt) < time.Duration(d.IntervalS)*time.Second {
 		d.IntervalS += 5
 		d.LastPolledAt = &now
-		return nil, dbstore.ErrDeviceSlowDown
+		return d, dbstore.ErrDeviceSlowDown
 	}
-	if d.ApprovedAt == nil {
+	if step.Answer == statemachine.DeviceReasonAuthorizationPending {
 		d.LastPolledAt = &now
-		return nil, dbstore.ErrDevicePending
+		return d, dbstore.ErrDevicePending
 	}
 	d.ConsumedAt = &now
 	d.LastPolledAt = &now

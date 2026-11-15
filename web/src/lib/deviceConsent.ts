@@ -56,8 +56,52 @@ export type DeviceConsent = {
   choices?: string[];
   scope_prose: string;
   expires_at: string;
+  /**
+   * The DERIVED state, from api/internal/statemachine/devicecode.go — the same
+   * derivation the token endpoint obeys. "used" is the wire spelling of the
+   * state machine's "consumed" (statemachine.DeviceState.DeviceWireName).
+   */
   state: "pending" | "approved" | "denied" | "expired" | "used";
+  /**
+   * Every event the state machine still allows on this code, from the same
+   * transition table the store obeys. Absent from an API older than card
+   * t_c6ca84a7, in which case the card falls back to `state === "pending"` —
+   * see deviceCanDecide.
+   */
+  available_events?: DeviceEventName[];
+  /** Seconds of wall-clock life left, floored at zero. A different fact from
+   *  the state: a "used" code still has time on the clock. Absent from an API
+   *  older than card t_c6ca84a7. */
+  remaining_seconds?: number;
 };
+
+/** The five real events of the device flow (statemachine.DeviceEvent). */
+export type DeviceEventName = "poll" | "approve" | "deny" | "exchange" | "expire";
+
+/**
+ * May the consent card draw Approve and Deny for this consent?
+ *
+ * WHY THIS EXISTS (card t_c6ca84a7). The card used to decide by comparing the
+ * state string with `"pending"`, which made the browser a SIXTH reader of a state
+ * that four server readers already derived differently. The server now sends
+ * `available_events` — computed from the same table the token endpoint obeys — and
+ * the card asks it instead of interpreting the state itself. A state that has no
+ * `approve` event cannot render a button that would be refused; that is a
+ * property of the payload, not of this function's care.
+ *
+ * FALLBACK: an API older than this card sends no `available_events`. Then the old
+ * rule (`pending`) is the only honest answer, and it is exactly what the old card
+ * did — so a dashboard and an API deployed a release apart still agree.
+ */
+export function deviceCanDecide(consent: DeviceConsent | null): boolean {
+  if (!consent) return false;
+  if (!consent.available_events) return consent.state === "pending";
+  // Approve AND deny, because the card renders them as one pair: `approve` is the
+  // decisive one, and the table never allows it without `deny` (a pending code
+  // can be refused). Requiring both makes a payload that lost one of them show a
+  // read-only card rather than half a decision.
+  return consent.available_events.includes("approve") && consent.available_events.includes("deny");
+}
 
 /** The one failure a code lookup can report. A key, not a sentence: see the
  *  header. `""` means "no problem". */

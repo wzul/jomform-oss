@@ -62,6 +62,8 @@ const i18nDict = read("../components/i18nDict.ts");
 // silently (a mirror that disagrees is a second, wrong rule).
 const goPublishReady = read("../../../api/internal/dbstore/form_publish_ready.go");
 const goRestHandlers = read("../../../api/internal/httpapi/rest_handlers.go");
+// Card t_3d5a8d32: the ONE derived buyer predicate the read surfaces ask.
+const goLifecycleForms = read("../../../api/internal/lifecycle/forms.go");
 
 /**
  * The API's own prose for the no-products refusal, read out of the Go source
@@ -436,7 +438,27 @@ test("WEB/GO CONTRACT: the two REST routes still gate on the Go rule", () => {
   // Card t_983425e5: the refusal names the product block it is about, and the
   // list/row payloads carry the same dead-form signal the badge reads.
   assert.match(goRestHandlers, /dbstore\.PublishWarningNoProductSelected/, "the 409 body cannot report an unpointed product block");
-  assert.match(goRestHandlers, /dbstore\.NotAcceptingOrders\(f, live\)/, "the forms list does not ask the shared dead-form rule");
+  // Card t_3d5a8d32: the list and the single-form GET no longer ask the
+  // product rule directly — they ask the ONE derived predicate
+  // (lifecycle.FormOrders), which folds in the trash, the schedule window and
+  // the entry limit as well as the product rule. The underlying product rule
+  // stays dbstore's (asserted in goPublishReady below), so this pins the READ
+  // path to the shared derivation rather than to a second copy of it.
+  assert.match(
+    goRestHandlers,
+    /order := h\.formOrderWith\(r\.Context\(\), f, live\)/,
+    "the forms list does not ask the shared derived buyer state",
+  );
+  assert.match(
+    goRestHandlers,
+    /order := h\.formOrder\(r\.Context\(\), f\)/,
+    "the single-form GET does not ask the shared derived buyer state",
+  );
+  assert.match(
+    goLifecycleForms,
+    /dbstore\.NotAcceptingOrders\(f, env\.LiveProductIDs\)/,
+    "the derived predicate no longer asks dbstore's one product rule",
+  );
   // The bulk path is a publish too, and must not be the way around the guard.
   assert.match(goRestHandlers, /PublishNeedsAckIDs/, "bulkForms no longer consults the rule");
 });

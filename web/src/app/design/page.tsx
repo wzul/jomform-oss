@@ -24,8 +24,9 @@ import {
   Tabs,
   Textarea,
 } from "../../components/ui";
-import { DARK_CONTRASTS, LIGHT_CONTRASTS, type ContrastPair } from "../../lib/designTokenRatios";
+import { DARK_CONTRASTS, FORBIDDEN_TEXT_PAIRS, LIGHT_CONTRASTS, type ContrastPair, type ForbiddenPair } from "../../lib/designTokenRatios";
 import { RADIUS_SCALE, SHADOW_SCALE, SPACE_SCALE, TYPE_SCALE } from "../../lib/designTokenScale";
+import { PRIMITIVE_STATES, STATES, type PrimitiveName, type State } from "../../lib/designStates";
 
 // /design — the design system's own page (card t_f2e231d3).
 //
@@ -68,6 +69,7 @@ const NAV = [
   ["#table", "Table & EmptyState"],
   ["#tabs", "Tabs"],
   ["#skeleton", "Skeleton"],
+  ["#states", "Every primitive, every state"],
 ] as const;
 
 function SectionHeading({ id, title, children }: { id: string; title: string; children?: React.ReactNode }) {
@@ -167,6 +169,323 @@ function ContrastTable({ rows, caption }: { rows: readonly ContrastPair[]; capti
               </TableRow>
             );
           })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+// ── the state matrix (card t_46ae7ad7) ──────────────────────────────────────
+//
+// `PRIMITIVE_STATES` (lib/designStates.ts) says, for every primitive and every
+// state, either "this applies" (null) or WHY it does not (a sentence). The type
+// below is derived from that table with a KEY-REMAPPED MAPPED TYPE: for each
+// primitive it keeps only the states the table calls applicable, and requires a
+// ReactNode for each. That makes the two directions impossible to disagree —
+// remove a specimen for an applicable state and the build fails here; add one for
+// a state the table says does not exist and it fails here too. No test can prove
+// that for a page; the type checker can.
+//
+// WHY SOME CELLS ARE PAINTED RATHER THAN LIVE. A server render cannot hover or
+// focus a control. Those cells show the SAME token class the primitive applies in
+// that state, next to the live control where one is available — a picture of
+// yesterday's token is not the risk here, because the class is read from the same
+// `globals.css` the primitive reads.
+
+/** A control painted in its focus state — the one state a server render cannot force. */
+function FocusedControl({ value }: { value: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="jf-control w-full rounded-jf-md border border-[var(--jf-primary)] bg-[var(--jf-surface)] px-jf-3 py-jf-2 text-jf-read-sm text-[var(--jf-text)] outline-2 outline-offset-2 outline-[var(--jf-focus-ring)]"
+    >
+      {value}
+    </div>
+  );
+}
+
+/** One row of the matrix's table-free grid. */
+function StateCell({ children }: { children: React.ReactNode }) {
+  return <div className="flex min-h-jf-10 flex-wrap items-center gap-jf-2">{children}</div>;
+}
+
+type Applies<P extends PrimitiveName> = {
+  [S in State as (typeof PRIMITIVE_STATES)[P][S] extends null ? S : never]: React.ReactNode;
+};
+
+const SPECIMENS: { [P in PrimitiveName]: Applies<P> } = {
+  Alert: {
+    default: <Alert tone="info" title="Heads up">The sandbox is in use, so payments will not settle.</Alert>,
+    error: <Alert tone="danger" title="Payment refused">The card was declined. Nothing was charged.</Alert>,
+  },
+  Badge: {
+    default: <Badge>neutral</Badge>,
+    error: <Badge tone="danger">refused</Badge>,
+  },
+  Button: {
+    default: <Button>Save changes</Button>,
+    hover: (
+      <span
+        aria-hidden="true"
+        className="inline-flex min-h-jf-10 items-center justify-center rounded-jf-md bg-[var(--jf-primary-hover)] px-jf-4 py-jf-2 text-jf-read-sm font-medium text-[var(--jf-on-color)]"
+      >
+        Save changes
+      </span>
+    ),
+    "focus-visible": (
+      <span
+        aria-hidden="true"
+        className="inline-flex min-h-jf-10 items-center justify-center rounded-jf-md bg-[var(--jf-primary)] px-jf-4 py-jf-2 text-jf-read-sm font-medium text-[var(--jf-on-color)] outline-2 outline-offset-2 outline-[var(--jf-focus-ring)]"
+      >
+        Save changes
+      </span>
+    ),
+    disabled: <Button disabled>Save changes</Button>,
+    loading: <Button loading>Save changes</Button>,
+  },
+  Card: {
+    default: <Card className="p-jf-3"><p className="text-jf-read-sm">A resting card</p></Card>,
+    hover: (
+      <Card interactive className="p-jf-3 bg-[var(--jf-surface-2)]">
+        <p className="text-jf-read-sm">The hover fill</p>
+      </Card>
+    ),
+    "focus-visible": (
+      <Card interactive className="p-jf-3 outline-2 outline-offset-2 outline-[var(--jf-focus-ring)]">
+        <p className="text-jf-read-sm">The focus ring (focus-within)</p>
+      </Card>
+    ),
+  },
+  Checkbox: {
+    default: <Checkbox aria-label="Default checkbox" defaultChecked />,
+    "focus-visible": (
+      <span className="inline-flex rounded-jf-sm outline-2 outline-offset-2 outline-[var(--jf-focus-ring)]">
+        <Checkbox aria-label="Focused checkbox" defaultChecked />
+      </span>
+    ),
+    disabled: (
+      <span className="flex items-center gap-jf-2">
+        <Checkbox aria-label="Disabled checkbox" disabled />
+        <Checkbox aria-label="Disabled checked checkbox" defaultChecked disabled />
+      </span>
+    ),
+  },
+  CodeInput: {
+    default: <CodeInput defaultValue="123456" aria-label="Verification code" />,
+    "focus-visible": <FocusedControl value="123456" />,
+    disabled: <CodeInput defaultValue="123456" aria-label="Verification code" disabled />,
+    error: <CodeInput defaultValue="12345" aria-label="Verification code" aria-invalid />,
+  },
+  Container: {
+    default: (
+      <Container className="rounded-jf-md bg-[var(--jf-surface-2)] p-jf-2">
+        <p className="text-jf-read-xs">max width + page gutter</p>
+      </Container>
+    ),
+  },
+  EmptyState: {
+    default: (
+      <EmptyState
+        title="No sales yet"
+        description="A sale appears here the moment a customer completes a form."
+        action={<Button size="sm">Open the builder</Button>}
+      />
+    ),
+  },
+  Field: {
+    default: (
+      <Field id="matrix-field" label="Name" hint="Shown on the form and in the receipt.">
+        <Input placeholder="Aisyah Rahman" />
+      </Field>
+    ),
+    disabled: (
+      <Field id="matrix-field-disabled" label="Workspace" hint="Locked while the workspace is being renamed.">
+        <Input defaultValue="kedai-aisyah" disabled />
+      </Field>
+    ),
+    error: (
+      <Field id="matrix-field-error" label="Email" errorText="Enter a valid email address.">
+        <Input defaultValue="not-an-email" />
+      </Field>
+    ),
+  },
+  Input: {
+    default: <Input aria-label="Name" placeholder="Aisyah Rahman" />,
+    "focus-visible": <FocusedControl value="Aisyah Rahman" />,
+    disabled: <Input aria-label="Workspace" defaultValue="kedai-aisyah" disabled />,
+    error: <Input aria-label="Email" defaultValue="not-an-email" aria-invalid />,
+  },
+  Section: {
+    default: (
+      <Section spacing="sm" className="w-full rounded-jf-md border border-dashed border-[var(--jf-border-strong)]">
+        <p className="text-jf-read-xs">a vertical rhythm block</p>
+      </Section>
+    ),
+  },
+  Select: {
+    default: (
+      <Select aria-label="Plan" defaultValue="starter">
+        <option value="starter">Starter</option>
+        <option value="growth">Growth</option>
+      </Select>
+    ),
+    "focus-visible": <FocusedControl value="Starter" />,
+    disabled: (
+      <Select aria-label="Plan" defaultValue="starter" disabled>
+        <option value="starter">Starter</option>
+      </Select>
+    ),
+    error: (
+      <Select aria-label="Plan" defaultValue="" aria-invalid>
+        <option value="">Choose a plan</option>
+        <option value="starter">Starter</option>
+      </Select>
+    ),
+  },
+  Skeleton: {
+    default: <Skeleton shape="line" />,
+    loading: (
+      <span className="flex w-full flex-col gap-jf-2">
+        <Skeleton shape="line" />
+        <Skeleton shape="line" className="w-2/3" />
+        <span className="flex items-center gap-jf-2">
+          <Skeleton shape="circle" />
+          <Skeleton shape="block" className="w-1/2" />
+        </span>
+      </span>
+    ),
+  },
+  Table: {
+    default: (
+      <Table>
+        <TableBody>
+          <TableRow>
+            <TableCell className="font-mono text-jf-read-xs">JF-1042</TableCell>
+            <TableCell>
+              <Badge tone="success">paid</Badge>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    ),
+    loading: (
+      <Table>
+        <TableBody>
+          <TableRow>
+            <TableCell><Skeleton shape="line" /></TableCell>
+            <TableCell><Skeleton shape="line" className="w-1/2" /></TableCell>
+          </TableRow>
+          <TableRow>
+            <TableCell><Skeleton shape="line" /></TableCell>
+            <TableCell><Skeleton shape="line" className="w-1/2" /></TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    ),
+  },
+  Tabs: {
+    default: (
+      <Tabs
+        label="State matrix tabs"
+        items={[
+          { id: "overview", label: "Overview", panel: null },
+          { id: "settings", label: "Settings", panel: null },
+        ]}
+      />
+    ),
+    hover: (
+      <span
+        aria-hidden="true"
+        className="rounded-t-jf-md border-b-2 border-transparent px-jf-3 py-jf-2 text-jf-read-sm text-[var(--jf-text)]"
+      >
+        Settings
+      </span>
+    ),
+    "focus-visible": (
+      <span
+        aria-hidden="true"
+        className="rounded-t-jf-md border-b-2 border-[var(--jf-primary)] px-jf-3 py-jf-2 text-jf-read-sm font-semibold text-[var(--jf-primary-strong)] outline-2 outline-offset-2 outline-[var(--jf-focus-ring)]"
+      >
+        Overview
+      </span>
+    ),
+    disabled: (
+      <Tabs
+        label="State matrix tabs with a disabled tab"
+        items={[
+          { id: "overview", label: "Overview", panel: null },
+          { id: "locked", label: "Locked", disabled: true, panel: null },
+        ]}
+      />
+    ),
+  },
+  Textarea: {
+    default: <Textarea aria-label="Notes" placeholder="Delivery instructions" />,
+    "focus-visible": <FocusedControl value="Delivery instructions" />,
+    disabled: <Textarea aria-label="Notes" defaultValue="Delivery instructions" disabled />,
+    error: <Textarea aria-label="Notes" defaultValue="Delivery instructions" aria-invalid />,
+  },
+};
+
+/** The matrix as the renderer indexes it. The strict type above is the guarantee; this is the shape JSX can read. */
+const RENDERABLE: Readonly<Record<PrimitiveName, Partial<Record<State, React.ReactNode>>>> = SPECIMENS;
+
+function ForbiddenTable({ rows }: { rows: readonly ForbiddenPair[] }) {
+  return (
+    <div className="mt-jf-6 overflow-x-auto" tabIndex={0} role="region" aria-label="Pairings that fail as text">
+      <Table>
+        <caption className="pb-jf-2 text-left text-jf-read-sm text-[var(--jf-muted)]">
+          Do not use these for text. Each is measured on the surface it lands on, and each names a token that
+          clears 4.5:1 on that same surface.
+        </caption>
+        <TableHead>
+          <TableRow>
+            <TableHeaderCell>Pair</TableHeaderCell>
+            <TableHeaderCell>Where it is reached for</TableHeaderCell>
+            <TableHeaderCell className="text-right">Ratio</TableHeaderCell>
+            <TableHeaderCell>Use instead</TableHeaderCell>
+            <TableHeaderCell className="text-right">Ratio</TableHeaderCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={`${row.fg}-${row.bg}`}>
+              <TableCell>
+                <span className="flex items-center gap-jf-2">
+                  {/* A MARK, never sample text: this pairing is a failure by
+                      definition, so an "Aa" in it would put an axe violation on
+                      the page that documents the violation. */}
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex h-jf-8 w-jf-12 items-center justify-center rounded-jf-sm border border-[var(--jf-border)]"
+                    style={{ backgroundColor: `var(${row.bg})` }}
+                  >
+                    <span className="block h-jf-3 w-jf-6 rounded-jf-sm" style={{ backgroundColor: `var(${row.fg})` }} />
+                  </span>
+                  <span className="font-mono text-jf-read-xs text-[var(--jf-text-secondary)]">
+                    {row.fg} / {row.bg}
+                  </span>
+                </span>
+              </TableCell>
+              <TableCell className="text-[var(--jf-text-secondary)]">{row.why}</TableCell>
+              <TableCell className="text-right font-mono">
+                {row.ratio.toFixed(2)} <Badge tone="danger">fail</Badge>
+              </TableCell>
+              <TableCell>
+                <span className="flex items-center gap-jf-2">
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex h-jf-8 w-jf-12 items-center justify-center rounded-jf-sm border border-[var(--jf-border)] text-jf-read-sm"
+                    style={{ color: `var(${row.use})`, backgroundColor: `var(${row.bg})` }}
+                  >
+                    Aa
+                  </span>
+                  <span className="font-mono text-jf-read-xs text-[var(--jf-text-secondary)]">{row.use}</span>
+                </span>
+              </TableCell>
+              <TableCell className="text-right font-mono">{row.useRatio.toFixed(2)}</TableCell>
+            </TableRow>
+          ))}
         </TableBody>
       </Table>
     </div>
@@ -338,6 +657,21 @@ export default function DesignSystemPage() {
                 </div>
               </Card>
             </div>
+          </div>
+
+          {/* ── the surface a text colour lands on ────────────────────── */}
+          <div className="mt-jf-10">
+            <SubHeading id="colour-tint" title="Text on a tinted surface" />
+            <p className="max-w-3xl text-jf-read-sm text-[var(--jf-text-secondary)]">
+              A text colour is only measured against the surface it LANDS on. <code>--jf-primary</code> clears AA
+              on a white card (4.70:1) and fails it on the page tint — 4.42:1 on <code>--jf-bg</code>, 4.43:1 on{" "}
+              <code>--jf-bg-soft</code>, 4.20:1 on <code>--jf-surface-2</code> — and on the selected tint (3.97:1).
+              On a tinted surface, text and links use <code>--jf-primary-strong</code> (5.62–5.92:1 on those same
+              surfaces) or <code>--jf-primary-on-tint</code> (6.68:1 on the tint), and muted copy uses{" "}
+              <code>--jf-muted-on-tint</code>. The table below is the whole list, re-measured from{" "}
+              <code>globals.css</code> by <code>src/lib/designTokens.test.ts</code> on every run.
+            </p>
+            <ForbiddenTable rows={FORBIDDEN_TEXT_PAIRS} />
           </div>
         </Section>
 
@@ -629,6 +963,49 @@ export default function DesignSystemPage() {
               <Skeleton shape="circle" />
               <Skeleton shape="block" className="w-1/2" />
             </div>
+          </div>
+        </Section>
+
+        {/* ── every primitive, every state ────────────────────────────────── */}
+        <Section aria-labelledby="states">
+          <SectionHeading id="states" title="Every primitive, every state">
+            The cells are read from <code>lib/designStates.ts</code>: a state the primitive HAS renders a live
+            specimen (hover and focus-visible are painted with the same token classes the primitive applies, because
+            a server render cannot point or press Tab), and a state it does not have prints the reason instead of
+            disappearing. The specimen type is derived from that table, so an applicable cell with no specimen does
+            not compile — a page that quietly drops a state is not this page.
+          </SectionHeading>
+
+          <div className="flex flex-col gap-jf-8">
+            {(Object.keys(PRIMITIVE_STATES) as PrimitiveName[]).map((primitive) => (
+              <div key={primitive} data-primitive={primitive}>
+                <h3 className="mb-jf-3 font-mono text-jf-read-sm font-semibold text-[var(--jf-text)]">{primitive}</h3>
+                <div className="grid gap-jf-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {STATES.map((state) => {
+                    const why = PRIMITIVE_STATES[primitive][state];
+                    const specimen = RENDERABLE[primitive][state];
+                    return (
+                      <div
+                        key={state}
+                        data-state={state}
+                        className="rounded-jf-md border border-[var(--jf-border)] bg-[var(--jf-surface)] p-jf-3"
+                      >
+                        <p className="mb-jf-2 font-mono text-jf-read-xs uppercase tracking-wide text-[var(--jf-muted)]">
+                          {state}
+                        </p>
+                        {why === null ? (
+                          <div className="flex w-full min-w-0 items-center overflow-hidden">
+                            <StateCell>{specimen}</StateCell>
+                          </div>
+                        ) : (
+                          <p className="text-jf-read-xs text-[var(--jf-muted)]">not applicable — {why}</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </Section>
 

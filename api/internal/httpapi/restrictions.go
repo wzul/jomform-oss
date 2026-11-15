@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wzul/jomform/api/internal/dbstore"
+	"github.com/wzul/jomform/api/internal/lifecycle"
 )
 
 // restrictionState classifies a form's current availability.
@@ -37,6 +38,11 @@ const (
 
 // scheduleState returns pending/expired/open based on the form's schedule
 // window. A form with no start_at/end_at is always open.
+//
+// It is kept for the submit-side checks, which ask about the WINDOW alone; the
+// RENDER side no longer decides with it — serveForm asks lifecycle.FormOrders,
+// whose answer folds the window in with the trash, the entry limit and the
+// product rule, so the page and every read surface agree (card t_3d5a8d32).
 func scheduleState(f *dbstore.Form, now time.Time) restrictionState {
 	if f.StartAt != nil && now.Before(*f.StartAt) {
 		return restrictionPending
@@ -45,6 +51,67 @@ func scheduleState(f *dbstore.Form, now time.Time) restrictionState {
 		return restrictionExpired
 	}
 	return restrictionOpen
+}
+
+// formEntryCount returns how many orders (payment form) or submissions
+// (response form) the form has recorded, or -1 when the store for that mode is
+// not wired — which lifecycle.FormOrders reads as "unknown", never as zero.
+func (h *PublicHandlers) formEntryCount(ctx context.Context, f *dbstore.Form) int64 {
+	accounts := []string{f.AccountID}
+	if formMode(f) == dbstore.FormModeResponse {
+		if h.Submissions == nil {
+			return -1
+		}
+		n, err := h.Submissions.CountByAccountsForm(ctx, accounts, f.ID)
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	if h.Sales == nil {
+		return -1
+	}
+	n, err := h.Sales.CountByAccountsForm(ctx, accounts, f.ID)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// formOrder is the public page's ask of the ONE derived buyer predicate. It
+// assembles the facts the row cannot carry — the account's product ids (the
+// purged-product arm) and, only when the form HAS an entry limit, the recorded
+// count — and hands them to lifecycle.FormOrders.
+func (h *PublicHandlers) formOrder(ctx context.Context, f *dbstore.Form) lifecycle.FormOrderState {
+	env := lifecycle.FormOrderEnv{Entries: -1, Now: time.Now()}
+	if h.Products != nil && f.AccountID != "" {
+		if ids, err := h.Products.ProductIDs(ctx, f.AccountID); err == nil {
+			env.LiveProductIDs = ids
+		}
+	}
+	if f.EntryLimit != nil && *f.EntryLimit > 0 {
+		env.Entries = h.formEntryCount(ctx, f)
+	}
+	return lifecycle.FormOrders(f, env)
+}
+
+// restrictionStateForOrder maps the derived predicate's code onto the message
+// page the buyer is served. Every refusal the predicate can report has a state
+// here; "not published" and "trashed" cannot reach the render path at all (the
+// status checks above answer 404 first), which is why they are not mapped — a
+// caller that DOES reach them gets restrictFormGone, and serveForm answers 404.
+func restrictionStateForOrder(code string) (restrictionState, bool) {
+	switch code {
+	case lifecycle.FormOrderScheduled:
+		return restrictionPending, true
+	case lifecycle.FormOrderClosed:
+		return restrictionExpired, true
+	case lifecycle.FormOrderEntryLimitReached:
+		return restrictionLimitReached, true
+	case lifecycle.FormOrderNoProducts, lifecycle.FormOrderNoProductSelected:
+		return restrictionNoProducts, true
+	}
+	return restrictionOpen, false
 }
 
 // entryLimitReached reports whether the form's entry limit has been reached.
@@ -126,15 +193,10 @@ h1{font-size:20px;margin:0 0 8px}.m{color:#6b7280;font-size:14px;line-height:1.6
 		htmlEsc(ls.PoweredBy))
 }
 
-// checkRestrictionsRender returns the restriction state that should block the
-// form from rendering (restrictionOpen when the form may render normally).
-// Schedule is checked first, then the entry limit.
-func (h *PublicHandlers) checkRestrictionsRender(r *http.Request, f *dbstore.Form) restrictionState {
-	if st := scheduleState(f, time.Now()); st != restrictionOpen {
-		return st
-	}
-	if reached, err := h.entryLimitReached(r.Context(), f); err == nil && reached {
-		return restrictionLimitReached
-	}
-	return restrictionOpen
-}
+// checkRestrictionsRender answered "should this form render or show a message"
+// before card t_3d5a8d32. It is GONE rather than kept alongside the new rule:
+// the render decision now comes from lifecycle.FormOrders (see serveForm), and a
+// second implementation is how the page and the reads drifted apart in the first
+// place. The submit-side checks keep their own helpers — a submission asks about
+// the window and the limit at the instant it is posted, which is a different
+// question from "what does this form's page show right now".

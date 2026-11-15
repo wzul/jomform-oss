@@ -585,6 +585,16 @@ export const DICT = {
   "forms.viewUnavailableHint": { en: "No public link yet. Publish the form, or set a workspace or custom domain first", ms: "Belum ada pautan awam — terbitkan borang, atau tetapkan domain tersuai dahulu", zh: "暂无公开链接 — 请先发布表单或设置自定义域名", ta: "பொது இணைப்பு இல்லை — படிவத்தை வெளியிடவும் அல்லது தனிப்பயன் டொமைன் அமைக்கவும்", ar: "لا يوجد رابط عام بعد — انشر النموذج أو اضبط نطاقًا مخصصًا أولاً" },
   "forms.edit": { en: "Edit", ms: "Edit", zh: "编辑", ta: "திருத்து", ar: "تحرير" },
   "forms.delete": { en: "Delete", ms: "Buang", zh: "删除", ta: "நீக்கு", ar: "حذف" },
+  // Card t_3d5a8d32: the per-row write actions are rendered from the API's
+  // available_events (the forms lifecycle table), so the page needs a label for
+  // the `unpublish` edge and a sentence for the actions that used to exist only
+  // as bulk operations.
+  "forms.unpublish": { en: "Unpublish", ms: "Nyahterbit", zh: "取消发布", ta: "வெளியீடு நீக்கு", ar: "إلغاء النشر" },
+  "forms.unpublished": { en: "Form unpublished. It is a draft again.", ms: "Borang dinyahterbit — ia kembali menjadi draf.", zh: "表单已取消发布——已回到草稿。", ta: "படிவம் வெளியீடு நீக்கப்பட்டது — மீண்டும் வரைவாக உள்ளது.", ar: "تم إلغاء نشر النموذج — عاد مسودة." },
+  "forms.unpublishFail": { en: "We couldn't unpublish this form. Please try again.", ms: "Kami tidak dapat menyahterbit borang ini. Sila cuba lagi.", zh: "无法取消发布此表单。请重试。", ta: "இந்தப் படிவத்தை வெளியீடு நீக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر إلغاء نشر هذا النموذج. يرجى المحاولة مرة أخرى." },
+  "forms.deleteConfirm": { en: "Move \u201c{title}\u201d to the trash? It is hidden from the dashboard and public pages, and you can restore it from the Trash tab.", ms: "Pindahkan \u201c{title}\u201d ke tong sampah? Ia tersembunyi dari dashboard & halaman awam, dan boleh dipulihkan dari tab Tong Sampah.", zh: "将“{title}”移入回收站？它会从仪表板和公开页面隐藏，您可以从回收站恢复。", ta: "\u201c{title}\u201d-ஐ குப்பைக்கு நகர்த்தவா? இது டாஷ்போர்டு மற்றும் பொது பக்கங்களில் மறைக்கப்படும், குப்பைத் தொட்டியிலிருந்து மீட்டெடுக்கலாம்.", ar: "نقل \u201c{title}\u201d إلى سلة المهملات؟ سيختفي من لوحة التحكم والصفحات العامة، ويمكنك استعادته من تبويب سلة المهملات." },
+  "forms.deleted": { en: "Form moved to the trash. You can restore it from the Trash tab.", ms: "Borang dipindahkan ke tong sampah — boleh dipulihkan dari tab Tong Sampah.", zh: "表单已移入回收站——可从回收站恢复。", ta: "படிவம் குப்பைக்கு நகர்த்தப்பட்டது — குப்பைத் தொட்டியிலிருந்து மீட்டெடுக்கலாம்.", ar: "نُقل النموذج إلى سلة المهملات — يمكنك استعادته من تبويب سلة المهملات." },
+  "forms.deleteFail": { en: "We couldn't move this form to the trash. Please try again.", ms: "Kami tidak dapat memindahkan borang ini ke tong sampah. Sila cuba lagi.", zh: "无法将此表单移入回收站。请重试。", ta: "இந்தப் படிவத்தை குப்பைக்கு நகர்த்த முடியவில்லை. மீண்டும் முயற்சிக்கவும்.", ar: "تعذّر نقل هذا النموذج إلى سلة المهملات. يرجى المحاولة مرة أخرى." },
   "forms.selectAll": { en: "Select all", ms: "Pilih semua", zh: "全选", ta: "அனைத்தையும் தேர்ந்தெடு", ar: "تحديد الكل" },
   "forms.nSelected": { en: "{n} selected", ms: "{n} dipilih", zh: "已选 {n} 项", ta: "{n} தேர்ந்தெடுக்கப்பட்டது", ar: "تم اختيار {n}" },
   // the two per-row checkbox labels were hardcoded English

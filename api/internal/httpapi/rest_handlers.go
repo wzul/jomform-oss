@@ -853,6 +853,93 @@ type restForm struct {
 	// NoProductBlockID names the product block to fix when the form has one.
 	// Empty when the form has no product block at all (nothing single to blame).
 	NoProductBlockID string `json:"no_product_block_id,omitempty"`
+
+	// ── One derived buyer state (card t_3d5a8d32) ───────────────────────────
+	//
+	// AcceptingOrders is the ONE answer to "will a buyer be able to submit this
+	// form right now", derived by lifecycle.FormOrders from the live status,
+	// the trash, the schedule window, the entry limit and whether the config
+	// sells anything. Every read surface asks the same function, so the list,
+	// the single-form GET, the public page and MCP cannot disagree about a row.
+	//
+	// It is always present (not omitempty): an absent boolean reads as "false"
+	// to a client, which would turn a healthy form dead, and an agent must be
+	// able to tell "accepting" from "the server did not answer".
+	AcceptingOrders bool `json:"accepting_orders"`
+	// Reason is the English sentence shown to a person when AcceptingOrders is
+	// false. Empty when the form accepts orders.
+	Reason string `json:"reason,omitempty"`
+	// Code is the stable machine token for the refusal (empty when accepting),
+	// so a client keys its own wording off it without parsing prose. The two
+	// product codes are dbstore's publish-warning codes.
+	Code string `json:"code,omitempty"`
+
+	// AvailableEvents is what this row accepts right now, from the forms
+	// lifecycle table (lifecycle.FormsMachine.Available): the dashboard renders
+	// Publish/Unpublish/Delete from THIS list instead of guessing from `status`,
+	// and a guarded action arrives as enabled=false with its reason. Always an
+	// array, never null.
+	AvailableEvents []lifecycle.AvailableEvent `json:"available_events"`
+}
+
+// formOrder answers the derived buyer state for one form, with the facts the row
+// cannot carry: the account's product ids (the purged-product arm) and, ONLY for
+// a form that HAS an entry limit, the recorded order/submission count.
+//
+// The count is read per form only when EntryLimit is set, so the forms list does
+// not become N+1 queries to answer a question no other row asks.
+func (h *RESTHandlers) formOrder(ctx context.Context, f *dbstore.Form) lifecycle.FormOrderState {
+	return h.formOrderWith(ctx, f, h.productIDsForAccount(ctx, f.AccountID))
+}
+
+// formOrderWith is formOrder for a caller that already holds the account's
+// product ids — the forms list reads them ONCE for the whole page instead of
+// once per row.
+func (h *RESTHandlers) formOrderWith(ctx context.Context, f *dbstore.Form, liveProductIDs map[string]bool) lifecycle.FormOrderState {
+	env := lifecycle.FormOrderEnv{
+		LiveProductIDs: liveProductIDs,
+		Entries:        -1,
+		Now:            time.Now(),
+	}
+	if f.EntryLimit != nil && *f.EntryLimit > 0 {
+		env.Entries = h.formEntryCount(ctx, f)
+	}
+	return lifecycle.FormOrders(f, env)
+}
+
+// formEntryCount returns how many orders (payment form) or submissions (response
+// form) the form has recorded, or -1 when the store for that mode is not wired —
+// which lifecycle.FormOrders reads as "unknown", never as zero.
+func (h *RESTHandlers) formEntryCount(ctx context.Context, f *dbstore.Form) int64 {
+	accounts := []string{f.AccountID}
+	if formMode(f) == dbstore.FormModeResponse {
+		if h.Submissions == nil {
+			return -1
+		}
+		n, err := h.Submissions.CountByAccountsForm(ctx, accounts, f.ID)
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	if h.Sales == nil {
+		return -1
+	}
+	n, err := h.Sales.CountByAccountsForm(ctx, accounts, f.ID)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// availableFormEvents is the lifecycle list for one row, never nil (a nil slice
+// marshals to null, which a UI would have to special-case).
+func availableFormEvents(f *dbstore.Form) []lifecycle.AvailableEvent {
+	out := lifecycle.FormsMachine.Available(f)
+	if out == nil {
+		return []lifecycle.AvailableEvent{}
+	}
+	return out
 }
 
 // fmtTime formats a *time.Time as RFC3339, or "" when nil (issue #177).
@@ -977,7 +1064,8 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 	live := h.productIDsForAccount(r.Context(), actx.Account.ID)
 	out := make([]restForm, 0, len(forms))
 	for _, f := range forms {
-		blockID, dead := dbstore.NotAcceptingOrders(f, live)
+		order := h.formOrderWith(r.Context(), f, live)
+		blockID, dead := order.BlockID, !order.Accepting && lifecycle.FormOrderIsProductCode(order.Code)
 		out = append(out, restForm{
 			ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 			IsPrivate: f.Status == dbstore.FormStatusPrivate,
@@ -989,6 +1077,13 @@ func (h *RESTHandlers) listForms(w http.ResponseWriter, r *http.Request, actx *A
 			// reads these two fields.
 			NotAcceptingOrders: dead,
 			NoProductBlockID:   blockID,
+			// Card t_3d5a8d32: ONE derived buyer state, and the actions the
+			// server says this row accepts — the row's buttons are rendered
+			// from available_events, not from `status`.
+			AcceptingOrders: order.Accepting,
+			Reason:          order.Reason,
+			Code:            order.Code,
+			AvailableEvents: availableFormEvents(f),
 		})
 	}
 	respond(w, http.StatusOK, out)
@@ -1007,7 +1102,7 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		chipConfigured = true
 		chipBrandID = b
 	}
-	deadBlockID, dead := dbstore.NotAcceptingOrders(f, h.productIDsForAccount(r.Context(), f.AccountID))
+	order := h.formOrder(r.Context(), f)
 	respond(w, http.StatusOK, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		IsPrivate: f.Status == dbstore.FormStatusPrivate,
@@ -1023,8 +1118,14 @@ func (h *RESTHandlers) getForm(w http.ResponseWriter, r *http.Request, actx *Acc
 		// Card t_983425e5: the SAME signal the list carries, so a page that
 		// loads one form (the builder) and a page that loads the list cannot
 		// disagree about whether this form can take an order.
-		NotAcceptingOrders: dead,
-		NoProductBlockID:   deadBlockID,
+		NotAcceptingOrders: !order.Accepting && lifecycle.FormOrderIsProductCode(order.Code),
+		NoProductBlockID:   order.BlockID,
+		// Card t_3d5a8d32: the one derived buyer state plus the actions this
+		// row accepts.
+		AcceptingOrders: order.Accepting,
+		Reason:          order.Reason,
+		Code:            order.Code,
+		AvailableEvents: availableFormEvents(f),
 	})
 }
 
@@ -1286,10 +1387,18 @@ func (h *RESTHandlers) createForm(w http.ResponseWriter, r *http.Request, actx *
 	}
 	// Issue #92: audit form creation.
 	h.recordEvent(r, actx, h.sessionOwnerID(r), "form.created", map[string]any{"form_id": f.ID, "slug": f.Slug})
+	order := h.formOrder(r.Context(), f)
 	respond(w, http.StatusCreated, restForm{
 		ID: f.ID, Slug: f.Slug, Title: f.Title, Status: f.Status,
 		URL: h.formURLForAccount(r.Context(), actx.Account, f.Slug), UpdatedAt: f.UpdatedAt.UTC().Format(time.RFC3339),
 		Mode: dbstore.FormMode(f),
+		// The SAME derived answer and action list the list/GET return, so a
+		// caller that keeps the create response in hand is not told a
+		// different story about the row it just minted.
+		AcceptingOrders: order.Accepting,
+		Reason:          order.Reason,
+		Code:            order.Code,
+		AvailableEvents: availableFormEvents(f),
 	})
 }
 

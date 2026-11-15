@@ -482,6 +482,32 @@ func Category(config map[string]any) string {
 	return strings.TrimSpace(raw)
 }
 
+// TemplateNeedsMetadata is the ONE sentence a template that may not be
+// published gets, on every door.
+//
+// It is stated here, in the package that owns what a gallery card can show,
+// because three callers need it and only one of them can import it: the
+// lifecycle table's publish guard reads THIS constant, while the REST door must
+// spell it as a literal (errcode.go's message→code table keys on a literal in a
+// non-errcode.go file) and the MCP door cannot import httpapi back. The three
+// spellings are pinned equal by httpapi's
+// TestBulkSkipReasonIsOneSentenceOnBothDoors, so a re-wording cannot detach one
+// door from the others.
+const TemplateNeedsMetadata = "a template needs a category and one description block (Section or text) before it can be published to the gallery"
+
+// TemplateGalleryMetadataMissing reports whether a template's config lacks what
+// the gallery card paints: a category, and one non-empty description block.
+//
+// It is the GO twin of galleryMetadataMissingSQL (dbstore), which is what the
+// write path actually enforces, and it reads the same two values through the
+// same functions the gallery card uses (Category, Description). The SQL remains
+// the authority — this predicate only lets a surface (the lifecycle table's
+// publish guard, an agent asking what it may do) answer before a write is
+// attempted.
+func TemplateGalleryMetadataMissing(config map[string]any) bool {
+	return Category(config) == "" || Description(config) == ""
+}
+
 // block is the subset of a builder block the contract derivation reads.
 type block struct {
 	ID       string `json:"id"`

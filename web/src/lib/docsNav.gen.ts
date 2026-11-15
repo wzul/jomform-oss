@@ -482,8 +482,8 @@ export const DOCS_NAV: DocsNavEntry[] = [
     "section": "Reference",
     "order": 38,
     "kind": "product",
-    "updated": "2026-11-11",
-    "digest": "f8f3bbc4a5de2033",
+    "updated": "2026-11-12",
+    "digest": "2ef68e4d711e2f8e",
     "guides": []
   },
   {

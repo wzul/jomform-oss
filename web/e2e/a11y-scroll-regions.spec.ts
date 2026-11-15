@@ -1,7 +1,7 @@
 // Regression guard: a horizontally scrolling box on a PUBLIC page must be
-// reachable and named for the keyboard — /mcp (1 node) and /design (2 nodes)
-// failed axe `scrollable-region-focusable` (serious) in the sweep behind card
-// t_804040d3.
+// reachable and named for the keyboard — /mcp (1 node) and /design (2 nodes as
+// the gallery stood then; three today, see below) failed axe
+// `scrollable-region-focusable` (serious) in the sweep behind card t_804040d3.
 //
 // THE DEFECT (measured on the parent commit, production build of this tree,
 // 390x844 — the width the sweep used, because the a11y project's own 1280x720
@@ -19,14 +19,27 @@
 //   `role="region"` + a name so the focusable box is announced as a NAMED
 //   region rather than a bare group.
 //
+// A PAGE THAT LEGITIMATELY GAINS A REGION MOVES THE PIN, IN THE SAME CHANGE
+// (card t_07e3b759, rework of PR #1749). The design gallery's forbidden-pairs
+// table is a THIRD horizontally scrolling box on /design at 390px — 529px of
+// table in a 358px box — and it is born `tabIndex={0}` + `role="region"` +
+// named ("Pairings that fail as text"), i.e. it already satisfies the contract
+// this file exists to guard. So the pin below moved 2 → 3 for /design and the
+// box itself was left exactly as it is: raising the count is only safe BECAUSE
+// the region is focusable and named, and dropping either to keep a stale pin
+// would re-open the defect above. Measured on that tree (production build,
+// 390x844, fresh browser state): the census reads three regions, all
+// tabIndex=0 / role=region / named.
+//
 // WHY THIS FILE AND NOT A SOURCE GREP. The question is "which boxes really
 // scroll at this width" — that is layout, and a class name does not answer it
-// (`overflow-x-auto` is on four /design wrappers; only two of them overflow at
-// 390px, and none at 1280px). The census below therefore asks the browser, and
-// every finding is measured off the live element.
+// (`overflow-x-auto` is on six /design boxes in the DOM — the palette table's
+// wrapper renders twice — and only three of them overflow at 390px, and none at
+// 1280px). The census below therefore asks the browser, and every finding is
+// measured off the live element.
 //
 // WHAT MAKES IT BITE — three ways, because "0 violations" is not evidence:
-//   1. the census is pinned by COUNT (1 on /mcp, 2 on /design): a region that
+//   1. the census is pinned by COUNT (1 on /mcp, 3 on /design): a region that
 //      stops being detected fails, so a scan of nothing cannot read as clean;
 //   2. each region is FOCUSED and `document.activeElement` is checked, so a
 //      `tabIndex` attribute that does not actually produce a tab stop fails;
@@ -185,7 +198,10 @@ async function expectFocusableRegions(page: Page, expected: number, where: strin
 
 for (const target of [
   { path: "/mcp", expected: 1, labelKeys: ["mcp.configExample"] as const },
-  { path: "/design", expected: 2, labelKeys: [] as const },
+  // 3, not 2: the forbidden-pairs table (PR #1749) is a third box that really
+  // scrolls at 390px. It is focusable and named, so raising the count cannot
+  // weaken this arm — the per-region assertions below judge all three.
+  { path: "/design", expected: 3, labelKeys: [] as const },
 ] as const) {
   test.describe(`${target.path} scroll regions`, () => {
     test.beforeEach(async ({ page }) => {

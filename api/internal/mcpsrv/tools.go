@@ -115,7 +115,7 @@ func (s *Server) registerTools() {
 	// refusal. The answer comes from the same Go table the write paths apply.
 	addTool(s, &mcp.Tool{
 		Name:        "describe_lifecycle",
-		Description: "Describe an aggregate's declarative lifecycle table: every state, the events it accepts, the state each event lands in, whether a guard can refuse it, and the dashboard label key of a person's action. With id (a sale ref_code) the answer is that sale's current state plus available_events — the events it accepts right now, each with enabled and, when a guard refuses it, the English reason; an entry with an empty label_key is a gateway callback (pay, fail), not an action a caller can invoke. Use this BEFORE proposing or attempting a state change: the same table decides what the write endpoints accept, so an enabled=false event WILL be refused.",
+		Description: "Describe an aggregate's declarative lifecycle table (sales, forms): every state, the events it accepts, the state each event lands in, whether a guard can refuse it, and the dashboard label key of a person's action. With id the answer is that RECORD's current state plus available_events — the events it accepts right now, each with enabled and, when a guard refuses it, the English reason; an entry with an empty label_key is not a person's action (a gateway callback on a sale, or unpublish on a draft). id is a sale ref_code or a form id (a trashed form answers too, so restore/purge are discoverable). For a form the answer also carries accepting_orders (can a buyer submit its page right now) with reason — so you never infer either from a 200. Forms events are publish, unpublish, unlist, make_private, delete, restore and purge. Use this BEFORE proposing or attempting a state change: the same table decides what the write endpoints accept, so an enabled=false event WILL be refused.",
 	}, s.describeLifecycle)
 
 	addTool(s, &mcp.Tool{
@@ -213,11 +213,13 @@ func (s *Server) registerTools() {
 	}, s.bulkProductsMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "list_forms",
-		Description: "List your account's forms: id, slug, title, status (draft|private|published|unlisted), mode (payment|response) and public URL when live. Read-only — use for form id discovery before reading or writing.",
+		Description: "List your account's forms: id, slug, title, status (draft|private|published|unlisted), mode (payment|response), accepting_orders (can a buyer submit the form's page right now) with reason when false, and public URL when live. Read-only — use for form id discovery before reading or writing.",
 	}, s.listForms)
 	addTool(s, &mcp.Tool{
-		Name:        "get_form",
-		Description: "Read ONE form in full (read-only): id, slug, title, status, mode, config — INCLUDING current blocks — theme, registered_fields, public URL, created_at and updated_at. Read the form first, change only the fields you want, then resend the full config via upsert_form. Writing without reading first can destroy existing blocks.",
+		Name: "get_form",
+		Description: "Read ONE form in full (read-only): id, slug, title, status, mode, config — INCLUDING current blocks — theme, registered_fields, public URL, created_at and updated_at. " +
+			"It also answers what you can DO with the form without guessing: state (the lifecycle state: draft|private|published|unlisted|template_draft|template_published|trashed), available_events (the actions it accepts right now, each with enabled and a reason when a guard refuses it) and accepting_orders with reason/code/no_product_block_id (whether a buyer could submit its page right now — a published form with nothing to sell answers false with code no_products, and a form at its entry limit or outside its schedule window answers false with that code). " +
+			"Read the form first, change only the fields you want, then resend the full config via upsert_form. Writing without reading first can destroy existing blocks.",
 	}, s.getForm)
 	addTool(s, &mcp.Tool{
 		Name:        "upsert_form",
@@ -908,7 +910,7 @@ func (s *Server) registerTools() {
 	}, s.getChipSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "set_chip_settings",
-		Description: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only. `mode` is accepted for compatibility with older clients and IGNORED: no payment behaviour depends on it.",
+		Description: "Set the account's CHIP credentials (brand_id + secret_key). Empty secret = keep the existing key. Validated against CHIP before saving. Admin only. A mode field is accepted for compatibility with older clients and IGNORED: no payment behaviour depends on it.",
 	}, s.setChipSettings)
 	addTool(s, &mcp.Tool{
 		Name:        "test_chip_connection",

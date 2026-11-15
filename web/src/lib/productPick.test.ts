@@ -263,14 +263,23 @@ test("the builder reads the ROW set the API's publish guard reads, and renders t
 test("the /forms row shows a not-accepting-orders pill instead of a clean LIVE pill", () => {
   assert.match(
     formsPage,
-    /not_accepting_orders\?: boolean;/,
-    "the /forms row type does not read the API's not_accepting_orders field",
+    /accepting_orders\?: boolean;/,
+    "the /forms row type does not read the API's derived accepting_orders field",
   );
   assert.match(
     formsPage,
-    /f\.not_accepting_orders \? \(/,
-    "the LIVE pill does not check the dead-form signal — a published-but-dead form still looks healthy",
+    /notAccepting \? \(/,
+    "the LIVE pill does not check the derived buyer state — a published-but-dead form still looks healthy",
+  );
+  // Card t_3d5a8d32: the pill's signal is the SERVER's one derived answer, not a
+  // client-side guess from `status` or from the product-only field.
+  assert.match(
+    formsPage,
+    /f\.accepting_orders === false/,
+    "the pill is not driven by the server's accepting_orders",
   );
   assert.match(formsPage, /t\("forms\.notAcceptingOrders"\)/, "the dead-form pill renders no sentence");
-  assert.match(formsPage, /t\("forms\.notAcceptingHint"\)/, "the dead-form pill has no accessible explanation");
+  // The explanation is the server's own sentence when it gave one, so a form
+  // that is closed or at its limit is not explained as a product problem.
+  assert.match(formsPage, /const notAcceptingHint = f\.reason \|\| t\("forms\.notAcceptingHint"\)/, "the pill's explanation is not the server's reason");
 });

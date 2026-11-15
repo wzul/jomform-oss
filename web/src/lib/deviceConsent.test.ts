@@ -262,3 +262,108 @@ test("ONE normalisation rule: this module defines none and the page imports devi
     );
   }
 });
+
+// ─── the card renders from the SERVER'S state machine (card t_c6ca84a7) ─────
+//
+// WHY THIS IS HERE. The card used to decide "may I draw Approve/Deny?" by
+// comparing `state` with the literal "pending". That made the browser a SIXTH
+// reader of a state the API derives from four nullable timestamps — and the API
+// had already stopped agreeing with itself (the consent card asked "approved?"
+// before "expired?", so an approved code whose ten minutes had run out showed a
+// live card with Approve on it while the token endpoint answered expired_token
+// for the same row).
+//
+// The server now sends `available_events`, computed from the same transition
+// table the token endpoint obeys, and this module reads THAT. Below pins:
+//   1. a terminal state can never render a decision, even if its state string
+//      were the word "pending";
+//   2. the payload decides, not the state string;
+//   3. an older API (no available_events) keeps the old behaviour exactly;
+//   4. the PAGE wires to it — a source assertion, because this repo has no JSX
+//      unit runner (see src/lib/profileTab.test.ts).
+
+import {
+  deviceCanDecide,
+  type DeviceEventName,
+} from "./deviceConsent.ts";
+
+function consentWith(patch: Partial<DeviceConsent>): DeviceConsent {
+  return { ...CONSENT, ...patch };
+}
+
+test("the SERVER's available_events decides whether the card draws Approve/Deny", () => {
+  // pending: the person may approve or refuse.
+  assert.equal(
+    deviceCanDecide(consentWith({ state: "pending", available_events: ["poll", "approve", "deny", "expire"] })),
+    true,
+  );
+  // approved-but-not-exchanged: the harness still has to collect it. NOT a
+  // decision any more — the old `state === "pending"` happened to agree here,
+  // but for the wrong reason.
+  assert.equal(
+    deviceCanDecide(consentWith({ state: "approved", available_events: ["poll", "exchange", "expire"] })),
+    false,
+  );
+  // A terminal state offers nothing at all.
+  for (const state of ["denied", "expired", "used"] as const) {
+    assert.equal(
+      deviceCanDecide(consentWith({ state, available_events: [] })),
+      false,
+      `${state} must not render a decision`,
+    );
+  }
+});
+
+test("the PAYLOAD decides, not the state string", () => {
+  // The exact frame the card removes: a state the browser would call "pending"
+  // carrying a table that allows nothing. The server wins.
+  assert.equal(
+    deviceCanDecide(consentWith({ state: "pending", available_events: ["expire"] })),
+    false,
+    "a consent whose table allows no approve/deny must render read-only",
+  );
+  // ...and the mirror: a table that allows both, whatever the string says.
+  assert.equal(
+    deviceCanDecide(consentWith({ state: "expired", available_events: ["approve", "deny"] })),
+    true,
+  );
+  // Half a decision is not a decision: approve without deny renders nothing.
+  assert.equal(deviceCanDecide(consentWith({ state: "pending", available_events: ["approve"] })), false);
+  assert.equal(deviceCanDecide(consentWith({ state: "pending", available_events: ["deny"] })), false);
+  // No consent at all.
+  assert.equal(deviceCanDecide(null), false);
+});
+
+test("an API older than this card keeps the old behaviour exactly", () => {
+  // No `available_events` on the wire: the pre-card rule is the only honest
+  // answer, and it is exactly what the old page did — so a dashboard and an API
+  // deployed a release apart still agree.
+  for (const state of ["pending", "approved", "denied", "expired", "used"] as const) {
+    assert.equal(
+      deviceCanDecide(consentWith({ state, available_events: undefined })),
+      state === "pending",
+      `fallback for ${state}`,
+    );
+  }
+});
+
+test("the page gates the decision on deviceCanDecide, never on the state string", () => {
+  assert.match(PAGE, /import \{[^}]*deviceCanDecide[^}]*\} from "\.\.\/\.\.\/lib\/deviceConsent"/);
+  assert.match(PAGE, /\{deviceConsent && deviceCanDecide\(deviceConsent\) && \(/);
+  assert.match(PAGE, /\{deviceConsent && !deviceCanDecide\(deviceConsent\) && \(/);
+  // The old reader is GONE: a state comparison here would be the sixth opinion
+  // growing back.
+  assert.doesNotMatch(PAGE, /deviceConsent\.state === "pending"/);
+  assert.doesNotMatch(PAGE, /deviceConsent\.state !== "pending"/);
+});
+
+test("every event the module names is one the Go table declares", () => {
+  // The union here is a MIRROR of statemachine.DeviceEvent, and the Go matrix
+  // test is what keeps the table honest. A name that exists only here would be an
+  // event the server can never send.
+  const GO = readFileSync(`${HERE}../../../api/internal/statemachine/devicecode.go`, "utf8");
+  const events: DeviceEventName[] = ["poll", "approve", "deny", "exchange", "expire"];
+  for (const e of events) {
+    assert.match(GO, new RegExp(`DeviceEvent = "${e}"`), `statemachine/devicecode.go no longer declares the event ${e}`);
+  }
+});

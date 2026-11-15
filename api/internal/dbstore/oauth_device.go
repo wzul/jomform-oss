@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/wzul/jomform/api/internal/oauthmeta"
+	"github.com/wzul/jomform/api/internal/statemachine"
 )
 
 // DeviceAuthorisation errors. The token endpoint maps them onto the RFC 8628
@@ -64,6 +65,58 @@ type OAuthDeviceCode struct {
 	DeniedAt     *time.Time
 	ConsumedAt   *time.Time
 	CreatedAt    time.Time
+}
+
+// Facts renders the row's state-bearing columns for the ONE derivation
+// (statemachine.DeviceStateOf). Every reader goes through this — the token
+// endpoint, the consent card and the MCP surface — so the screen and the token
+// endpoint cannot disagree about what state a code is in (card t_c6ca84a7).
+//
+// last_polled_at is not a fact: it records that a client asked, never that
+// anything was decided.
+func (d *OAuthDeviceCode) Facts() statemachine.DeviceFacts {
+	return statemachine.DeviceFacts{
+		ExpiresAt:  d.ExpiresAt,
+		ApprovedAt: d.ApprovedAt,
+		DeniedAt:   d.DeniedAt,
+		ConsumedAt: d.ConsumedAt,
+	}
+}
+
+// StateAt derives the code's state at `now`. Reads take an explicit clock so a
+// test can place the row on either side of its deadline without sleeping.
+func (d *OAuthDeviceCode) StateAt(now time.Time) statemachine.DeviceState {
+	return statemachine.DeviceStateOf(d.Facts(), now)
+}
+
+// State is StateAt(time.Now()), for readers that run on a wall clock.
+func (d *OAuthDeviceCode) State() statemachine.DeviceState {
+	return d.StateAt(time.Now().UTC())
+}
+
+// Status is the agent-readable answer to "is this code still usable": state,
+// usable, remaining seconds and the events the table still allows.
+func (d *OAuthDeviceCode) Status(now time.Time) statemachine.DeviceStatus {
+	return statemachine.DeviceStatusOf(d.Facts(), now)
+}
+
+// deviceErrFor is the ONE place a state-machine answer becomes a store error.
+// The error values are the token endpoint's RFC 8628 vocabulary and are
+// unchanged by card t_c6ca84a7 — only their source moved, from four hand-written
+// switches to the table in statemachine.
+func deviceErrFor(reason statemachine.DeviceReason) error {
+	switch reason {
+	case statemachine.DeviceReasonNone:
+		return nil
+	case statemachine.DeviceReasonAuthorizationPending:
+		return ErrDevicePending
+	case statemachine.DeviceReasonAccessDenied:
+		return ErrDeviceDenied
+	case statemachine.DeviceReasonExpiredToken:
+		return ErrDeviceExpired
+	default:
+		return ErrDeviceCodeInvalid
+	}
 }
 
 // CreateDeviceCode persists a new device authorisation. The row is created
@@ -160,6 +213,11 @@ func (s *OAuthStore) DeviceCodeByUserCode(ctx context.Context, userCodeHash stri
 // issue, and that is re-checked here because this is the last write before a
 // token exists — the caller validating it first is not a reason for the store to
 // trust it.
+//
+// WHETHER APPROVAL IS LEGAL IS THE TABLE'S ANSWER (card t_c6ca84a7), not a
+// switch here: approving twice, approving a denied row and approving an expired
+// one are three cells of statemachine.DeviceTransition, and the same table is
+// what the consent card reads when it decides whether to draw the buttons.
 func (s *OAuthStore) ApproveDeviceCode(ctx context.Context, userCodeHash, userID, accountID string, scope []string) (*OAuthDeviceCode, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -173,17 +231,15 @@ func (s *OAuthStore) ApproveDeviceCode(ctx context.Context, userCodeHash, userID
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case d.ConsumedAt != nil, d.ApprovedAt != nil:
-		return nil, ErrDeviceCodeInvalid
-	case d.DeniedAt != nil:
-		return nil, ErrDeviceDenied
-	case !time.Now().Before(d.ExpiresAt):
-		return nil, ErrDeviceExpired
-	case d.UserID != "" && d.UserID != userID:
+	now := time.Now().UTC()
+	if step := statemachine.DeviceApproveStep(d.Facts(), now); !step.Allowed {
+		return nil, deviceErrFor(step.Answer)
+	}
+	if d.UserID != "" && d.UserID != userID {
 		// Someone else's authorisation: indistinguishable from unknown.
 		return nil, ErrDeviceCodeInvalid
-	case !issuableScope(scope):
+	}
+	if !issuableScope(scope) {
 		return nil, ErrDeviceScopeUnsupported
 	}
 	if _, err := tx.Exec(ctx,
@@ -197,27 +253,52 @@ func (s *OAuthStore) ApproveDeviceCode(ctx context.Context, userCodeHash, userID
 		return nil, err
 	}
 	d.UserID, d.AccountID, d.Scope = userID, accountID, scope
-	now := time.Now().UTC()
 	d.ApprovedAt = &now
 	return d, nil
 }
 
 // DenyDeviceCode records a refusal. The token endpoint then answers
 // access_denied (RFC 8628 §3.5) instead of polling forever.
+//
+// The row is locked and the decision is the table's, exactly like
+// ApproveDeviceCode — the two are now mutually exclusive by the same mechanism
+// instead of by one SQL predicate here and a Go switch there (card t_c6ca84a7).
 func (s *OAuthStore) DenyDeviceCode(ctx context.Context, userCodeHash, userID string) error {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE oauth_device_codes SET denied_at = now()
-		 WHERE user_code_hash = $1 AND consumed_at IS NULL AND approved_at IS NULL
-		   AND denied_at IS NULL AND expires_at > now()
-		   AND (user_id IS NULL OR user_id::text = $2)`,
-		userCodeHash, userID)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	d, err := scanDeviceCode(tx.QueryRow(ctx,
+		`SELECT `+deviceSelectColumnList+` FROM oauth_device_codes
+		 WHERE user_code_hash = $1 FOR UPDATE`, userCodeHash))
+	if err != nil {
+		return err
+	}
+	if step := statemachine.DeviceTransition(d.StateAt(time.Now().UTC()), statemachine.DeviceEventDeny); !step.Allowed {
+		// FROZEN ANSWER (card t_c6ca84a7): a denial that cannot be recorded
+		// has always been ErrDeviceCodeInvalid, whatever the reason — the
+		// table decides whether the row may be denied, not what this one
+		// error value says. The dashboard maps it to 404 "not valid" and the
+		// reason a person sees is the state on the card, which is derived
+		// once and is never this error.
 		return ErrDeviceCodeInvalid
 	}
-	return nil
+	if d.UserID != "" && d.UserID != userID {
+		return ErrDeviceCodeInvalid
+	}
+	tag, err := tx.Exec(ctx,
+		`UPDATE oauth_device_codes SET denied_at = now()
+		 WHERE user_code_hash = $1 AND denied_at IS NULL`, userCodeHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		// Belt on top of the lock: never report a denial that did not land.
+		return ErrDeviceCodeInvalid
+	}
+	return tx.Commit(ctx)
 }
 
 // PollDeviceCode is the token endpoint's side of RFC 8628 §3.4/§3.5. It runs
@@ -233,6 +314,20 @@ func (s *OAuthStore) DenyDeviceCode(ctx context.Context, userCodeHash, userID st
 //
 // Consumption is part of the same locked transaction, so two polls of one
 // approved code cannot both mint a token: the second finds consumed_at set.
+//
+// WHICH OF THOSE HAPPENS IS NOT DECIDED HERE ANY MORE (card t_c6ca84a7). The
+// row's state comes from statemachine.DeviceStateOf, the event from
+// DeviceTokenEvent, and the answer from the table — the same three calls the
+// consent card makes, so the two cannot disagree about whether a code is
+// approved or expired.
+//
+// THE ROW COMES BACK EVEN WHEN THE ANSWER IS A REFUSAL that is about the code
+// itself (pending, slow_down, denied, expired, already spent). The token
+// endpoint uses it to report the state and the seconds left instead of a bare
+// 400. Only an UNKNOWN code and a WRONG client_id return nil — the two cases
+// where there is no code to describe and saying anything would turn the endpoint
+// into an oracle. (A spent code is returned: the caller has already proved it
+// holds it. Its refusal is still ErrDeviceCodeInvalid, unchanged.)
 func (s *OAuthStore) PollDeviceCode(ctx context.Context, deviceHash, clientID string) (*OAuthDeviceCode, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -246,20 +341,16 @@ func (s *OAuthStore) PollDeviceCode(ctx context.Context, deviceHash, clientID st
 	if err != nil {
 		return nil, err
 	}
-	if d.ConsumedAt != nil {
-		return nil, ErrDeviceCodeInvalid
-	}
 	// RFC 8628 §3.4: the token request repeats client_id. A mismatch must not
 	// burn the code, so it is checked before anything is written.
 	if clientID != "" && d.ClientID != clientID {
 		return nil, ErrDeviceCodeInvalid
 	}
-	if d.DeniedAt != nil {
-		return nil, ErrDeviceDenied
-	}
 	now := time.Now().UTC()
-	if !now.Before(d.ExpiresAt) {
-		return nil, ErrDeviceExpired
+	state := d.StateAt(now)
+	step := statemachine.DeviceTransition(state, statemachine.DeviceTokenEvent(state))
+	if !step.Allowed {
+		return d, deviceErrFor(step.Answer)
 	}
 	if d.LastPolledAt != nil {
 		interval := time.Duration(d.IntervalS) * time.Second
@@ -274,10 +365,13 @@ func (s *OAuthStore) PollDeviceCode(ctx context.Context, deviceHash, clientID st
 			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return nil, ErrDeviceSlowDown
+			d.IntervalS += 5
+			d.LastPolledAt = &now
+			return d, ErrDeviceSlowDown
 		}
 	}
-	if d.ApprovedAt == nil {
+	if step.Answer == statemachine.DeviceReasonAuthorizationPending {
+		// Pending: the poll is legal, it records the ask and nothing else.
 		if _, err := tx.Exec(ctx,
 			`UPDATE oauth_device_codes SET last_polled_at = now() WHERE device_hash = $1`,
 			deviceHash); err != nil {
@@ -287,7 +381,7 @@ func (s *OAuthStore) PollDeviceCode(ctx context.Context, deviceHash, clientID st
 			return nil, err
 		}
 		d.LastPolledAt = &now
-		return nil, ErrDevicePending
+		return d, ErrDevicePending
 	}
 	// Approved: consume exactly once, inside the same locked transaction.
 	tag, err := tx.Exec(ctx,
@@ -335,58 +429,20 @@ func issuableScope(scope []string) bool {
 
 // ─── Connected apps ──────────────────────────────────────────────────────────
 
-// ConnectedApp is one live OAuth token pair as the dashboard lists it: which
-// client holds it, what it may do, when it was granted and last used.
-type ConnectedApp struct {
-	ID               string
-	ClientID         string
-	ClientName       string
-	Scope            []string
-	CreatedAt        time.Time
-	LastUsedAt       *time.Time
-	AccessExpiresAt  time.Time
-	RefreshExpiresAt *time.Time
-}
-
-// ConnectedAppsByUser lists every LIVE token pair the user holds — one row per
-// pair, not per client. That difference matters: the scope ladder rotates a
-// pair when it changes, and the user has to be able to see (and revoke) the
-// credential that actually exists.
-//
-// A pair is live while it is not revoked and either its access token or its
-// refresh token can still be used; an access token that merely expired an hour
-// ago belongs to a connection that still works, so it stays listed.
-func (s *OAuthStore) ConnectedAppsByUser(ctx context.Context, userID string) ([]ConnectedApp, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT t.id::text, t.client_id, COALESCE(c.client_name, t.client_id), t.scope,
-       t.created_at, t.last_used_at, t.access_expires_at, t.refresh_expires_at
-FROM oauth_tokens t
-LEFT JOIN oauth_clients c ON c.client_id = t.client_id
-WHERE t.user_id = $1 AND t.revoked_at IS NULL
-  AND (t.access_expires_at > now() OR (t.refresh_expires_at IS NOT NULL AND t.refresh_expires_at > now()))
-ORDER BY t.created_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ConnectedApp
-	for rows.Next() {
-		var a ConnectedApp
-		if err := rows.Scan(&a.ID, &a.ClientID, &a.ClientName, &a.Scope, &a.CreatedAt,
-			&a.LastUsedAt, &a.AccessExpiresAt, &a.RefreshExpiresAt); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
-}
+// ConnectedApp, ConnectedAppsByUser, RotateTokenScope and the token-pair state
+// wiring live in oauth_connected_apps.go (card t_df243a6e): this file is the
+// device flow, and a change to one aggregate must not be a merge conflict in the
+// other.
 
 // RevokeTokenByIDForUser revokes ONE token pair the user owns. Access and
 // refresh live on the same row, so revoking it kills both in a single UPDATE —
 // which is what the Connected-apps "Revoke" button promises.
 //
 // The user_id predicate is the authorization: an id belonging to somebody else
-// matches nothing and reads back as ErrOAuthTokenMissing.
+// matches nothing and reads back as ErrOAuthTokenMissing. `revoked_at IS NULL` is
+// the statement's own idempotency guard, not a re-derivation of the pair's state:
+// the answer is a frozen 404 either way, so there is nothing for the machine to
+// say (card t_df243a6e).
 func (s *OAuthStore) RevokeTokenByIDForUser(ctx context.Context, userID, id string) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE oauth_tokens SET revoked_at = now()
@@ -400,60 +456,9 @@ func (s *OAuthStore) RevokeTokenByIDForUser(ctx context.Context, userID, id stri
 	return nil
 }
 
-// RotateTokenScope replaces a live token pair with a new one carrying a
-// DIFFERENT scope, and returns the scope it replaced (for the audit event).
-//
-// This is the only way a scope ever changes for an existing client. It is done
-// as a rotation, not an edit, because a leaked refresh token must stop working
-// the moment the user believes the credential changed: the old row is revoked
-// in the same transaction that inserts the new one, so there is no window in
-// which both are live.
-//
-// It cannot WIDEN anything by itself — the caller decides the new scope and is
-// responsible for having obtained fresh consent (dashboard confirmation for an
-// upgrade; the scope ladder refuses a widen through the token endpoint).
-func (s *OAuthStore) RotateTokenScope(ctx context.Context, userID, id string, newScope []string, newAccessHash, newRefreshHash string, accessExpires, refreshExpires time.Time) (*OAuthToken, []string, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	old := &OAuthToken{}
-	err = tx.QueryRow(ctx,
-		`SELECT client_id, user_id, COALESCE(account_id::text,''), scope
-		 FROM oauth_tokens
-		 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-		 FOR UPDATE`, id, userID,
-	).Scan(&old.ClientID, &old.UserID, &old.AccountID, &old.Scope)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, ErrOAuthTokenMissing
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE oauth_tokens SET revoked_at = now() WHERE id = $1`, id); err != nil {
-		return nil, nil, err
-	}
-	nt := &OAuthToken{
-		TokenHash: newAccessHash, RefreshHash: newRefreshHash,
-		ClientID: old.ClientID, UserID: old.UserID, AccountID: old.AccountID,
-		Scope: newScope, AccessExpiresAt: accessExpires, RefreshExpiresAt: &refreshExpires,
-	}
-	if err := tx.QueryRow(ctx,
-		`INSERT INTO oauth_tokens (token_hash, refresh_hash, client_id, user_id, account_id, scope,
-		                       access_expires_at, refresh_expires_at)
-		 VALUES ($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,$7,$8)
-		 RETURNING id::text`,
-		nt.TokenHash, nt.RefreshHash, nt.ClientID, nt.UserID, nt.AccountID, nt.Scope,
-		nt.AccessExpiresAt, nt.RefreshExpiresAt).Scan(&nt.ID); err != nil {
-		return nil, nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, err
-	}
-	return nt, old.Scope, nil
-}
+// RotateTokenScope lives in oauth_connected_apps.go — it is the dashboard's
+// connected-app write, and card t_df243a6e moved it next to the reader whose
+// answer gates it.
 
 // ScopeString joins a scope set the way RFC 6749 §3.3 spells it, for audit
 // payloads. Local to this package because every other caller already has the
