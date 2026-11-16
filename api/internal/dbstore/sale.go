@@ -38,6 +38,10 @@ const (
 	// queue (ListAwaitingCapture) and the lifecycle table
 	// (internal/lifecycle) must READ it — a legacy row carrying it is still
 	// capturable — and an unnamed state would invite a second spelling.
+	//
+	// STATUS IS THE AUTHORITY, and this value is the one the duplicate boolean
+	// (Sale.Authorized) is NOT equal to. See Sale.Authorized for the resolution
+	// of the two representations.
 	SaleAuthorized = "authorized"
 )
 
@@ -218,6 +222,19 @@ type Sale struct {
 	InvoiceNo       string
 
 	// Delayed capture (skip_capture) flow.
+	//
+	// CapturedAt is the moment the merchant captured the hold, and it is the
+	// field to ask "was this authorization captured?". Authorized is the legacy
+	// BOOLEAN duplicate of that fact: MarkCaptured is its ONLY writer and always
+	// sets it together with CapturedAt and status = paid.
+	//
+	// It therefore does not mean status = 'authorized' (which no write path
+	// produces), and the two are NOT required to agree — an uncaptured
+	// authorization has authorized = false. When they disagree, STATUS WINS:
+	// LifecycleState() returns Status, the lifecycle table reads its state
+	// through that, and its capture/release guard reads SkipCapture, CapturedAt
+	// and ChipPurchaseID — never this boolean. Pinned by
+	// internal/lifecycle's TestSaleAuthorizedFieldNeverDecidesAState.
 	SkipCapture bool
 	Authorized  bool
 	CapturedAt  *time.Time

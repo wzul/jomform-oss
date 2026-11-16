@@ -573,6 +573,7 @@ else
         PATH="$WORK/bin:$PATH" LOCK_FILE="$CA/build.lock" OUT_DIR="$CA/out" \
         DOCKER_STUB_LOG="$CA/docker.log" \
         PREFLIGHT_LOCK_FILE="$A_LOCK" \
+        PREFLIGHT_HOST_LOCK_FILE="$WORK/host-gate.lock" \
         timeout "$TIMEOUT" bash "$TREE/$BUILD_SHIP" >"$CA/out.log" 2>&1 ) || CA_RC=$?
       t1="$(date +%s)"; a_secs=$((t1 - t0))
       if [ "$CA_RC" -eq 124 ]; then

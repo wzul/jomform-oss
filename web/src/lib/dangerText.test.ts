@@ -109,8 +109,8 @@
 //     reproduce the browser's premultiplied 8-bit blend (t_fea22a0b defect 1) —
 //     see the `shiftToward` note. Both backdrops and both sides are named in the
 //     finding, so the guard never implies a "worst case" it did not judge.
-//   * It still does NOT judge the `bg-red-500/10` failure banners (login,
-//     workspace-picker, magic-link, connect, reset-password). A 500-step fill is
+//   * It still does NOT judge the `bg-red-500/10` failure banners that remain
+//     (workspace-picker, magic-link, connect, reset-password). A 500-step fill is
 //     not one of the LIGHT surfaces above, so those tokens are not attributed to
 //     `bg-red-500` — the alpha composite stays with the browser, and the two
 //     specs that PAINT those banners assert their measured ratio
@@ -118,6 +118,12 @@
 //     an oversight: adding a saturated `bg-red-500` to this list would judge a
 //     status-dot fill as if it were a surface, and nothing on the tree today
 //     needs it. It is pinned as an abstention by a fixture, not left implied.
+//
+//     `/login` is no longer one of them: its banner is now the SOLID token pair
+//     `bg-[var(--jf-danger-bg)]` (the same #fef2f2 as `bg-red-50`, which
+//     `canonicalSurface` already compares it as) with
+//     `text-[var(--jf-danger-text)]`, so it IS judged here — 5.96:1 on its own
+//     tint.
 //   * It does not flag a token whose own class list already paints a surface this
 //     guard cannot resolve — a DARK slab (`bg-slate-900`) or a gradient. Both are
 //     read by the browser gate instead (`a11yDarkSlabCoverage.test.ts` fails the
@@ -455,7 +461,37 @@ function declaresTextColour(t: Tag): boolean {
  * bad set and are never flagged, while `text-red-400`/`500` and `text-sky-600`
  * come out forbidden everywhere — which is exactly the census this card fixed and
  * the rule that stops the next step drifting in.
+ *
+ * THE TOKEN FORM IS IN THE SAME TABLE (`text-[var(--jf-danger-text)]`). A page
+ * that migrates `text-red-700` to the token form would otherwise leave this
+ * family entirely: the table above is keyed on Tailwind class names, the regex
+ * that drives the scan is built from its keys, and the token form matches none of
+ * them — so the converted banner would read as clean without anyone deciding it
+ * was. The entry is DERIVED from the `--jf-*` value this file already parses out
+ * of `globals.css`, by the same `contrast` loop the palette entries use, so a
+ * token whose value moves is re-measured rather than remembered.
+ *
+ * `--jf-danger` is in the table with it because it is the token a converted page
+ * is most likely to reach for by mistake and nothing else sees it: `globals.css`
+ * records it as a MARKER (`#ef4444`, 3.76:1 on white, 3.30:1 on the danger tint),
+ * so as text it fails on every light surface and the entry comes out forbidden
+ * everywhere. `--jf-danger-text` (`#bf000f`) is the sanctioned step and comes out
+ * with an EMPTY bad set here — pinned by a measurement below, not assumed.
  */
+const CSS_TEXT_TOKENS = ["jf-danger", "jf-danger-text"] as const;
+
+/** One `--jf-*` text token, resolved from `globals.css` — never from a memory of its value. */
+function cssTextTokenRgb(name: string): RGB {
+  const rgb = TOKENS.get(name);
+  if (!rgb) {
+    throw new Error(
+      `globals.css no longer declares --${name} as a colour — re-anchor the token form of this guard ` +
+        `(a renamed token is invisible to a rule keyed on the class string)`,
+    );
+  }
+  return rgb;
+}
+
 const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }> = (() => {
   const out: Record<string, { token: string; bad: string[]; note: string }> = {};
   for (const name of PALETTE.keys()) {
@@ -477,11 +513,41 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
         `${contrast(rgb, pageBg).toFixed(2)}:1 on --jf-bg`,
     };
   }
+  for (const cssName of CSS_TEXT_TOKENS) {
+    const rgb = cssTextTokenRgb(cssName);
+    const token = `text-[var(--${cssName})]`;
+    const bad = Object.entries(SURFACES)
+      .filter(([, s]) => contrast(rgb, s) < 4.5)
+      .map(([n]) => n);
+    const hex = `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+    out[token] = {
+      token,
+      bad,
+      note:
+        `${token} (${hex}) is ${contrast(rgb, SURFACES["bg-white"]).toFixed(2)}:1 on white, ` +
+        `${contrast(rgb, SURFACES["bg-red-50"]).toFixed(2)}:1 on --jf-danger-bg and ` +
+        `${contrast(rgb, SURFACES["bg-[var(--jf-bg)]"]).toFixed(2)}:1 on --jf-bg`,
+    };
+  }
   return out;
 })();
 
 /** `text-red-600` -> the `red-600` palette key it measures. */
 const paletteKey = (tok: string) => tok.replace(/^text-/, "");
+
+/** `text-[var(--jf-danger-text)]` -> the `jf-danger-text` token it measures. */
+const cssTokenKey = (tok: string) => /^text-\[var\(--(jf-[a-z0-9-]+)\)\]$/.exec(tok)?.[1];
+
+/** The sRGB a token in this table paints: the TOKEN form from `globals.css`, the rest from the theme. */
+function tokenRgb(tok: string): RGB | null {
+  const cssName = cssTokenKey(tok);
+  if (cssName) return TOKENS.get(cssName) ?? null;
+  return PALETTE.get(paletteKey(tok)) ?? null;
+}
+
+/** The replacement this family recommends for a flagged token (a token-form token is its own family's step). */
+const remedyFor = (tok: string) =>
+  cssTokenKey(tok) ? "use the family's text step (`--jf-danger-text`)" : "use text-red-700 / text-sky-700";
 
 /**
  * The translucent-tint counterpart of `TEXT_TOKENS[tok].bad`: the `bg-<tint>/n`
@@ -589,7 +655,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
         const translucent = translucentSurfacesFor(v, state);
         if (surfaces.length === 0 && translucent.length === 0) continue;
         for (const tok of tokensIn(v, state)) {
-          const rgb = PALETTE.get(paletteKey(tok));
+          const rgb = tokenRgb(tok);
           if (!rgb) continue;
           const bad = TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b));
           // The opaque verdict is not the whole bound. A translucent tint on this
@@ -599,7 +665,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
           if (all.length === 0) continue;
           findings.push(
             `${rel}:${lineAt(e.tag.openIdx)} — <${e.tag.name}> paints ${tok} on ${all.join(" / ")}` +
-              `${state ? ` (in the ${state} state)` : ""}: ${TEXT_TOKENS[tok].note}; use text-red-700 / text-sky-700`,
+              `${state ? ` (in the ${state} state)` : ""}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
           );
         }
       }
@@ -640,7 +706,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
         const [s, bareCls] = splitState(cls);
         if (!bareCls || !LIGHT_SURFACE_RE.test(cls)) return false;
         return tokensIn(v, s).some((tk) => {
-          const rgb = PALETTE.get(paletteKey(tk));
+          const rgb = tokenRgb(tk);
           if (!rgb) return false;
           const opaque = TEXT_TOKENS[tk].bad.filter((b) => surfacesFor(v, s).includes(b));
           const comp = translucentSurfacesFor(v, s).flatMap((c) => translucentFailures(c, rgb));
@@ -702,7 +768,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
     const translucent = surfaceEl
       ? surfaceEl.variants.flatMap((v) => translucentSurfacesFor(v, ""))
       : [];
-    const rgb = PALETTE.get(paletteKey(tok));
+    const rgb = tokenRgb(tok);
     const bad = [
       ...TEXT_TOKENS[tok].bad.filter((b) => surfaces.includes(b)),
       ...(rgb ? translucent.flatMap((cls) => translucentFailures(cls, rgb)) : []),
@@ -714,7 +780,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
         ? "on a surface its layout paints"
         : "on the page background";
     findings.push(
-      `${rel}:${lineAt(idx)} — ${tok} is ${where} ${bad.join(" / ")}: ${TEXT_TOKENS[tok].note}; use text-red-700 / text-sky-700`,
+      `${rel}:${lineAt(idx)} — ${tok} is ${where} ${bad.join(" / ")}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
     );
 
     // (b2) Inherited by an inline descendant that repaints a failing surface.
@@ -738,7 +804,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       if (nearest !== owner) continue;
       const okBehind = TEXT_TOKENS[tok].bad.every((b) => !pageSurfaces.includes(b));
       if (!okBehind) continue;
-      const rgbB2 = PALETTE.get(paletteKey(tok));
+      const rgbB2 = tokenRgb(tok);
       const bad2 = [
         ...TEXT_TOKENS[tok].bad.filter((b) => childSurfaces.includes(b)),
         ...(rgbB2 ? childTranslucent.flatMap((cls) => translucentFailures(cls, rgbB2)) : []),
@@ -746,7 +812,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       if (bad2.length === 0) continue;
       findings.push(
         `${rel}:${lineAt(child.openIdx)} — ${tok} inherited into <${child.name}> which paints ` +
-          `${bad2.join(" / ")}: ${TEXT_TOKENS[tok].note}; use text-red-700 / text-sky-700`,
+          `${bad2.join(" / ")}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
       );
     }
   }
@@ -1017,6 +1083,112 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
       `darker bg-slate-200) must be reported by shape (a), not only by the ancestor ` +
       `shape: ${JSON.stringify(sameElement)}`,
   );
+});
+
+// ─── the TOKEN form: `text-[var(--jf-danger-text)]` ─────────────────────────
+//
+// THE DEFECT this pins. This guard was keyed on Tailwind class names: `TEXT_TOKENS`
+// was built from the installed palette, the scan's `TOKEN_RE` is built from
+// `Object.keys(TEXT_TOKENS)`, and `paletteKey("text-[var(--jf-danger-text)]")` is
+// not a palette key. So a page that migrated its failure banner to the token form
+// left this family ENTIRELY — no finding, no abstention line, nothing deciding it.
+// `/login` is that page: `text-red-700` on `bg-red-500/10` became
+// `text-[var(--jf-danger-text)]` on `bg-[var(--jf-danger-bg)]`.
+//
+// The arms below pin the mechanism in both directions:
+//
+//   A  the token form is in the table at all,          and its colour is the one
+//      `globals.css` declares (not a remembered hex);
+//   B  the converted banner — the /login site verbatim — is NOT reported, because
+//      `--jf-danger-text` (#bf000f) is 5.96:1 on `--jf-danger-bg`;
+//   C  the MARKER token form planted on a failing surface IS reported (it is
+//      3.76:1 on white), with the token-form remedy — this is the planted-token
+//      arm: without it, "A and B" would still hold for a table nothing reads.
+test("the token form of the red family is judged, not skipped", () => {
+  const problems: string[] = [];
+
+  // (A) derived from globals.css, and the derivation is visible in the note.
+  const entry = TEXT_TOKENS["text-[var(--jf-danger-text)]"];
+  if (!entry) {
+    problems.push("text-[var(--jf-danger-text)] is not in TEXT_TOKENS — the token form is invisible to this rule");
+  } else {
+    for (const [what, re] of [
+      ["the CSS value #bf000f", /#bf000f/],
+      ["its ratio on white", /6\.52:1 on white/],
+      ["its ratio on its own tint", /5\.96:1 on --jf-danger-bg/],
+    ] as const) {
+      if (!re.test(entry.note)) problems.push(`the token entry does not name ${what}: ${entry.note}`);
+    }
+    if (entry.bad.length !== 0) {
+      problems.push(
+        `--jf-danger-text came out forbidden on ${JSON.stringify(entry.bad)} — it clears 4.5:1 on every ` +
+          `surface this guard compares, so a converted page would be refused for no measured reason`,
+      );
+    }
+  }
+
+  // (B) the /login banner, verbatim: a solid danger tint with the token's text.
+  const banner = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <p role="alert" className="rounded-lg border border-[var(--jf-danger-border)] bg-[var(--jf-danger-bg)] px-3 py-2 text-jf-sm text-[var(--jf-danger-text)]">',
+      "        Wrong email or password.",
+      "      </p>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (banner.length !== 0) {
+    problems.push(`the CONVERTED /login banner (5.96:1 on its tint) was reported: ${banner.join(" | ")}`);
+  }
+
+  // (C) the planted token on a failing surface must be reported — the assertion
+  //     that fails on the pre-change file, where no token form was in the table.
+  const planted = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <p className="text-[var(--jf-danger)]">Failed</p>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!planted.some((f) => f.includes("text-[var(--jf-danger)]") && f.includes("bg-white"))) {
+    problems.push(
+      `a planted text-[var(--jf-danger)] (3.76:1 on white, the marker token as text) was not reported: ` +
+        `${planted.join(" | ") || "(no findings)"}`,
+    );
+  }
+
+  // …and the same element-declared pairing, so shape (a) judges it too.
+  const sameElement = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <p className="bg-[var(--jf-danger-bg)] text-[var(--jf-danger)]">Failed</p>',
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!sameElement.some((f) => f.includes("text-[var(--jf-danger)]") && f.includes("bg-red-50"))) {
+    problems.push(
+      `the same-element shape stopped reporting text-[var(--jf-danger)] on the danger tint: ` +
+        `${sameElement.join(" | ") || "(no findings)"}`,
+    );
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
 });
 
 // ─── the deliberate abstentions, pinned so they stay deliberate ──────────────

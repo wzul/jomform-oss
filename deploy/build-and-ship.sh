@@ -784,6 +784,16 @@ else
       info "WARNING: systemd-run not found — the pre-build gate runs UNCAPPED (it will take every core it can)"
     fi
   fi
+  # THE RELEASE OWNS THE HOST WHILE IT GATES (card t_7dde1cb4). scripts/preflight.sh
+  # takes one host-wide gate lock in one of two modes: SHARED for a lane/iteration run,
+  # EXCLUSIVE when PREFLIGHT_RELEASE=1. This is the only place that sets it, because this
+  # is the only path that IS a release: lanes finish first, then the release gates alone,
+  # instead of the release sharing every core it needs with an unrelated card's gate
+  # (measured: three 60s a11y timeouts at load average 20.34 on 6 cores, none of them a
+  # violation). Defaulted rather than forced so an operator can still say
+  # PREFLIGHT_RELEASE=0 for a deliberate overlap.
+  export PREFLIGHT_RELEASE="${PREFLIGHT_RELEASE:-1}"
+  info "host gate lock: EXCLUSIVE (PREFLIGHT_RELEASE=$PREFLIGHT_RELEASE) — lane gates stand aside for this release"
   # The argv is passed as SEPARATE arguments after the `bash -c` script, and is
   # expanded HERE (not into a prebuilt array) so a change to GATE_ARGV above is
   # always what runs: deploy/biteproof_build_and_ship_gate.sh case E sabotages the

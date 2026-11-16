@@ -40,6 +40,48 @@ import (
 // event that produced them: a redelivered gateway callback is a legal no-op
 // (Changed=false), so the caller can tell "already done" from "never allowed"
 // without comparing status strings.
+//
+// ─── The duplicated "authorized" state, and which representation wins ────────
+//
+// `sales` records the authorized/uncaptured state in TWO places. This table
+// resolves the duplication rather than pretending it is not there:
+//
+//	status = 'authorized'   admitted by the CHECK in 000002_skip_capture.up.sql.
+//	                        No write path produces it: a skip_capture sale sits
+//	                        in 'pending' (or reads 'paid') until captured. A
+//	                        LEGACY row can carry it, so the edges a merchant may
+//	                        take from it are declared above — capture, confirm,
+//	                        release — and nothing else.
+//	authorized BOOLEAN      written by exactly one statement, dbstore's
+//	                        MarkCaptured, ALWAYS together with
+//	                        captured_at = now() and status = 'paid'. It therefore
+//	                        means "the hold was captured", which is what
+//	                        captured_at already says: it is an ANNOTATION of the
+//	                        past, never a state a machine can be in.
+//
+// THE RESOLUTION: status wins. Apply and Available read the state through
+// dbstore.Sale.LifecycleState(), which returns Status and nothing else, and the
+// capture/release guard reads skip_capture, chip_purchase_id and captured_at —
+// never the boolean. So a row where the two disagree — a legacy
+// status='authorized' with authorized=false, or a hand-edited authorized=true on
+// an uncaptured sale — is answered strictly by its status, and the boolean can
+// neither open nor close an edge.
+//
+// That also means the two fields are NOT required to agree, because they do not
+// mean the same thing: an uncaptured authorization has status pending/paid with
+// authorized=false; a captured one has status paid with authorized=true. The
+// invariant that holds today is narrower and is pinned by tests:
+//
+//	authorized=true ⟹ captured_at IS NOT NULL   (MarkCaptured writes both)
+//	status='authorized' ⟹ nothing about `authorized`
+//
+// Frozen as-is, not fixed, by TestSaleAuthorizedFieldNeverDecidesAState and
+// TestSaleCaptureLegalityComesFromTheGuardNotTheBoolean (this package) and by
+// TestMarkCapturedStampsTheBooleanAndTheTimestampTogether and
+// TestAwaitingCaptureQueueIsNarrowerThanTheTable (the reproduction, also this
+// package, against the real database). Reconciling the two representations —
+// deriving the boolean or dropping the column — is its own change: it touches a
+// column the dashboard and the REST payload read, and this card is additive.
 var SalesMachine = &Machine{
 	Name: "sales",
 	States: map[string]State{

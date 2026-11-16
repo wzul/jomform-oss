@@ -76,6 +76,25 @@ export const LIGHT_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-switch-off", bg: "--jf-surface", ratio: 4.76, min: 3.0, role: "the switch's OFF track (its white knob is 4.76:1 on it)" },
   { fg: "--jf-chart-axis", bg: "--jf-surface", ratio: 2.54, min: 1.0, role: "a chart's axis — lighter than any body text on purpose" },
   { fg: "--jf-chart-grid", bg: "--jf-surface", ratio: 1.16, min: 1.0, role: "a chart's gridline" },
+  // ── the palette-utility replacement steps (card t_5aa6acf6) ───────────────
+  // These exist so a raw Tailwind palette utility can become a NAME instead of
+  // being forbidden with nothing to replace it with. A status callout's edge is
+  // decoration (its tint and its text carry the state), so a border step is held
+  // to the 1.0 floor and listed with the tint it is drawn on as well as the card.
+  { fg: "--jf-danger-border", bg: "--jf-surface", ratio: 1.45, min: 1.0, role: "the edge of a danger callout (red-200)" },
+  { fg: "--jf-danger-border", bg: "--jf-danger-bg", ratio: 1.33, min: 1.0, role: "a danger callout's edge on its own tint" },
+  { fg: "--jf-warning-border", bg: "--jf-surface", ratio: 1.24, min: 1.0, role: "the edge of a warning callout (amber-200)" },
+  { fg: "--jf-warning-border", bg: "--jf-warning-bg", ratio: 1.2, min: 1.0, role: "a warning callout's edge on its own tint" },
+  { fg: "--jf-success-border", bg: "--jf-surface", ratio: 1.28, min: 1.0, role: "the edge of a success callout (emerald-200)" },
+  { fg: "--jf-success-border", bg: "--jf-success-bg", ratio: 1.21, min: 1.0, role: "a success callout's edge on its own tint" },
+  { fg: "--jf-info-border", bg: "--jf-surface", ratio: 1.42, min: 1.0, role: "the edge of an informational callout (blue-200)" },
+  { fg: "--jf-primary-border", bg: "--jf-surface", ratio: 1.49, min: 1.0, role: "the brand-tinted edge of a selected/active chrome element (indigo-200)" },
+  { fg: "--jf-success-text", bg: "--jf-surface", ratio: 5.36, min: 4.5, role: "success text on a card — the step --jf-success cannot be" },
+  { fg: "--jf-success-text", bg: "--jf-success-bg", ratio: 5.09, min: 4.5, role: "success text on its own tint" },
+  { fg: "--jf-neutral-fill", bg: "--jf-surface", ratio: 1.23, min: 1.0, role: "a numbered step badge's fill (slate-200)" },
+  { fg: "--jf-neutral-fill-strong", bg: "--jf-surface", ratio: 1.49, min: 1.0, role: "a skeleton block / a stronger neutral chip (slate-300)" },
+  { fg: "--jf-text-secondary", bg: "--jf-neutral-fill", ratio: 8.36, min: 4.5, role: "the number inside a step badge" },
+  { fg: "--jf-text-secondary", bg: "--jf-neutral-fill-strong", ratio: 6.93, min: 4.5, role: "a label on the stronger neutral fill" },
   // The INK BAND (card t_09f60795): a fixed dark slab on the landing hero, so its
   // ink is held to the band's own two fills rather than to the page.
   { fg: "--jf-ink-text", bg: "--jf-ink", ratio: 17.48, min: 4.5, role: "the ink band's primary text" },
@@ -122,6 +141,24 @@ export const DARK_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-chart-axis", bg: "--jf-surface", ratio: 5.63, min: 1.0, role: "a chart's axis — lighter than any body text on purpose" },
   { fg: "--jf-chart-grid", bg: "--jf-surface", ratio: 1.23, min: 1.0, role: "a chart's gridline" },
   { fg: "--jf-primary-strong", bg: "--jf-surface", ratio: 8.73, min: 4.5, role: "the indigo text step on a dark card" },
+  // The palette-utility replacement steps, re-measured on the DARK surface. A
+  // border step is a dark edge here rather than the light pastel, and the
+  // success TEXT step is the lighter emerald because text moves opposite to the
+  // page; the neutral fills keep the light ladder's two ratios.
+  { fg: "--jf-danger-border", bg: "--jf-surface", ratio: 1.67, min: 1.0, role: "the edge of a danger callout on the dark page" },
+  { fg: "--jf-danger-border", bg: "--jf-danger-bg", ratio: 1.65, min: 1.0, role: "a danger callout's edge on its dark tint" },
+  { fg: "--jf-warning-border", bg: "--jf-surface", ratio: 2.21, min: 1.0, role: "the edge of a warning callout on the dark page" },
+  { fg: "--jf-warning-border", bg: "--jf-warning-bg", ratio: 2.01, min: 1.0, role: "a warning callout's edge on its dark tint" },
+  { fg: "--jf-success-border", bg: "--jf-surface", ratio: 2.35, min: 1.0, role: "the edge of a success callout on the dark page" },
+  { fg: "--jf-success-border", bg: "--jf-success-bg", ratio: 2.06, min: 1.0, role: "a success callout's edge on its dark tint" },
+  { fg: "--jf-info-border", bg: "--jf-surface", ratio: 1.65, min: 1.0, role: "the edge of an informational callout on the dark page" },
+  { fg: "--jf-primary-border", bg: "--jf-surface", ratio: 1.86, min: 1.0, role: "the brand-tinted edge of selected chrome on the dark page" },
+  { fg: "--jf-success-text", bg: "--jf-surface", ratio: 11.42, min: 4.5, role: "success text on a dark card" },
+  { fg: "--jf-success-text", bg: "--jf-success-bg", ratio: 10.02, min: 4.5, role: "success text on its dark tint" },
+  { fg: "--jf-neutral-fill", bg: "--jf-surface", ratio: 1.23, min: 1.0, role: "a numbered step badge's fill on the dark page" },
+  { fg: "--jf-neutral-fill-strong", bg: "--jf-surface", ratio: 1.48, min: 1.0, role: "a skeleton block on the dark page" },
+  { fg: "--jf-text-secondary", bg: "--jf-neutral-fill", ratio: 8.71, min: 4.5, role: "the number inside a dark step badge" },
+  { fg: "--jf-text-secondary", bg: "--jf-neutral-fill-strong", ratio: 7.2, min: 4.5, role: "a label on the dark stronger neutral fill" },
 ];
 
 // ── the pairs that are FORBIDDEN as text (card t_46ae7ad7) ───────────────────
@@ -236,4 +273,29 @@ export const FORBIDDEN_TEXT_PAIRS: readonly ForbiddenPair[] = [
     use: "--jf-warning-text",
     useRatio: 5.02,
   },
+  // The neutral fills added for the palette-utility migration (card t_5aa6acf6)
+  // are the surfaces a step badge and a skeleton paint, and BOTH muted tokens are
+  // short on them: --jf-muted measures 3.92:1 on the slate-200 step and the
+  // tint-safe --jf-muted-on-tint only 4.02:1 on the slate-300 one. A converted
+  // badge must therefore take --jf-text-secondary, which is where these two rows
+  // come from — the migration is the moment someone reaches for the muted token.
+  {
+    fg: "--jf-muted",
+    bg: "--jf-neutral-fill",
+    ratio: 3.92,
+    min: 4.5,
+    why: "muted copy inside a numbered step badge; it is 4.83:1 on a white card and 3.92:1 here",
+    use: "--jf-text-secondary",
+    useRatio: 8.36,
+  },
+  {
+    fg: "--jf-muted-on-tint",
+    bg: "--jf-neutral-fill-strong",
+    ratio: 4.02,
+    min: 4.5,
+    why: "the tint-safe muted token on the STRONGER neutral fill (a skeleton chip): tint-safe is not fill-safe",
+    use: "--jf-text-secondary",
+    useRatio: 6.93,
+  },
 ];
+

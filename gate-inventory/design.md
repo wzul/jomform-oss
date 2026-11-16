@@ -23,3 +23,28 @@ rules a scanner can decide from source alone (a literal, a forbidden utility, a
 missing reduced-motion baseline); the meta-test owns the rules that need the token
 data, the measured contrast pairs, and the shrink-only allowlist whose totals it
 prints. `gate-inventory/web.md` lists the whole meta-test.
+
+## What NEITHER gate owns: raw Tailwind palette colour utilities (card `t_a1af018f`)
+
+`bg-indigo-600` is the same defect as `bg-[#4f46e5]` per `docs/DESIGN-SYSTEM.md` rule 3,
+and **nothing fails it**. Both scanners look for literals — `#rrggbb`, `bg-[#…]`,
+`text-[<n>px]` — and a palette utility is neither, so it passes here and passes
+`designTokens.test.ts`. Measured on this tree (127 shipped `.tsx`): **1,261** palette
+utilities plus **188** `bg-white`/`text-white` across 58 files, against **1,957**
+`--jf-*` colour utilities. The six worst files carry **601** of the 1,449:
+`app/settings/page.tsx` 195, `app/form-settings/page.tsx` 121, `app/profile/page.tsx` 100,
+`app/sales/page.tsx` 89, `app/builder/page.tsx` 86, `app/login/page.tsx` 10.
+
+WHY A RULE HERE WOULD BE THE WRONG FIRST STEP. Those class names are the SUBJECT of
+twelve source guards (`mutedText` resolves an element's background by matching
+`bg-white`/`bg-slate-50`/`bg-slate-100`; `tintedSurface` matches `bg-indigo-50`;
+`dangerText`, `emeraldText`, `ctaContrast`, `statusBadgeArms`, `indigo100Tint`,
+`ghostButtonInk`, `actionFailureTone`, `toastTone`, `sidebarNav`, `tailwindScanScope`).
+A page migrated off those names without its guard's model moving in the same commit does
+not trip the guard — it makes the guard stop SEEING the element, which is the silent-skip
+shape each of them refuses. So the migration is a token-layer change (border steps for
+the four status families, a success text step, a neutral fill step) followed by a page and
+its guards in one diff; a repo-wide "no palette utility" rule seeded with 58 files would
+land that policy before any of it exists, and would red every branch in flight that touches
+a page. `docs/DESIGN-SYSTEM.md` records the measured gap and the order.
+

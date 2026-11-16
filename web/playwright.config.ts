@@ -33,6 +33,29 @@ import { E2E_ORIGIN, E2E_PORT } from "./e2e/auth";
 const PORT = E2E_PORT;
 const BASE = E2E_ORIGIN;
 
+// THE a11Y PROJECT'S PER-TEST BUDGET (card t_7dde1cb4). Playwright's global timeout
+// is 60s, and that is what the axe scans on the heaviest pages actually need on a
+// LOADED host — not on an idle one.
+//
+// MEASURED on this 6-core host, same tree, same gate (`scripts/preflight.sh --only a11y`):
+//   * load1 ~17-21, three lanes' gates running (node/postgres/llm.test/httpapi.test):
+//     229 passed in 5.3m, gate 327s. The three arms the release red-ed on cost
+//     /profile axe arm a11y-profile-tabs.spec.ts:1073 = 17.3s,
+//     /design scroll regions a11y-scroll-regions.spec.ts:196 = 12.6s,
+//     axe: docs-customize a11y.spec.ts:131 = 10.1s — i.e. 3-6x of headroom on 60s.
+//   * load1 34-52, twenty spinners on top of the lanes (the ship's measured 20.34 /
+//     34.11 / 38.79 and worse): the SAME /design arm took 56.0s — 93% of the 60s
+//     budget — and a11y-profile-tabs.spec.ts:1073 blew it (✘ 1.1m, 228 passed,
+//     1 failed, suite 15.6m). So the old budget did not fail on a defect; it failed
+//     on a starved CPU, and the starved scan reported no verdict at all.
+//
+// 240s is ~14x the measured loaded cost of the heaviest arm at load ~20 and ~4x the
+// budget that blew at load ~50. It is a BUDGET, not a licence: a scan that still runs
+// out is reported by scripts/preflight.sh as "TIMED OUT — VERDICT UNKNOWN" (never as
+// a violation, never as a pass), and this project's arms keep their own
+// `test.setTimeout(...)` where they raise it deliberately.
+const A11Y_TEST_TIMEOUT = 240_000;
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 60_000,
@@ -69,7 +92,7 @@ export default defineConfig({
   // the `selftest` gate (check 39) proves every spec belongs to exactly one
   // project, so a rule that stops matching anything cannot pass unnoticed.
   projects: [
-    { name: "a11y", use: { ...devices["Desktop Chrome"] }, testMatch: /a11y.*\.spec\.ts/ },
+    { name: "a11y", timeout: A11Y_TEST_TIMEOUT, use: { ...devices["Desktop Chrome"] }, testMatch: /a11y.*\.spec\.ts/ },
     // `testMatch` regexes are evaluated against the FILE'S FULL PATH (measured on
     // this tree: `^builder-` matched 0 specs while `/builder-` matched the family),
     // so each pattern must name the file it wants where the basename starts, not

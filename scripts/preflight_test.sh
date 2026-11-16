@@ -189,9 +189,10 @@ unset SEL_DIFF SEL_DIFF_LINE SEL_DIFF_SKIPPED SEL_DIFF_FULL SEL_COUNT SEL_DIFF_R
 #      this shell is not enough on its own. Check 16d re-establishes them explicitly,
 #      and deliberately, for the one check that is about inheritance.
 unset PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_N PREFLIGHT_SLOT_LOCK
-unset PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT
+unset PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT PREFLIGHT_HOST_LOCK_FD PREFLIGHT_HOST_MODE
 export -n PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_N PREFLIGHT_SLOT_LOCK 2>/dev/null || true
 export -n PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT 2>/dev/null || true
+export -n PREFLIGHT_HOST_LOCK_FD PREFLIGHT_HOST_MODE 2>/dev/null || true
 # The same reasoning for the environment the runner reads: a caller that ran the
 # whole gate with --log or a result dir set must not change what these checks key on.
 unset PREFLIGHT_LOG
@@ -345,6 +346,11 @@ export PREFLIGHT_WEBSERVER_LOCK_FILE="$SB_STATE/preflight-selftest-webserver.loc
 # the private lock, the next one must fail in seconds rather than sit for the 1800s a
 # real lane is allowed.
 export PREFLIGHT_WEBSERVER_WAIT=120
+# THE HOST-WIDE GATE LOCK IS PINNED HERE TOO, FOR THE SAME REASON (card t_7dde1cb4).
+# Its default is ONE file for the whole host, and a self-test that inherited it would
+# both queue behind a live release's gate and — worse — HOLD it against every lane while
+# its own checks ran. Check 54 asserts it stayed private.
+export PREFLIGHT_HOST_LOCK_FILE="$SB_STATE/preflight-selftest-host-gate.lock"
 # TWO SLOTS, the default, is what these checks measure — and it is the number a
 # real lane gets, so the shape under test is the shipped one.
 
@@ -6183,6 +6189,116 @@ elif out53="$(bash "$LIVE_ROOT/deploy/web_modules_test.sh" 2>&1)"; then
   ok "check 53 — the seeder refuses a symlinked donor at every door (worktree, WM_TEMPLATE, RELEASE_NODE_MODULES, WM_CACHE_DIR, WM_LOCK_CACHE, and a tree's own link) and the suite's own bite re-creates the defect when the rule is neutered: [$(printf '%s\n' "$out53" | sed -n '$p')]"
 else
   bad "check 53 — deploy/web_modules_test.sh FAILED: a symlinked web/node_modules can reach a seeded tree again, and the failure will surface in the NEXT lane as 'read .../web/node_modules: is a directory' in the model-id guard: [$(printf '%s\n' "$out53" | sed -n '/FAIL/p' | tr '\n' '|')]"
+fi
+
+# 54. THE HOST-WIDE GATE LOCK: A RELEASE EXCLUDES LANE GATES (card t_7dde1cb4).
+#
+#     WHY. Shipping v1.46.0 red-ed `a11y` after 1287s on THREE 60s TIMEOUTS — no
+#     violation — while `uptime` read 20.34 / 34.11 / 38.79 on this 6-core host and
+#     three kanban lanes ran their own gates. The gate was starved, not wrong. The fix
+#     is ONE flock taken in two modes: SHARED by a lane run, EXCLUSIVE when
+#     PREFLIGHT_RELEASE=1 (set by deploy/build-and-ship.sh, the only release path).
+#
+#     A LOCK IS A CLAIM ABOUT BEHAVIOUR, SO THIS DRIVES ALL THREE DIRECTIONS on the
+#     private lock path:
+#       (a) LANE vs LANE must OVERLAP — a shared holder must NOT make a lane run wait.
+#           Serialising lanes is the 4h45m-held-for-4m42s-of-work shape the pool
+#           replaced (t_79c0964a), so "the release waits" must not be bought that way;
+#       (b) RELEASE waits for a LANE already gating;
+#       (c) LANE waits for a RELEASE already gating — the direction that actually
+#           keeps the cores free for the release.
+#     Each leg asserts BOTH the wait printed and the wall clock, because a run that
+#     silently skipped the lock would pass a single timing assertion by luck.
+if [ -z "${PREFLIGHT_HOST_LOCK_FILE:-}" ] || [ "$PREFLIGHT_HOST_LOCK_FILE" = "/var/lock/jomform-gate-host.lock" ]; then
+  bad "check 54 — the self-test is using the PRODUCTION host-wide gate lock path (${PREFLIGHT_HOST_LOCK_FILE:-unset}). That is ONE file for the whole host, so this self-test would queue behind a live release's gate and HOLD the lock against every lane while its checks ran. Pin it to a private path, like the pool and the browser-suite lock"
+else
+  s54_lock="$PREFLIGHT_HOST_LOCK_FILE"
+  # $1 = PREFLIGHT_RELEASE (1 exclusive, 0 lane) -> S54_OUT / S54_RC / S54_ELAPSED / S54_WAITED
+  s54_run() {
+    local rel="$1" t0 t1 out rc
+    t0=$(date +%s)
+    out=$(env -u PREFLIGHT_HOST_LOCK_FD -u PREFLIGHT_HOST_MODE \
+          PREFLIGHT_RELEASE="$rel" PREFLIGHT_HOST_WAIT=15 PREFLIGHT_LOCK_WAIT=0 \
+          ./scripts/preflight.sh --only a11y 2>&1)
+    rc=$?
+    t1=$(date +%s)
+    S54_OUT="$out"; S54_RC="$rc"; S54_ELAPSED=$((t1 - t0)); S54_WAITED=0
+    case "$out" in *"another gate run holds the host-wide gate lock"*) S54_WAITED=1 ;; esac
+  }
+  # (a) a LANE run must NOT wait for another LANE (shared + shared).
+  ( flock -s -w 20 "$s54_lock" -c 'sleep 7' ) &
+  s54_holder=$!
+  sleep 1
+  s54_run 0
+  wait "$s54_holder" 2>/dev/null
+  if [ "$S54_WAITED" -ne 0 ]; then
+    bad "check 54 (a) — a LANE run (PREFLIGHT_RELEASE=0) WAITED for another lane holding the host gate lock: lanes no longer overlap each other, so every card's gate is serialised on this host again — the 4h45m-for-4m42s shape the slot pool exists to prevent (rc=$S54_RC)"
+  else
+    ok "check 54 (a) — two LANE runs OVERLAP: with a shared holder on $s54_lock a lane run proceeded immediately (${S54_ELAPSED}s, no wait) — the release's exclusivity is not bought by serialising lanes"
+  fi
+  # (b) a RELEASE run must wait for a lane that is already gating (shared holder).
+  ( flock -s -w 20 "$s54_lock" -c 'sleep 7' ) &
+  s54_holder=$!
+  sleep 1
+  s54_run 1
+  wait "$s54_holder" 2>/dev/null
+  if [ "$S54_WAITED" -eq 0 ] || [ "$S54_ELAPSED" -lt 4 ]; then
+    bad "check 54 (b) — a RELEASE run (PREFLIGHT_RELEASE=1) did NOT wait for the lane holding the gate lock (waited=$S54_WAITED, ${S54_ELAPSED}s, rc=$S54_RC): a release would share the host with a lane's gate, which is the measured starvation this card is about"
+  else
+    case "$S54_OUT" in
+      *"mode release"*)
+        ok "check 54 (b) — a RELEASE run waits for a lane already gating and then takes the lock EXCLUSIVE: it printed the wait, acquired in mode release, and ran only after the holder exited (${S54_ELAPSED}s)"
+        ;;
+      *)
+        bad "check 54 (b) — the release run waited and then said nothing about the mode it took; the acquired-after-the-wait line must name it (mode release), or a reader cannot tell exclusivity from a shared take"
+        ;;
+    esac
+  fi
+  # (c) a LANE run must wait for a release that is already gating (exclusive holder).
+  ( flock -x -w 20 "$s54_lock" -c 'sleep 7' ) &
+  s54_holder=$!
+  sleep 1
+  s54_run 0
+  wait "$s54_holder" 2>/dev/null
+  if [ "$S54_WAITED" -eq 0 ] || [ "$S54_ELAPSED" -lt 4 ]; then
+    bad "check 54 (c) — a LANE run did NOT stand aside for a RELEASE holding the gate lock (waited=$S54_WAITED, ${S54_ELAPSED}s, rc=$S54_RC): lane gates would keep burning the cores the release's a11y/e2e suites need, which is the red this card fixes"
+  elif [ "$S54_RC" -eq 0 ]; then
+    bad "check 54 (c) — the lane run that stood aside for a release exited 0: it took a gate slot on a tree whose prerequisites are missing, so the run measured nothing and must never read as a pass"
+  else
+    ok "check 54 (c) — a LANE run stands aside for a RELEASE: it printed the wait, blocked until the exclusive holder exited (${S54_ELAPSED}s), and then ran its own (here prerequisite-refused) gate with rc=$S54_RC"
+  fi
+  # THE INSTRUMENT'S OWN BITE: with the LOCK TAKE removed from a COPY, leg (c) must
+  # lose the wait — otherwise the waits above could come from anything slow in the
+  # sandbox and this check would be decoration. (Neutering the MODE flag cannot do it:
+  # a shared take and an exclusive take BOTH conflict with an exclusive holder, which
+  # is why the bite is on the take itself.)
+  s54_sab="$SB_STATE/sab54"
+  mkdir -p "$s54_sab/scripts"
+  sed 's/^  host_gate_lock_take$/  :/' "$LIVE_ROOT/scripts/preflight.sh" > "$s54_sab/scripts/preflight.sh"
+  chmod +x "$s54_sab/scripts/preflight.sh"
+  if [ "$(grep -c '^  host_gate_lock_take$' "$s54_sab/scripts/preflight.sh")" -ne 0 ] ||
+     [ "$(grep -c '^  host_gate_lock_take$' "$LIVE_ROOT/scripts/preflight.sh")" -ne 1 ]; then
+    bad "check 54 — the sabotage did not land: the take of the host gate lock is not exactly ONE call line ('  host_gate_lock_take') in scripts/preflight.sh, so a copy with it removed was not built and the bite leg below would prove nothing"
+  else
+    ( flock -x -w 20 "$s54_lock" -c 'sleep 7' ) &
+    s54_holder=$!
+    sleep 1
+    s54_t0=$(date +%s)
+    s54_sab_out=$(env -u PREFLIGHT_HOST_LOCK_FD -u PREFLIGHT_HOST_MODE \
+      PREFLIGHT_RELEASE=1 PREFLIGHT_HOST_WAIT=15 PREFLIGHT_LOCK_WAIT=0 \
+      "$s54_sab/scripts/preflight.sh" --only a11y 2>&1)
+    s54_sab_rc=$?
+    s54_sab_elapsed=$(( $(date +%s) - s54_t0 ))
+    wait "$s54_holder" 2>/dev/null
+    s54_sab_waited=0
+    case "$s54_sab_out" in *"another gate run holds the host-wide gate lock"*) s54_sab_waited=1 ;; esac
+    if [ "$s54_sab_waited" -eq 1 ] || [ "$s54_sab_elapsed" -ge 4 ]; then
+      bad "check 54 SABOTAGE — a copy with the host-lock take REMOVED still waited for the exclusive holder (waited=$s54_sab_waited, ${s54_sab_elapsed}s): the waits in (b)/(c) are not attributable to the lock take, so a green above proves nothing (rc=$s54_sab_rc)"
+    else
+      ok "check 54 SABOTAGE — with the host-lock take removed in a copy, the run proceeds straight past the exclusive holder (${s54_sab_elapsed}s, no wait): the take is what produces the waits in (b)/(c), and this check cannot be green on a runner that never takes the lock"
+    fi
+  fi
+  rm -rf "$s54_sab"
 fi
 
 echo "---"

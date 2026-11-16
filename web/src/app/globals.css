@@ -194,6 +194,42 @@
   --jf-info: #1d4ed8;
   --jf-code-bg: #f4f5f7;
 
+  /* ── the palette-utility replacement steps (card t_5aa6acf6) ─────────────
+     The 1,449 raw Tailwind palette colour utilities still in `web/src` (58
+     files) name colours the app had no token for, which is why they were never
+     converted and no gate could fail them. These are the missing steps, added
+     BEFORE any page is touched so a page card can move a class list and its
+     guard's surface model together instead of inventing a name at the call
+     site. Each value is the Tailwind v4 palette colour the app already paints,
+     converted from oklch to sRGB the way the browser paints it, so a converted
+     class is a rename and not a redesign.
+
+     BORDER STEPS, one per status family. A callout's edge is DECORATION: its
+     tint and its text carry the state, and the border is never the only signal,
+     so these are held to the 1.0 "a tint, a divider" floor rather than 3:1.
+     Measured on `--jf-surface`: danger 1.45, warning 1.24, success 1.28,
+     info 1.42, primary 1.49. They are still a visible edge on their own tint
+     (1.33 / 1.20 / 1.21).
+
+     SUCCESS TEXT. `--jf-success` is a MARKER (white on it is 2.54:1), so it can
+     never be a label; `--jf-success-text` is emerald-700 and measures 5.36:1 on
+     `--jf-surface`, 5.04:1 on `--jf-bg` and 5.09:1 on `--jf-success-bg`.
+
+     NEUTRAL FILLS. The numbered step badge and the skeleton block were painted
+     with slate-200 / slate-300. They are a two-step ladder ABOVE `--jf-surface`
+     (1.23 and 1.49 on white) and a label on them must be `--jf-text-secondary`
+     (6.93:1 on the stronger step): `--jf-muted` is only 3.92:1 on
+     `--jf-neutral-fill`, which is why that pairing is forbidden in
+     `mutedText.test.ts` when the first page consumes these. */
+  --jf-danger-border: #ffc9c9;
+  --jf-warning-border: #fee685;
+  --jf-success-border: #a4f4cf;
+  --jf-info-border: #bedbff;
+  --jf-primary-border: #c6d2ff;
+  --jf-success-text: #007a55;
+  --jf-neutral-fill: #e2e8f0;
+  --jf-neutral-fill-strong: #cad5e2;
+
   /* Type scale. Each step carries its PAIRED line-height, so a primitive sets
      one utility and cannot pick a size without the line box that belongs to it
      (`--jf-text-md` at 16px on the 24px baseline grid). */
@@ -365,6 +401,25 @@
   --jf-bg-soft: #12151a;
   --jf-chart-grid: #262b35;
   --jf-chart-axis: #8b93a1;
+  /* The palette-utility replacement steps (card t_5aa6acf6) move with the theme.
+     A border step is a DARK edge here, not the light pastel: pastel on a
+     #171a21 page glares and stops reading as an edge. Measured against
+     `--jf-surface`: danger 1.67, warning 2.21, success 2.35, info 1.65,
+     primary 1.86; on their own dark tint danger 1.65, warning 2.01,
+     success 2.06. `--jf-success-text` is the LIGHTER emerald step
+     (#6ee7b7, 11.42:1 on the dark surface and 10.02:1 on `--jf-success-bg`),
+     because a text colour and a light page move in opposite directions. The
+     neutral fills keep the LIGHT ladder's two ratios — 1.23 on the surface and
+     1.48 — so a skeleton or a step badge reads at the same weight in both
+     themes. */
+  --jf-danger-border: #6b2b2f;
+  --jf-warning-border: #6f4a10;
+  --jf-success-border: #14614a;
+  --jf-info-border: #1f3f6e;
+  --jf-primary-border: #3b3f86;
+  --jf-success-text: #6ee7b7;
+  --jf-neutral-fill: #262b36;
+  --jf-neutral-fill-strong: #323846;
   /* 8-digit values composite against whatever is behind them, so the alpha is
      halved here rather than the RGB inverted: a dark page needs LESS tint, not a
      light one. */

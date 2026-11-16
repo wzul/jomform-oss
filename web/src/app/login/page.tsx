@@ -471,7 +471,7 @@ export default function Login() {
           <Link
             href="/"
             aria-label={t("login.backToHome")}
-            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-white shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
+            className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--jf-primary)] text-lg font-bold text-[var(--jf-on-color)] shadow-[0_0_24px_rgba(94,106,210,0.45)] transition-opacity hover:opacity-90"
           >
             JF
           </Link>
@@ -506,7 +506,7 @@ export default function Login() {
               opens the password form (mode login/register). Hidden during the
               dedicated 2FA step and in forgot mode. */}
           {step === 1 && mode !== "forgot" && mode !== "magic" && (
-            <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-slate-100 p-0.5">
+            <div className="mb-5 grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface-2)] p-0.5">
               {(["login", "register"] as const).map((m) => (
                 <button
                   key={m}
@@ -519,7 +519,7 @@ export default function Login() {
                   className={`rounded-md py-1.5 text-jf-sm font-medium transition-colors ${
                     mode === m
                       ? "bg-[var(--jf-primary)]/20 text-[var(--jf-primary-on-tint)] shadow-[inset_0_0_0_1px_rgba(113,112,255,0.35)]"
-                      : "text-slate-600 hover:text-slate-800"
+                      : "text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)]"
                   }`}
                 >
                   {m === "login" ? t("login.tabLogin") : t("login.tabRegister")}
@@ -531,14 +531,14 @@ export default function Login() {
           {/* Error banner — only ever a genuine failure (wrong code, wrong
               credentials). NOT used as an instruction banner. */}
           {error && (
-            <p role="alert" className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-jf-sm text-red-700">
+            <p role="alert" className="mb-4 rounded-lg border border-[var(--jf-danger-border)] bg-[var(--jf-danger-bg)] px-3 py-2 text-jf-sm text-[var(--jf-danger-text)]">
               {error}
             </p>
           )}
 
           {done ? (
             <div className="space-y-3">
-              <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-3 text-jf-sm text-green-700">
+              <div className="rounded-lg border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] px-3 py-3 text-jf-sm text-[var(--jf-success-text)]">
                 {mode === "register"
                   ? t("login.registerDone")
                   : mode === "forgot"

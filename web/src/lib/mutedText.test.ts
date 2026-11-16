@@ -39,6 +39,14 @@
 //   "indigo-only": it is the token for muted text on ANY tinted surface, which
 //   is what its name says.
 //
+//   The app's own TOKEN surfaces are in the same model. `--jf-surface-2`
+//   (#f1f2f5, the second-surface token a segmented control's track and a table
+//   head are painted with) is a tint for exactly this purpose: `--jf-muted` is
+//   4.32:1 on it — under the floor — while `--jf-muted-on-tint` is 5.34:1 and
+//   `--jf-text-secondary` 9.21:1. A guard that could not see the token form of a
+//   surface would skip every converted element in silence, so the form is part
+//   of the surface model rather than an exemption from it.
+//
 //   Neither token may be the literal `#9ca3af`: it has no surface in this app
 //   where it clears 4.5:1 (2.54:1 on white is its best case), so there is no
 //   correct place for it and rule 2 below fails on any use at all.
@@ -227,15 +235,16 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
   "text-[var(--jf-muted)]": {
     token: "text-[var(--jf-muted)]",
     // 4.54:1 on #f7f8f8, 4.83:1 white, 4.62:1 slate-50, but 4.41:1 slate-100,
-    // 3.92:1 slate-200, 4.32:1 indigo-50.
-    bad: ["bg-slate-100", "bg-slate-200", "bg-indigo-50"],
-    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100",
+    // 3.92:1 slate-200, 4.32:1 indigo-50 and 4.32:1 `--jf-surface-2` (#f1f2f5).
+    bad: ["bg-slate-100", "bg-slate-200", "bg-indigo-50", "bg-[var(--jf-surface-2)]"],
+    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100 and 4.32:1 on --jf-surface-2",
   },
   "text-[var(--jf-muted-on-tint)]": {
     token: "text-[var(--jf-muted-on-tint)]",
-    // 5.35:1 or better on every light surface in the app; nothing to forbid.
+    // 5.35:1 or better on every light surface in the app — including 5.34:1 on
+    // `--jf-surface-2`, which is why it is the token a converted tint uses.
     bad: [],
-    note: "--jf-muted-on-tint clears 4.5:1 on every surface in the app",
+    note: "--jf-muted-on-tint clears 4.5:1 on every surface in the app (5.34:1 on --jf-surface-2)",
   },
   "text-slate-400": {
     // #90a1b9: 2.63:1 white, 2.47:1 #f7f8f8, 2.40:1 slate-100 — it is short
@@ -288,7 +297,7 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
  * the browser instead.
  */
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface|bg)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg)\)\]|jf-card|jf-input)$/;
 
 /**
  * Canonical surface name for the class that declares it.
@@ -1138,6 +1147,97 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
       `a text-slate-500 on an inner bg-white card PASSES (4.76:1) and must not be reported ` +
         `against the bg-[var(--jf-bg)] region behind it (4.48:1): ${JSON.stringify(innerWhite)}`,
     );
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+// ─── the TOKEN surface form: `bg-[var(--jf-surface-2)]` ─────────────────────
+//
+// THE DEFECT this pins. The surface model above is a list of class STRINGS, so a
+// page that migrates its tint to the token form stops being seen by every rule in
+// this file: `bg-[var(--jf-surface-2)]` was not in `LIGHT_SURFACE_RE`, so the
+// element declared no surface, the muted label inside it inherited nothing to be
+// judged against, and a 4.32:1 pairing read as clean. That is the silent-skip
+// shape this guard exists to refuse, and the reason a page migration and the
+// surface model move in ONE commit.
+//
+// The subject is the /login segmented control's track, verbatim: the track is the
+// surface, the two segment labels are its children, and the unselected one is the
+// muted line. Measured from `globals.css` (#f1f2f5) and the installed theme:
+// `--jf-muted` 4.32:1 (UNDER), `--jf-muted-on-tint` 5.34:1 (clears).
+test("the surface model sees bg-[var(--jf-surface-2)] and refuses --jf-muted on it", () => {
+  const problems: string[] = [];
+  const names = (f: string[]) => f.join(" | ");
+  const track = (labelCls: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="grid grid-cols-2 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface-2)] p-0.5">',
+      `      <button className="${labelCls}">Login</button>`,
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
+  // (1) The inherited shape — the real one: the label is a CHILD of the track.
+  const mutedInherited = findingsIn("fixture.tsx", track("text-jf-sm text-[var(--jf-muted)]"));
+  if (
+    !mutedInherited.some(
+      (f) => f.includes("text-[var(--jf-muted)]") && f.includes("bg-[var(--jf-surface-2)]"),
+    )
+  ) {
+    problems.push(
+      `--jf-muted inside a bg-[var(--jf-surface-2)] track (4.32:1, under AA) was not ` +
+        `attributed to that surface: ${names(mutedInherited)}`,
+    );
+  }
+
+  // (2) The same element declaring both — shape (a) must judge it too, or a class
+  //     list that carries the token surface and the token re-opens the hole.
+  const mutedSameElement = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <p className="bg-[var(--jf-surface-2)] text-[var(--jf-muted)]">a summary</p>',
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!mutedSameElement.some((f) => f.includes("bg-[var(--jf-surface-2)]"))) {
+    problems.push(
+      `the same-element shape stopped reporting --jf-muted on --jf-surface-2: ${names(mutedSameElement)}`,
+    );
+  }
+
+  // (3) The token the page actually uses clears it — 5.34:1 — so the model must
+  //     NOT report the converted label. A guard that flagged every token on every
+  //     tint would refuse the correct fix.
+  const legal = findingsIn("fixture.tsx", track("text-jf-sm text-[var(--jf-muted-on-tint)]"));
+  if (legal.length !== 0) {
+    problems.push(`the CONVERTED label (5.34:1) was reported: ${names(legal)}`);
+  }
+
+  // (4) Control: the model did not simply become "every surface is bad". The same
+  //     inherited shape on white still passes (4.83:1).
+  const onWhite = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="jf-card">',
+      '      <button className="text-[var(--jf-muted)]">Login</button>',
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (onWhite.length !== 0) {
+    problems.push(`a legal --jf-muted label on white was reported: ${names(onWhite)}`);
   }
 
   assert.deepEqual(problems, [], problems.join("\n"));

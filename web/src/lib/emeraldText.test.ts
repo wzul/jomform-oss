@@ -210,11 +210,20 @@ const SURFACES: Record<string, RGB> = (() => {
 })();
 
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100)|bg-\[var\(--jf-(?:surface|bg)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50|emerald-50|emerald-100)|bg-\[var\(--jf-(?:surface|bg|success-bg)\)\]|jf-card|jf-input)$/;
 
-/** `jf-card` / `jf-input` resolve to the same white surface, so compare as one name. */
+/**
+ * `jf-card` / `jf-input` resolve to the same white surface, so compare as one name.
+ *
+ * `bg-[var(--jf-success-bg)]` is the SAME #ecfdf5 as `bg-emerald-50`, and it is
+ * the class a converted success banner paints its tint with — so it canonicalises
+ * to that name and the per-token `bad` sets stay keyed on one entry per surface.
+ * Without the alias the banner declares a background this guard cannot resolve,
+ * shape (b) abstains on it, and the element stops being judged in silence.
+ */
 function canonicalSurface(cls: string): string {
   if (cls === "jf-card" || cls === "jf-input") return "bg-white";
+  if (cls === "bg-[var(--jf-success-bg)]") return "bg-emerald-50";
   return cls;
 }
 
@@ -255,7 +264,40 @@ function declaresTextColour(t: Tag): boolean {
  * flagged, while `text-emerald-500`/`600` come out forbidden everywhere — which is
  * exactly the census this card fixed and the rule that stops the next step
  * drifting in.
+ *
+ * THE TOKEN FORM IS IN THE SAME TABLE (`text-[var(--jf-success-text)]`). This
+ * table is keyed on Tailwind class names and the scan's `TOKEN_RE` is built from
+ * its keys, so a page that migrated `text-emerald-700` to the token form left this
+ * family entirely: no finding, no abstention line, nothing deciding it. `/login`'s
+ * success banner is that page. The entry is DERIVED from the `--jf-*` value this
+ * file already parses out of `globals.css`, by the same `contrast` loop the palette
+ * entries use, so a token whose value moves is re-measured rather than remembered.
+ *
+ * `--jf-success` is in the table with it because `globals.css` records it as a
+ * MARKER (`#10b981`; white on it is 2.54:1) that "can never be a label" — and
+ * nothing else in the suite sees `text-[var(--jf-success)]`. As text it fails on
+ * every light surface, so its entry comes out forbidden everywhere.
+ *
+ * MEASURED, not assumed: `--jf-success-text` (#007a55) clears 4.5:1 on white
+ * (5.36), `--jf-bg` (5.04), `--jf-success-bg` (5.09) and `--jf-surface-2` (4.79),
+ * but it is **4.35:1 on `bg-slate-200`** — so its `bad` set is that one surface,
+ * and a converted success label on a slate-200 chip IS reported. The fixture below
+ * pins both halves.
  */
+const CSS_TEXT_TOKENS = ["jf-success", "jf-success-text"] as const;
+
+/** One `--jf-*` text token, resolved from `globals.css` — never from a memory of its value. */
+function cssTextTokenRgb(name: string): RGB {
+  const rgb = TOKENS.get(name);
+  if (!rgb) {
+    throw new Error(
+      `globals.css no longer declares --${name} as a colour — re-anchor the token form of this guard ` +
+        `(a renamed token is invisible to a rule keyed on the class string)`,
+    );
+  }
+  return rgb;
+}
+
 const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }> = (() => {
   const out: Record<string, { token: string; bad: string[]; note: string }> = {};
   for (const name of PALETTE.keys()) {
@@ -277,8 +319,28 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
         `${contrast(rgb, pageBg).toFixed(2)}:1 on --jf-bg`,
     };
   }
+  for (const cssName of CSS_TEXT_TOKENS) {
+    const rgb = cssTextTokenRgb(cssName);
+    const token = `text-[var(--${cssName})]`;
+    const bad = Object.entries(SURFACES)
+      .filter(([, s]) => contrast(rgb, s) < 4.5)
+      .map(([n]) => n);
+    const hex = `#${rgb.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+    out[token] = {
+      token,
+      bad,
+      note:
+        `${token} (${hex}) is ${contrast(rgb, SURFACES["bg-white"]).toFixed(2)}:1 on white, ` +
+        `${contrast(rgb, SURFACES["bg-emerald-50"]).toFixed(2)}:1 on --jf-success-bg and ` +
+        `${contrast(rgb, SURFACES["bg-slate-200"]).toFixed(2)}:1 on slate-200`,
+    };
+  }
   return out;
 })();
+
+/** The replacement this family recommends for a flagged token. */
+const remedyFor = (tok: string) =>
+  /^text-\[var\(/.test(tok) ? "use the family's text step (`--jf-success-text`)" : "use text-emerald-700";
 
 // ─── rule (a): one class list paints both a surface and a forbidden token ────
 
@@ -342,7 +404,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
           if (bad.length === 0) continue;
           findings.push(
             `${rel}:${lineAt(e.tag.openIdx)} — <${e.tag.name}> paints ${tok} on ${bad.join(" / ")}` +
-              `${state ? ` (in the ${state} state)` : ""}: ${TEXT_TOKENS[tok].note}; use text-emerald-700`,
+              `${state ? ` (in the ${state} state)` : ""}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
           );
         }
       }
@@ -440,7 +502,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
         ? "on a surface its layout paints"
         : "on the page background";
     findings.push(
-      `${rel}:${lineAt(idx)} — ${tok} is ${where} ${bad.join(" / ")}: ${TEXT_TOKENS[tok].note}; use text-emerald-700`,
+      `${rel}:${lineAt(idx)} — ${tok} is ${where} ${bad.join(" / ")}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
     );
 
     // (b2) Inherited by an inline descendant that repaints a failing surface.
@@ -467,7 +529,7 @@ function findingsIn(rel: string, src: string, ambient: string[][] = []): string[
       if (bad2.length === 0) continue;
       findings.push(
         `${rel}:${lineAt(child.openIdx)} — ${tok} inherited into <${child.name}> which paints ` +
-          `${bad2.join(" / ")}: ${TEXT_TOKENS[tok].note}; use text-emerald-700`,
+          `${bad2.join(" / ")}: ${TEXT_TOKENS[tok].note}; ${remedyFor(tok)}`,
       );
     }
   }
@@ -593,6 +655,98 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     `a text-emerald-700 inside an inner bg-slate-200 chip must be attributed to the CHIP ` +
       `(4.351:1, under AA), not to the outermost bg-white wrapper (5.364:1, passing): ${JSON.stringify(nested)}`,
   );
+});
+
+// ─── the TOKEN form: `text-[var(--jf-success-text)]` and its tint ──────────
+//
+// THE DEFECT this pins — two silent skips in one commit:
+//
+//   1. the TEXT table was keyed on Tailwind class names and the scan's `TOKEN_RE`
+//      is built from its keys, so `text-[var(--jf-success-text)]` matched nothing;
+//   2. the SURFACE model did not know `bg-[var(--jf-success-bg)]`, so the banner
+//      declared a background this guard could not resolve and shape (b) abstained.
+//
+// `/login`'s done banner is exactly that pair. Both are now in the models, and the
+// arms below pin that the element is seen rather than skipped:
+//
+//   A  the converted banner (5.09:1 on its own tint) is NOT reported;
+//   B  the same token planted on `bg-slate-200`, where it measures 4.35:1, IS
+//      reported — the planted-token arm, which fails on the pre-change file;
+//   C  `text-[var(--jf-success)]` (the MARKER, 2.54:1 on white) is reported
+//      everywhere, so the family's marker cannot become a label;
+//   D  the surface alias is real: the finding in B names the surface it measured.
+test("the token form of the success family is judged, not skipped", () => {
+  const problems: string[] = [];
+  const banner = (cls: string, surface: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="space-y-3">',
+      `      <div className="${surface} rounded-lg px-3 py-3 text-jf-sm ${cls}">`,
+      "        Check your inbox for the link.",
+      "      </div>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
+  // (A) the /login done banner, verbatim surface + token.
+  const converted = findingsIn(
+    "fixture.tsx",
+    banner(
+      "text-[var(--jf-success-text)]",
+      "border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)]",
+    ),
+  );
+  if (converted.length !== 0) {
+    problems.push(`the CONVERTED /login done banner (5.09:1) was reported: ${converted.join(" | ")}`);
+  }
+
+  // (B) the planted token on a genuinely failing surface.
+  const planted = findingsIn(
+    "fixture.tsx",
+    banner("text-[var(--jf-success-text)]", "bg-slate-200"),
+  );
+  if (!planted.some((f) => f.includes("text-[var(--jf-success-text)]") && f.includes("bg-slate-200"))) {
+    problems.push(
+      `a planted text-[var(--jf-success-text)] on bg-slate-200 (4.35:1, under AA) was not reported: ` +
+        `${planted.join(" | ") || "(no findings)"}`,
+    );
+  }
+  // …and the ratio in the finding is the one measured from globals.css, not a guess.
+  if (!planted.some((f) => f.includes("4.35:1 on slate-200"))) {
+    problems.push(`the finding does not name the measured 4.35:1 on slate-200: ${planted.join(" | ")}`);
+  }
+
+  // (C) the marker token as text, and (D) it is judged on a surface the model knows.
+  const marker = findingsIn("fixture.tsx", banner("text-[var(--jf-success)]", "bg-emerald-50"));
+  if (!marker.some((f) => f.includes("text-[var(--jf-success)]") && f.includes("bg-emerald-50"))) {
+    problems.push(
+      `text-[var(--jf-success)] (the marker, 2.54:1 on white) on bg-emerald-50 was not reported: ` +
+        `${marker.join(" | ") || "(no findings)"}`,
+    );
+  }
+
+  // (E) THE ALIAS ITSELF. `bg-[var(--jf-success-bg)]` must be READ as the surface it
+  //     paints (#ecfdf5 = `bg-emerald-50`), not abstained on as an unreadable
+  //     background — otherwise the alias above is decoration and the converted
+  //     banner would be skipped the moment its text fails. `text-emerald-600`
+  //     (3.47:1 on that tint) is the probe: it must be reported THROUGH the token
+  //     surface, with the surface named as `bg-emerald-50`.
+  const throughAlias = findingsIn(
+    "fixture.tsx",
+    banner("text-emerald-600", "bg-[var(--jf-success-bg)]"),
+  );
+  if (!throughAlias.some((f) => f.includes("text-emerald-600") && f.includes("bg-emerald-50"))) {
+    problems.push(
+      `a text-emerald-600 on bg-[var(--jf-success-bg)] (3.47:1) was not judged: the token surface is ` +
+        `not in the surface model, so the element is abstained on instead of measured: ` +
+        `${throughAlias.join(" | ") || "(no findings)"}`,
+    );
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
 });
 
 // ─── the inherited shape, against a real defect this rule is FOR ─────────────

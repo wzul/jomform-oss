@@ -87,3 +87,51 @@ A length NO step names (`w-[720px]`, a decorative blur) is fine and stays.
 
 Both lists are debt, never a parking space. A new deviation is fixed or justified on
 the line, in the same commit.
+
+## The half of rule 3 that nothing enforces yet
+
+Rule 3 says a raw Tailwind colour is the same defect as a hex. **No gate catches that
+half.** Both gates scan for LITERALS — a `#rrggbb`, a `bg-[#fff]`, a `text-[<n>px]` — and
+`bg-indigo-600` is not a literal, so it passes both. That is not a theory: measured on
+this tree (127 shipped `.tsx`, `scripts/design-guard.py` PASS, `designTokens.test.ts`
+printing `raw colour: 0 finding(s)`):
+
+| what | measured |
+|---|---|
+| raw hex in CODE (comments stripped, exemptions honoured) | **0** |
+| arbitrary colour utilities (`bg-[#…]`) | **0** |
+| `[<n>px]` that a scale step already names | **7** in 4 files — allowlisted in `ARBITRARY_PX_ALLOWLIST` |
+| raw Tailwind palette colour utilities | **1,261** in 58 files |
+| `bg-white` / `text-white` | **188** |
+| `--jf-*` colour utilities (the token form) | **1,957** |
+
+The concentration is real and it is where you would guess: `app/settings/page.tsx` 195
+(palette + white/black), `app/form-settings/page.tsx` 121, `app/profile/page.tsx` 100,
+`app/sales/page.tsx` 89, `app/builder/page.tsx` 86, `app/login/page.tsx` 10 — **601 of the
+1,449, in six of the 58 files.** Every one of them is a colour decision a token already
+covers or should.
+
+**Why this is not a find-and-replace, and must not be done as one.** The palette class
+NAMES are load-bearing for twelve source guards, which read them as their subject:
+`mutedText` (its surface table resolves an element's background by matching
+`bg-white` / `bg-slate-50` / `bg-slate-100`), `tintedSurface` (`bg-indigo-50`), `dangerText`
+(`bg-red-50`, `text-red-700`), `emeraldText` (`bg-emerald-50`, `text-emerald-700`),
+`ctaContrast` (`bg-white` / `text-white`), `statusBadgeArms` (`bg-amber-50`, `bg-blue-50`,
+`text-amber-700`), `indigo100Tint` (`bg-indigo-100` must keep a large-scale text step),
+`ghostButtonInk`, `actionFailureTone`, `toastTone`, `sidebarNav`, `tailwindScanScope`.
+Rewriting a page's palette classes without rewriting those models does not make the guards
+stricter or looser — it makes them stop SEEING the element, which is the silent-skip shape
+they were each written to refuse. So a migration lands as one card per family or per page,
+moving the page AND the guard's model in the same commit, with the measured pair for the
+replacement quoted in the PR.
+
+**What a family needs before it can be migrated.** The neutral ladder is already there
+(`--jf-surface` / `--jf-surface-2` / `--jf-bg-soft` / `--jf-border` / `--jf-border-strong`)
+and so are the four status families' `bg` + `text` + `marker` steps. Missing: a **border**
+step per status family (`red-200`, `amber-200`, `emerald-200`, `blue-200`, `indigo-200`),
+a **text** step for success (`emerald-700`, which is 5.36:1 on white and has no token), and
+a neutral **fill** step for `slate-200` / `slate-300` (step badges, skeletons). Each of those
+is a `globals.css` value plus a light and dark measured pair — the same shape as every token
+above, and the reason the migration is a token-layer change first and a class-list change
+second.
+

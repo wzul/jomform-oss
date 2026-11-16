@@ -29,6 +29,36 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    // Card t_23ce6fe2: the sale state machine as a user-facing fact. The table
+    // lives in api/internal/lifecycle; this section is what /docs tells a
+    // reader (and what an agent's owner can point at) about it.
+    id: "sale-states",
+    title: "Sale states and the actions they allow",
+    icon: "🔀",
+    body: [
+      "A sale is in one state: **pending**, **authorized**, **paid**, **confirmed**, **refunded**, **cancelled** or **failed**.",
+      "Which action moves it is one table in the API, not a rule per screen, so the dashboard, the API and an agent cannot disagree.",
+      {
+        list: [
+          "**pay** — the gateway reported the purchase paid: pending → paid. A redelivered callback is a no-op, not a second receipt.",
+          "**capture** — you capture a skip-capture authorisation: pending, authorized, paid or confirmed → paid, and only while the authorisation is uncaptured.",
+          "**release** — you void the authorisation so the card is never charged: → cancelled, and only while it is uncaptured.",
+          "**confirm** — you confirm the sale (a bank transfer, or a settled card payment): pending, authorized or paid → confirmed.",
+          "**refund** — the money goes back: paid or confirmed → refunded once the whole balance is returned. A partial refund keeps the state.",
+          "**fail** — the payment failed, or the purchase could not be started: pending → failed.",
+        ],
+      },
+      "**refunded**, **cancelled** and **failed** are terminal: the only move they accept repeats the event that produced them.",
+      "The dashboard does not guess: **available_events** on `GET /v1/rest/sales` lists the actions a sale accepts, each with `enabled` and a **reason** when refused.",
+      {
+        tip: "Ask first with `describe_lifecycle`: `aggregate: \"sales\"` returns the table, `id` returns a sale's `available_events`. Refusals carry `lifecycle.illegalTransition` or `lifecycle.transitionRefused`.",
+      },
+      {
+        warn: "`status: \"authorized\"` is not the `authorized` boolean. The boolean marks a captured hold; no write path sets the status. **The status wins** — it decides every action.",
+      },
+    ],
+  },
+  {
     id: "combined-list",
     title: "One list for sales and responses",
     icon: "🧾",

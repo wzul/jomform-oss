@@ -254,6 +254,17 @@
 #   DEFAULT (flag absent) is a full run. See the PATH-AWARE SELECTION section
 #   below for the dependency rules and the fail-closed properties.
 #
+#   PREFLIGHT_RELEASE=1 makes this a RELEASE run for the host-wide gate lock: it
+#   takes /var/lock/jomform-gate-host.lock EXCLUSIVE, so lane/iteration runs finish
+#   first and no lane's gate shares the cores while a release gates. Unset (or 0)
+#   is a LANE run, which takes the same lock SHARED — lanes still overlap each
+#   other as the slot pool allows. deploy/build-and-ship.sh is the only caller that
+#   sets it. Without it, a release shared this 6-core host with three lanes' gates
+#   and `a11y` red-ed on three 60s timeouts at load average 20.34, none of them a
+#   violation (card t_7dde1cb4). PREFLIGHT_HOST_WAIT (default 7200s) bounds the
+#   wait; PREFLIGHT_HOST_LOCK_FILE overrides the path (a self-test must pin it
+#   private, or it would hold the host lock against live gates).
+#
 #   PREFLIGHT_TEST_PACKAGES="<import paths>" is the MERGE TRAIN's seam, not a
 #   routine knob: it replaces the api test gate's `./...` with the packages a
 #   batch can affect (changed + importers). It is REFUSED on a run that would
@@ -2017,6 +2028,104 @@ preflight_slot_held_by_ancestor() {
   return 1
 }
 
+# ---- HOST-WIDE GATE EXCLUSIVITY: A RELEASE EXCLUDES EVERY LANE GATE --------
+#
+# WHY THIS EXISTS (card t_7dde1cb4). Measured while shipping v1.46.0: the ship's
+# `a11y` gate failed after 1287s with THREE 60s TIMEOUTS and no violation, while
+# `uptime` read 20.34 / 34.11 / 38.79 on this 6-core host and three kanban lanes ran
+# their own gates (`node`, `llm.test`, `httpapi.test`, postgres). The same three
+# specs pass alone. The gate was STARVED, not wrong — and the red record then has to
+# be paid for again, because a failed gate is never reusable.
+#
+# THE SLOT POOL DOES NOT COVER THIS. It caps how many preflight runs overlap on the
+# host; it does not know which of them is the release, so a release could share every
+# core it needs with a lane's iteration gate.
+#
+# THE RULE: ONE lock file, TWO modes.
+#   * a RELEASE run (`PREFLIGHT_RELEASE=1`, exported by deploy/build-and-ship.sh)
+#     takes it EXCLUSIVE for its whole gate body: no lane gate runs while a release
+#     gates, and a release that arrives while lanes are gating waits for them to
+#     finish instead of racing them;
+#   * a LANE/iteration run takes it SHARED: lanes still overlap EACH OTHER exactly as
+#     PREFLIGHT_SLOT_COUNT allows — that is what the pool is for — but every one of
+#     them stands aside for a release.
+# flock's shared/exclusive modes ARE that rule (readers/writer). A single exclusive
+# mutex would have serialised lanes against each other too, which is the
+# 4h45m-held-for-4m42s-of-work shape the pool replaced (card t_79c0964a).
+#
+# ORDER: host lock FIRST, then the pool slot — in every mode — so the two locks are
+# always taken in one order and cannot deadlock. A release waits for the lock WITHOUT
+# holding a slot, so it never parks a slot (and half the pool) while lanes drain.
+#
+# WHY A LOCK AND NOT "THE DISPATCHER PAUSES LANES": the dispatcher runs on another
+# host and owns no notion of this host's CPU, so a rule there could not bind a `go
+# test` a lane started by hand, and it would have to be re-stated for every new lane.
+# flock is enforced by the kernel, is released automatically when its holder dies
+# (crash included), and is visible to whoever is standing at the terminal.
+#
+# WHAT IT CANNOT DO, SAID PLAINLY: a lock only binds callers that take it. A lane
+# that runs `go test ./...` by hand does not, so a release can still meet uncooperative
+# load. That is what the a11y project's own per-test budget (`timeout` in
+# `web/playwright.config.ts`) and the honest TIMED-OUT verdict below are for: the gate
+# survives moderate load, and beyond that it reports "timed out, verdict unknown"
+# rather than a contrast violation nobody measured.
+PREFLIGHT_HOST_LOCK_FILE="${PREFLIGHT_HOST_LOCK_FILE:-/var/lock/jomform-gate-host.lock}"
+# HOW LONG A RUN WAITS FOR ITS MODE. Long enough for the slowest thing it can wait
+# on: a lane waits for a release's whole gate body (measured ~26 min median), a
+# release waits for the lanes that were already gating (minutes each).
+PREFLIGHT_HOST_WAIT="${PREFLIGHT_HOST_WAIT:-7200}"
+PREFLIGHT_HOST_LOCK_FD="${PREFLIGHT_HOST_LOCK_FD:-}"
+PREFLIGHT_HOST_MODE="${PREFLIGHT_HOST_MODE:-lane}"
+
+# Take the host-wide gate lock in this run's mode. Sets PREFLIGHT_HOST_LOCK_FD.
+# Returns 0 held · 1 cannot take it (missing flock / unreadable file or bound) ·
+# 2 waited out PREFLIGHT_HOST_WAIT. The caller turns 2 into exit 76, so "the host
+# never freed up" is distinguishable from "the code is broken".
+host_gate_lock_take() {
+  local mode="lane" flag="-s" fd
+  if [ "${PREFLIGHT_RELEASE:-0}" = "1" ]; then mode="release"; flag="-x"; fi
+  PREFLIGHT_HOST_MODE="$mode"
+  case "$PREFLIGHT_HOST_WAIT" in
+    ''|*[!0-9]*)
+      echo "preflight: PREFLIGHT_HOST_WAIT=[$PREFLIGHT_HOST_WAIT] is not a whole number of seconds — refusing to gate without a readable bound on the host-wide lock." >&2
+      return 1 ;;
+  esac
+  # NO SILENT FALLBACK, the same rule as the pool and the browser-suite lock: without
+  # flock this run cannot tell whether a release is gating, and "probably alone" is
+  # the assumption that produced the false red this lock removes.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "preflight: flock is missing — the host-wide gate lock cannot be taken, so this run cannot tell whether a release is gating on this host. Install util-linux (the slot pool needs it too)." >&2
+    return 1
+  fi
+  if ! exec {fd}>>"$PREFLIGHT_HOST_LOCK_FILE"; then
+    echo "preflight: cannot open the host-wide gate lock $PREFLIGHT_HOST_LOCK_FILE — refusing to gate without it." >&2
+    return 1
+  fi
+  if ! flock -o -n "$flag" "$fd" 2>/dev/null; then
+    echo "  host:   another gate run holds the host-wide gate lock ($PREFLIGHT_HOST_LOCK_FILE) — waiting up to ${PREFLIGHT_HOST_WAIT}s for it."
+    echo "          (a release takes it EXCLUSIVE: lanes finish first, then the release gates alone; lanes share it with each other)"
+    if ! flock -o -w "$PREFLIGHT_HOST_WAIT" -E 76 "$flag" "$fd" 2>/dev/null; then
+      exec {fd}>&-
+      echo "preflight: could not take the host-wide gate lock within ${PREFLIGHT_HOST_WAIT}s — NOTHING was built or tested." >&2
+      echo "preflight: this is a WAIT-OUT, not a defect in the tree: re-run when the holder finishes, or raise" >&2
+      echo "preflight: PREFLIGHT_HOST_WAIT=<seconds>. The holder is whichever release/lane gate took it; its own" >&2
+      echo "preflight: output names itself, and flock releases the file the moment that process exits (crash included)." >&2
+      return 2
+    fi
+    echo "  host:   host-wide gate lock acquired after the wait ($PREFLIGHT_HOST_LOCK_FILE, mode $mode)"
+  fi
+  PREFLIGHT_HOST_LOCK_FD="$fd"
+  export PREFLIGHT_HOST_LOCK_FD PREFLIGHT_HOST_MODE
+  return 0
+}
+
+if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && [ -z "${PREFLIGHT_HOST_LOCK_FD:-}" ]; then
+  host_gate_lock_take
+  _host_lock_rc=$?
+  if [ "$_host_lock_rc" -eq 2 ]; then exit 76; fi
+  if [ "$_host_lock_rc" -ne 0 ]; then exit 1; fi
+fi
+
 if [ "${_PREFLIGHT_LOCKED:-}" != "1" ] && preflight_slot_held_by_ancestor; then
   # ALREADY INSIDE THE POOL — a nested invocation that inherited an ancestor's
   # slot. Running the gates here is correct (they are inside the slot that ancestor
@@ -2848,9 +2957,17 @@ _budget_secs() {  # "<num><unit>" -> seconds; 0 when it cannot be read
   esac
 }
 
-# gate_failure_kind <log> <elapsed_s> <budget_s> -> timeout | crash | failure
+# gate_failure_kind <log> <elapsed_s> <budget_s> -> scan-timeout | timeout | crash | failure
 gate_failure_kind() {
   local log="$1" secs="$2" budget="$3"
+  # A BROWSER SUITE THAT RAN OUT OF ITS PER-TEST BUDGET (card t_7dde1cb4). Playwright
+  # reports it as `Test timeout of <n>ms exceeded` — a test was KILLED while it was
+  # still running, so there is NO verdict: no contrast value was measured and no rule
+  # was reported. Read as a plain failure it looks exactly like a violation finding,
+  # which is how three starved scans on a load-20 host were chased as accessibility
+  # defects. This kind is checked FIRST, because a scan timeout inside a suite that
+  # also printed other output must not be classified by whatever else is in the log.
+  if grep -qE 'Test timeout of [0-9]+ms exceeded' "$log" 2>/dev/null; then echo scan-timeout; return; fi
   # Go's own alarm fired. It names the test it happened to be in, which is NOT
   # the culprit — the budget is.
   if grep -qE 'panic: test timed out after' "$log" 2>/dev/null; then echo timeout; return; fi
@@ -3173,6 +3290,17 @@ gate_record_fail_exit() {  # $1 = gate, $2 = label, $3 = t0, $4 = t1, $5 = rc, $
   # under this key and may be finalised (see gr_record_final).
   gr_record_final
   case "$_kind" in
+    scan-timeout)
+      echo "PREFLIGHT FAIL: gate '$gate' ($label) TIMED OUT after ${_secs}s — VERDICT UNKNOWN" >&2
+      echo "  A test (an axe scan, on the a11y gate) was still running when playwright's per-test budget" >&2
+      echo "  expired. There is NO accessibility verdict for it: this is NOT a contrast/ARIA violation" >&2
+      echo "  finding, and it is NOT a pass — the page was never measured. The usual cause is a starved" >&2
+      echo "  host (card t_7dde1cb4 measured 60s timeouts at load average 20.34 on 6 cores). A release now" >&2
+      echo "  takes the host-wide gate lock EXCLUSIVE (PREFLIGHT_RELEASE=1) so lane gates finish first;" >&2
+      echo "  if this still fires, raise the budget — the a11y project's \`timeout\` in" >&2
+      echo "  web/playwright.config.ts — or re-run when the host is quiet. Do NOT read this as a" >&2
+      echo "  broken page." >&2
+      ;;
     timeout)
       echo "PREFLIGHT FAIL: gate '$gate' ($label) ran out of its TIME BUDGET after ${_secs}s" >&2
       echo "  This is a TIMEOUT, not a failed assertion: the gate was killed, so its output above is the" >&2
@@ -3938,8 +4066,12 @@ run speccounts "cd web && playwright test --project={a11y,feature-builder,featur
 # has no suite lock (the self-test's sabotage leg removes the take) still runs the suite.
 a11y_suite_once() {  # $1 = npm script, $2 = log file, $3 = port, rest = spec paths -> npm's exit status
   local script="$1" log="$2" port="$3"; shift 3
-  if [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ]; then
+  if [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ] && [ -n "${PREFLIGHT_HOST_LOCK_FD:-}" ]; then
+    A11Y_PORT="$port" npm run "$script" -- "$@" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- {PREFLIGHT_HOST_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- {PREFLIGHT_HOST_LOCK_FD}>&-
+  elif [ -n "$PREFLIGHT_WEBSERVER_LOCK_FD" ]; then
     A11Y_PORT="$port" npm run "$script" -- "$@" {PREFLIGHT_WEBSERVER_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_WEBSERVER_LOCK_FD}>&-
+  elif [ -n "${PREFLIGHT_HOST_LOCK_FD:-}" ]; then
+    A11Y_PORT="$port" npm run "$script" -- "$@" {PREFLIGHT_HOST_LOCK_FD}>&- 2>&1 | tee "$log" {PREFLIGHT_HOST_LOCK_FD}>&-
   else
     A11Y_PORT="$port" npm run "$script" -- "$@" 2>&1 | tee "$log"
   fi
@@ -3964,6 +4096,14 @@ a11y_gate_run() {
     fi
     log="$(mktemp "${TMPDIR:-/tmp}/preflight-$name-claim.XXXXXX")"
     if a11y_suite_once "$script" "$log" "$port" "$@"; then rc=0; else rc=$?; fi
+    # A TIMEOUT IS NOT A PASS, EVEN IF THE RUNNER EXITED 0 (card t_7dde1cb4). The suite
+    # is green only when not ONE test ran out of its per-test budget: a killed scan has
+    # no verdict, and a summary line that counts it as anything other than a failure
+    # would turn "we never measured this page" into "this page is accessible".
+    if [ "$rc" -eq 0 ] && grep -qE 'Test timeout of [0-9]+ms exceeded' "$log" 2>/dev/null; then
+      echo "$name: the suite exited 0 but its output carries a per-test TIMEOUT — a timed-out scan is NOT a pass (no verdict exists for it). Failing the gate." >&2
+      rc=1
+    fi
     a11y_port_release
     if [ "$rc" -eq 0 ]; then rm -f "$log"; return 0; fi
     if [ "$attempt" -ge 1 ] || ! grep -q EADDRINUSE "$log"; then
