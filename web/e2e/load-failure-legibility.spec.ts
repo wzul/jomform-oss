@@ -20,21 +20,20 @@
 //   source-level rule covered the red/sky family at all (that gap is closed by
 //   `src/lib/dangerText.test.ts`, which this file is the rendered half of).
 //
-// WHAT EACH BANNER PAINTS NOW (card t_c5ac80fb — the re-anchor)
-//   The fix migrated these two sentences onto DIFFERENT inks, and this guard says
-//   which is which instead of assuming one:
+// WHAT EACH BANNER PAINTS NOW (cards t_c5ac80fb and t_3a2b6a9f — the re-anchors)
+//   The fixes migrated these two sentences off the red-700 palette step and onto
+//   the design token, one page per card:
 //
-//     /form-settings  text-red-700        #c10007   6.03:1 on --jf-bg   (unchanged)
+//     /form-settings  --jf-danger-text    #bf000f   6.12:1 on --jf-bg   (t_3a2b6a9f)
 //     /builder        --jf-danger-text    #bf000f   6.12:1 on --jf-bg   (t_fd20447f)
 //
-//   The migrated ink is the SAFER of the two, so the product change was never the
-//   defect: the /builder arm was still pinned to the red-700 hex the page no longer
-//   paints, and the `e2e-core` gate red-ed on that stale pin alone. The /builder arm
-//   is now anchored to the TOKEN — its name is pinned, its value is read from the
-//   live document and resolved through the same canvas — so a token whose VALUE
-//   changes cannot re-red this guard, while a page that drifts OFF the token still
-//   must. The /form-settings arm keeps its palette pin because that page still
-//   paints `text-red-700`; it moves to the token in its own card, not here.
+//   The migrated ink is the SAFER of the two (6.12:1 vs red-700's 6.03:1), so the
+//   product change was never the defect: each arm was still pinned to the red-700
+//   hex the page no longer paints, and the `e2e-core` gate red-ed on that stale pin
+//   alone. Both arms are now anchored to the TOKEN — its name is pinned, its value is
+//   read from the live document and resolved through the same canvas — so a token
+//   whose VALUE changes cannot re-red this guard, while a page that drifts OFF the
+//   token still must.
 //
 // WHY THIS IS A BROWSER MEASUREMENT AND NOT A CLASS-NAME ASSERTION
 //   The class list is not the defect — the RATIO is, and the ratio depends on the
@@ -76,15 +75,10 @@ test.beforeEach(async ({ page, baseURL }) => {
 const AA_FLOOR = 4.5;
 const PRE_FIX_RED_400 = 2.71;
 
-// What /form-settings still paints: Tailwind's `text-red-700`. Card t_fd20447f did
-// NOT migrate that page, so this arm stays pinned to the palette hex it really
-// renders. Pointing it at the token would name a colour no element there carries.
-const RED_700 = "#c10007";
-
-// What /builder paints since card t_fd20447f: the design token, not a palette step.
+// What both pages paint since their migration: the design token, not a palette step.
 // The NAME is pinned and the value is read out of the live document, so re-valuing
 // the token does not re-red this guard and a hand-picked palette hex cannot pass as
-// the token (t_c5ac80fb: the hex pin red-ed `e2e-core` on a better ink).
+// the token (t_c5ac80fb and t_3a2b6a9f: the hex pin red-ed `e2e-core` on a better ink).
 const DANGER_TEXT_TOKEN = "--jf-danger-text";
 
 const FORM_ID = "form_loadfail_guard";
@@ -338,13 +332,21 @@ test("/form-settings: a failed LOAD is legible on the page it is painted on", as
   // painted on the PAGE background. If the page legitimately gains a surface, the
   // ratio assertion below is what must still hold — re-anchor this expectation.
   expect(banner.bg, `the failure banner is painted on ${banner.bg}; this guard is anchored to --jf-bg`).toBe("#f7f8f8");
-  expect(banner.fg, "the failure ink is not the AA-safe red-700 this page paints").toBe(RED_700);
+  // ANCHORED TO THE TOKEN, not to a hex: /form-settings paints `--jf-danger-text`
+  // since card t_3a2b6a9f, and pinning red-700's `#c10007` here red-ed the
+  // `e2e-core` gate on a page that had migrated to a marginally BETTER ink — the
+  // same stale pin t_c5ac80fb fixed on the /builder sibling below.
+  const ink = await tokenInk(page, DANGER_TEXT_TOKEN, banner.bg);
+  expect(
+    banner.fg,
+    `the failure ink is not the design token ${DANGER_TEXT_TOKEN} (${ink.raw} → ${ink.hex} on ${banner.bg}); ` +
+      `/form-settings migrated off text-red-700 in this card, so this arm follows the token like its /builder sibling`,
+  ).toBe(ink.hex);
   expect(
     banner.ratio,
     `the /form-settings load-failure banner measures ${banner.ratio}:1 (${banner.fg} on ${banner.bg}) — ` +
       `under the ${AA_FLOOR}:1 AA floor. text-red-400 (#ff6467) measured ${PRE_FIX_RED_400}:1 here; ` +
-      `use text-red-700 (#c10007, 6.03:1 on this surface) — this page has NOT moved to the token ` +
-      `(its /builder sibling paints ${DANGER_TEXT_TOKEN} #bf000f, 6.12:1).`,
+      `use ${DANGER_TEXT_TOKEN} (#bf000f, 6.12:1 on this surface) — what this page paints today.`,
   ).toBeGreaterThanOrEqual(AA_FLOOR);
 });
 

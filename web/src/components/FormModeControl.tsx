@@ -125,6 +125,19 @@ export default function FormModeControl({
 
   const changed = pending !== mode;
 
+  // The trigger paints TOKENS only (card t_cff48545): it was the last raw
+  // palette utility in the rendered /builder document (`hover:bg-slate-50`).
+  // The hover step is `--jf-bg-soft` (#f8f8f8) — measured 1.0620:1 against the
+  // button's own `--jf-surface` (#ffffff), where the old slate-50 step was
+  // 1.0463:1, and the label on it 9.71:1 with the ▾ caret (--jf-muted) 4.55:1.
+  // `--jf-surface-2` was rejected for this button on a measurement, not a
+  // preference: it is a stronger step (1.1194:1) but puts the ▾ caret at
+  // 4.32:1 in the light block, under the 4.5:1 floor. The RESTING fill is a
+  // token too, because `--jf-bg-soft` moves in `[data-theme="dark"]`: a fixed
+  // `bg-white` under it would flash #12151a on a white button (18.29:1).
+  // --jf-surface is #ffffff in the light block, so the resting pixel does not
+  // change. The pair is re-measured from globals.css by
+  // src/lib/formModeControlTone.test.ts.
   return (
     <>
       <button
@@ -133,7 +146,7 @@ export default function FormModeControl({
         aria-haspopup="dialog"
         aria-expanded={open}
         title={t("bld.mode")}
-        className="shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-slate-50"
+        className="shrink-0 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
       >
         {/* The visible text IS the current mode; the sr-only prefix keeps the
             accessible name unambiguous ("Form mode: Payment form") without
@@ -178,7 +191,7 @@ export default function FormModeControl({
                   rel="noreferrer"
                   title={t("bld.modeDocs")}
                   aria-label={t("bld.modeDocs")}
-                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--jf-border)] text-jf-2xs font-semibold text-[var(--jf-muted)] hover:bg-slate-50 hover:text-slate-700"
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--jf-border)] text-jf-2xs font-semibold text-[var(--jf-muted)] hover:bg-[var(--jf-bg-soft)] hover:text-[var(--jf-text-secondary)]"
                 >
                   ?
                 </a>
@@ -193,8 +206,8 @@ export default function FormModeControl({
                     onClick={() => setPending(m)}
                     className={`rounded-md border px-3 py-2 text-left transition-colors ${
                       pending === m
-                        ? "border-[var(--jf-accent)]/60 bg-indigo-50"
-                        : "border-[var(--jf-border)] hover:bg-slate-50"
+                        ? "border-[var(--jf-accent)]/60 bg-[var(--jf-primary-tint)]"
+                        : "border-[var(--jf-border)] hover:bg-[var(--jf-bg-soft)]"
                     }`}
                   >
                     <span
@@ -230,7 +243,7 @@ export default function FormModeControl({
                     </p>
                   )}
                   {saved && (
-                    <p className="rounded-md border border-[var(--jf-border)] bg-slate-50 p-2 text-jf-2xs leading-relaxed text-[var(--jf-text-secondary)]">
+                    <p className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-2 text-jf-2xs leading-relaxed text-[var(--jf-text-secondary)]">
                       {t("bld.modeNotifyNote", { event: eventFor(pending) })}
                     </p>
                   )}

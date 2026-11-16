@@ -220,19 +220,35 @@ function splitState(cls: string): [string, string] {
   return [m[1], cls.slice(m[1].length)];
 }
 
-/** A colour a class list paints in ONE state: the first `bg-*` / `text-*` it declares there. */
+/** A colour a class list paints in ONE state: the state's own declaration WINS over the inherited rest one.
+ *
+ * WHY EFFECTIVE-PER-STATE (card t_f5a7dc24). Tailwind emits variants after the
+ * base utilities, so `hover:bg-x` REPLACES `bg-y` in the hover state and
+ * `hover:text-a` replaces `text-b`. This function used to return the REST pair for
+ * every state (the rest classes matched first), which made the commonest hover
+ * shape in the app unjudged in silence:
+ *
+ *     bg-[var(--jf-neutral-fill)] text-[var(--jf-text-secondary)]
+ *     hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]
+ *
+ * read as a neutral fill under a grey label — not white, so the sweep skipped it —
+ * while the pointer actually paints a white label on the primary fill (4.70:1).
+ * The /profile doc-link badges are five of these. `mutedText.test.ts` already
+ * reads its states this way (`inState.length > 0 ? inState : bare`); this is the
+ * same rule, and the arm below pins both directions.
+ */
 function fillIn(classes: string[], state: string, kind: "bg" | "text"): RGB | null {
+  const inState: RGB[] = [];
+  const bare: RGB[] = [];
   for (const cls of classes) {
-    const [s, bare] = splitState(cls);
-    // The RESTING state ("") is also the inherited default for every other state,
-    // so a `text-white` with no prefix applies on hover too. A prefixed colour
-    // only applies in its own state.
-    if (s !== state && !(s === "" && state !== "")) continue;
-    if (!bare.startsWith(`${kind}-`)) continue;
-    const rgb = resolveColour(kind, bare.slice(kind.length + 1));
-    if (rgb) return rgb;
+    const [s, bareCls] = splitState(cls);
+    if (!bareCls.startsWith(`${kind}-`)) continue;
+    const rgb = resolveColour(kind, bareCls.slice(kind.length + 1));
+    if (!rgb) continue;
+    if (s === state) inState.push(rgb);
+    else if (s === "") bare.push(rgb);
   }
-  return null;
+  return (inState.length > 0 ? inState : bare)[0] ?? null;
 }
 
 // ─── every pairing in the app ───────────────────────────────────────────────
@@ -384,8 +400,11 @@ test("the sweep is looking at the real app (it cannot pass vacuously)", () => {
     `the walk is missing core files (found ${files.length})`,
   );
   const pairings = allPairings();
+  // 66 on the tree this model landed on (the per-state read added the 28 hover
+  // pairings the rest-first read had been hiding). The floor is the bite for a
+  // model regression: reverting to rest-first drops it to 38.
   assert.ok(
-    pairings.length >= 20,
+    pairings.length >= 50,
     `the sweep resolved only ${pairings.length} white-label/fill pairings — if the class names changed, ` +
       `re-anchor this guard (a rule keyed on a class string is invisible to a rename)`,
   );
@@ -396,6 +415,67 @@ test("the sweep is looking at the real app (it cannot pass vacuously)", () => {
     "the sweep no longer resolves the --jf-primary-hover token from a class list — the rule that " +
       "makes this guard about the shared CTA has stopped seeing it",
   );
+});
+
+// ─── the state model: a hover's OWN pair, not the rest one (card t_f5a7dc24) ─
+//
+// THE DEFECT this pins. `fillIn` used to return the RESTING pair for a
+// state-qualified query, because the rest classes match first. So a badge written
+// `bg-neutral text-grey hover:bg-primary hover:text-on-colour` was read as grey on
+// neutral — not a white label, so the sweep below skipped it — even though the
+// pointer paints white on the primary fill. The five /profile doc-link badges are
+// that shape, and the migration in this card is what made it visible: it converted
+// `hover:text-white` to `hover:text-[var(--jf-on-color)]` and the guard still has
+// to JUDGE each one.
+test("a state's own fill and label override the inherited rest pair", () => {
+  const classes = (
+    "inline-flex bg-[var(--jf-neutral-fill)] text-[var(--jf-text-secondary)] " +
+    "hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
+  ).split(/\s+/);
+
+  // The rest state is the rest pair.
+  assert.deepEqual(fillIn(classes, "", "bg"), [226, 232, 240], "the rest fill moved off --jf-neutral-fill");
+  assert.deepEqual(fillIn(classes, "", "text"), [55, 65, 81], "the rest label moved off --jf-text-secondary");
+
+  // The hover state is the HOVER pair — this is the assertion the old model failed.
+  const bg = fillIn(classes, "hover:", "bg");
+  const fg = fillIn(classes, "hover:", "text");
+  assert.deepEqual(bg, [94, 106, 210], "the hover state was read at its REST fill — the hover pair is unjudged");
+  assert.deepEqual(fg, [255, 255, 255], "the hover state was read at its REST label — the white label is unjudged");
+  assert.ok(
+    contrast(fg!, bg!) >= 4.5,
+    `the hover pair this page paints (white on --jf-primary) measures ${contrast(fg!, bg!).toFixed(2)}:1`,
+  );
+
+  // ... and the model can still FAIL: the same rest pair with the pre-fix hover
+  // fill is exactly the 2.87:1 pairing this guard was written for.
+  const bad = classes.map((c) => (c === "hover:bg-[var(--jf-primary)]" ? "hover:bg-[#828fff]" : c));
+  const badRatio = contrast(fillIn(bad, "hover:", "text")!, fillIn(bad, "hover:", "bg")!);
+  assert.ok(
+    badRatio < 4.5,
+    `a sub-AA hover fill was not measured as such (${badRatio.toFixed(2)}:1) — the sweep would pass it`,
+  );
+});
+
+test("the /profile doc-link hovers are still judged, each on the fill it paints", () => {
+  // The card's own acceptance: the five `hover:text-white` labels became
+  // `hover:text-[var(--jf-on-color)]` and the sweep must NAME each one — the same
+  // count or more, never fewer. A bare `hover:text-white` was the guard's subject;
+  // the token form keeps it measured.
+  const hovers = allPairings().filter(
+    (p) => p.file === "app/profile/page.tsx" && p.state.startsWith("hover"),
+  );
+  assert.ok(
+    hovers.length >= 5,
+    `the sweep found ${hovers.length} hover pairing(s) on /profile — the doc-link badges stopped being judged`,
+  );
+  for (const p of hovers) {
+    const ratio = contrast(p.fg, p.bg);
+    assert.ok(
+      ratio >= 4.5,
+      `${p.file}:${p.line} paints a white label ${ratio.toFixed(2)}:1 on its hover fill (${p.cls})`,
+    );
+  }
 });
 
 // ─── 3. the literal with no AA-safe use here ────────────────────────────────

@@ -477,8 +477,18 @@ function declaresTextColour(t: Tag): boolean {
  * so as text it fails on every light surface and the entry comes out forbidden
  * everywhere. `--jf-danger-text` (`#bf000f`) is the sanctioned step and comes out
  * with an EMPTY bad set here — pinned by a measurement below, not assumed.
+ *
+ * THE DEEPER HOVER STEP IS IN THE TABLE TOO (`--jf-danger-text-strong`,
+ * `#9f0712` = red-800, card t_3a2b6a9f). `/form-settings`' chip-feed remove
+ * button rests on `--jf-danger-text` and goes DARKER on hover; folded onto the
+ * same token the hover would be a no-op, so the deeper step has its own name.
+ * It is listed here for the reason the paragraph above gives: a token form this
+ * table does not hold is a form this rule cannot see, and a converted site would
+ * leave the family without anyone deciding it was safe. It also has an EMPTY
+ * bad set (8.36:1 on white), so it never flags a site on its own — the arm
+ * below pins the entry rather than a verdict.
  */
-const CSS_TEXT_TOKENS = ["jf-danger", "jf-danger-text"] as const;
+const CSS_TEXT_TOKENS = ["jf-danger", "jf-danger-text", "jf-danger-text-strong"] as const;
 
 /** One `--jf-*` text token, resolved from `globals.css` — never from a memory of its value. */
 function cssTextTokenRgb(name: string): RGB {
@@ -1185,6 +1195,68 @@ test("the token form of the red family is judged, not skipped", () => {
     problems.push(
       `the same-element shape stopped reporting text-[var(--jf-danger)] on the danger tint: ` +
         `${sameElement.join(" | ") || "(no findings)"}`,
+    );
+  }
+
+  // (D) THE DEEPER HOVER STEP (card t_3a2b6a9f). `/form-settings`' chip-feed
+  //     remove button is `text-[var(--jf-danger-text)] hover:text-[var(--jf-danger-text-strong)]`.
+  //     The HOVER form has to be in the table, or the state a pointer lands on is
+  //     the one state this family stops seeing. Measured from globals.css, and
+  //     legal on every surface (8.36:1 on white), so it never flags by itself.
+  const strong = TEXT_TOKENS["text-[var(--jf-danger-text-strong)]"];
+  if (!strong) {
+    problems.push(
+      "text-[var(--jf-danger-text-strong)] is not in TEXT_TOKENS — the deeper destructive HOVER " +
+        "form is invisible to this rule",
+    );
+  } else {
+    if (!/#9f0712/.test(strong.note) || !/8\.36:1 on white/.test(strong.note)) {
+      problems.push(`the deeper hover entry does not name the value it measures: ${strong.note}`);
+    }
+    if (strong.bad.length !== 0) {
+      problems.push(
+        `--jf-danger-text-strong came out forbidden on ${JSON.stringify(strong.bad)} — a hover step ` +
+          `that is DARKER than the resting one cannot be sub-AA on a light surface`,
+      );
+    }
+  }
+  // …and the state itself is judged: the resting token on a danger tint, hovered
+  // to the deeper step, is NOT a finding (both clear AA), while the same hover on
+  // the MARKER token form IS one — so a hover that reaches for the wrong step
+  // still reds.
+  const hovered = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <button className="bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)] hover:text-[var(--jf-danger-text-strong)]">',
+      "      Remove",
+      "    </button>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (hovered.length !== 0) {
+    problems.push(`the converted hover pairing (5.96:1 resting, 7.64:1 hovered) was reported: ${hovered.join(" | ")}`);
+  }
+  const badHover = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <button className="bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)] hover:text-[var(--jf-danger)]">',
+      "      Remove",
+      "    </button>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!badHover.some((f) => f.includes("text-[var(--jf-danger)]") && f.includes("hover"))) {
+    problems.push(
+      `a hover that reaches for the MARKER token (3.30:1 on the danger tint) was not reported: ` +
+        `${badHover.join(" | ") || "(no findings)"}`,
     );
   }
 

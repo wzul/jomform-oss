@@ -8,7 +8,13 @@
 //   avatar sees, and both painted the BASE `--jf-primary` on Tailwind indigo-100:
 //
 //     web/src/components/Shell.tsx:75        the sidebar account badge (text-xs)
-//     web/src/app/profile/page.tsx:487       the 80px identity badge (text-2xl)
+//     web/src/app/profile/page.tsx           the 80px identity badge (text-2xl)
+//
+//   Card t_f5a7dc24 migrated the /profile badge to the token spelling of the same
+//   tint (`bg-[var(--jf-primary-tint-strong)]`, light #e0e7ff); the SHELL badge
+//   keeps the palette class. The /profile selector below is therefore structural
+//   and the tint is still asserted BY MEASUREMENT (#e0e7ff), so neither spelling
+//   can make this arm scan the wrong element.
 //
 //   MEASURED on the real values (`--color-indigo-100` is `oklch(93% 0.034
 //   272.788)` in `tailwindcss/theme.css`, i.e. #e0e7ff):
@@ -147,8 +153,18 @@ const TINT = "#e0e7ff";
 
 /** The sidebar account badge: the avatar inside the desktop aside's /profile link. */
 const SHELL_BADGE = 'aside a[href="/profile"] div.bg-indigo-100';
-/** The identity badge on /profile: the only 80px tinted circle on the page. */
-const PROFILE_BADGE = "div.h-20.bg-indigo-100";
+/**
+ * The identity badge on /profile: the only 80px tinted circle on the page.
+ *
+ * ANCHORED STRUCTURALLY (card t_f5a7dc24). The page's badge migrated off the
+ * palette class to `bg-[var(--jf-primary-tint-strong)]` (the same #e0e7ff in the
+ * light palette), so a `.bg-indigo-100` selector no longer matches it. The tint is
+ * not ASSUMED from the selector here — `assertTinted` measures the painted surface
+ * and requires it to be #e0e7ff, which is a stronger check than a class name; the
+ * avatar PHOTO branch is an `<img>`, so `div.h-20.w-20.rounded-full` names the
+ * initial-letter circle only.
+ */
+const PROFILE_BADGE = "div.h-20.w-20.rounded-full";
 
 /**
  * The pre-fix paint: `--jf-primary-on-tint` was the base colour before the fix,

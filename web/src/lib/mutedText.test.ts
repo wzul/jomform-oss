@@ -236,7 +236,8 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
     token: "text-[var(--jf-muted)]",
     // 4.54:1 on #f7f8f8, 4.83:1 white, 4.55:1 --jf-bg-soft, but 4.41:1 slate-100,
     // 3.92:1 --jf-neutral-fill, 3.25:1 --jf-neutral-fill-strong, 4.32:1
-    // --jf-surface-2 and 4.42:1 on --jf-danger-bg.
+    // --jf-surface-2, 4.44:1 --jf-info-bg (the informational chip's tint, card
+    // t_57059864) and 4.42:1 on --jf-danger-bg.
     bad: [
       "bg-slate-100",
       "bg-slate-200",
@@ -245,8 +246,10 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
       "bg-[var(--jf-neutral-fill)]",
       "bg-[var(--jf-neutral-fill-strong)]",
       "bg-[var(--jf-danger-bg)]",
+      "bg-[var(--jf-info-bg)]",
+      "bg-[var(--jf-primary-tint-strong)]",
     ],
-    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100, 4.32:1 on --jf-surface-2 and 3.25:1 on --jf-neutral-fill-strong",
+    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100, 4.32:1 on --jf-surface-2, 4.44:1 on --jf-info-bg, 3.92:1 on --jf-primary-tint-strong and 3.25:1 on --jf-neutral-fill-strong",
   },
   "text-[var(--jf-muted-on-tint)]": {
     token: "text-[var(--jf-muted-on-tint)]",
@@ -313,6 +316,12 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
  * the page invisible to every rule below — the silent-skip shape `/login`
  * already fixed once for `--jf-surface-2`.
  *
+ * `bg-[var(--jf-primary-tint-strong)]` is the SOLID indigo-100 step `/profile`
+ * migrated its identity badge onto (card t_f5a7dc24). It is listed because the
+ * tint is a surface a muted label can land on, and `--jf-muted` FAILS on it at
+ * 3.92:1 — the tint-safe token clears it at 4.855:1, and the arm after the
+ * /builder one pins both directions.
+ *
  * Translucent backgrounds (`bg-slate-900/5`, `bg-black/40`) are NOT matched:
  * their composite depends on what is behind them, so a source scan cannot judge
  * them. `bg-white/10` on the MCP code block is one of those and is measured in
@@ -320,7 +329,7 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
  * owned by `tintedSurface.test.ts`, which judges the BASE text tokens on it.
  */
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg|bg-soft|neutral-fill-strong|neutral-fill|danger-bg|warning-bg|success-bg)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg|bg-soft|neutral-fill-strong|neutral-fill|danger-bg|warning-bg|success-bg|info-bg|primary-tint-strong)\)\]|jf-card|jf-input)$/;
 
 /**
  * Canonical surface name for the class that declares it.
@@ -473,14 +482,23 @@ const GHOST_CLASS = "jf-btn-ghost";
  * ghost button is `ghostButtonInk.test.ts`'s family; keeping the two patterns
  * disjoint is what stops two guards judging one class.
  */
+/**
+ * The gray label a `.jf-btn-ghost` button may carry, in BOTH spellings the app
+ * uses: the Tailwind palette step (`text-slate-600`) and the token form the
+ * migrated pages paint instead (`text-[var(--jf-text-secondary)]`, the gray step
+ * above the muted pair — card t_3a2b6a9f converted /form-settings' four clear/
+ * cancel buttons onto it). A guard keyed on the palette spelling alone would stop
+ * seeing a converted button and read clean for a reason it did not decide, which
+ * is the silent-skip shape the `--jf-muted` entry was added for.
+ */
 const GHOST_GRAY_RE =
-  /^(?:text-(?:slate|gray|zinc|neutral|stone)-\d{2,3}|text-\[var\(--jf-muted(?:-on-tint)?\)\])$/;
+  /^(?:text-(?:slate|gray|zinc|neutral|stone)-\d{2,3}|text-\[var\(--jf-(?:muted(?:-on-tint)?|text-secondary)\)\])$/;
 
 /** The sRGB a gray token paints, resolved from the installed theme. */
 function grayTokenRgb(tok: string): RGB | null {
   const tw = /^text-(slate|gray|zinc|neutral|stone)-(\d{2,3})$/.exec(tok);
   if (tw) return PALETTE.get(`${tw[1]}-${tw[2]}`) ?? null;
-  const cssVar = /^text-\[var\(--(jf-muted(?:-on-tint)?)\)\]$/.exec(tok);
+  const cssVar = /^text-\[var\(--(jf-(?:muted(?:-on-tint)?|text-secondary))\)\]$/.exec(tok);
   if (cssVar) return CSS_TOKENS.get(cssVar[1]) ?? null;
   return null;
 }
@@ -573,6 +591,8 @@ function ghostGrayFindings(
           )
           .join(", ");
         const safe = safeSlateStep();
+        const tokRgb = CSS_TOKENS.get("jf-text-secondary") ?? null;
+        const tokWorst = tokRgb ? Math.min(...GHOST.map((g) => contrast(tokRgb, g.rgb))) : null;
         out.push(
           `${rel}:${lineAt(tag.openIdx)} — <${tag.name}> paints ${tok} (${hexOf(rgb)}) on a ` +
             `\`${GHOST_CLASS}\` button${where}, which measures ${table}: under the ${AA_FLOOR}:1 AA floor ` +
@@ -580,7 +600,10 @@ function ghostGrayFindings(
             `surface${bad.length > 1 ? "s" : ""} the button itself paints (globals.css, unlayered: it beats ` +
             `any \`bg-*\` utility on the same element). ` +
             (safe
-              ? `Use ${safe.token} (${hexOf(safe.rgb)}, worst ghost surface ${safe.worst.toFixed(3)}:1).`
+              ? `Use ${safe.token} (${hexOf(safe.rgb)}, worst ghost surface ${safe.worst.toFixed(3)}:1)` +
+                (tokWorst !== null
+                  ? ` — or the migrated tree's token form \`text-[var(--jf-text-secondary)]\` (worst ${tokWorst.toFixed(3)}:1).`
+                  : ".")
               : `No gray step clears all three surfaces; re-colour the site.`),
         );
       }
@@ -1358,6 +1381,101 @@ test("the surface model sees the token surfaces /builder migrated onto", () => {
     );
   }
 
+  // (5) The informational chip's tint (card t_57059864 moved /sales' `paid` chip
+  //     onto it): --jf-muted measures 4.44:1 there — UNDER 4.5 — so the surface
+  //     must be SEEN and the token refused on it. The tint-safe token clears it
+  //     (5.50:1), which is the pair the chip's own `--jf-info` ink also clears
+  //     (6.16:1, recorded in designTokenRatios.ts).
+  const infoCard = (inner: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <span className="rounded-full border px-2 py-0.5 bg-[var(--jf-info-bg)]">',
+      inner,
+      "    </span>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+  const onInfo = findingsIn("fixture.tsx", infoCard('      <span className="text-[var(--jf-muted)]">paid</span>'));
+  if (!onInfo.some((f) => f.includes("bg-[var(--jf-info-bg)]"))) {
+    problems.push(`--jf-muted on bg-[var(--jf-info-bg)] (4.44:1) was not reported: ${names(onInfo)}`);
+  }
+  const onInfoLegal = findingsIn(
+    "fixture.tsx",
+    infoCard('      <span className="text-[var(--jf-muted-on-tint)]">paid</span>'),
+  );
+  if (onInfoLegal.length !== 0) {
+    problems.push(`the legal --jf-muted-on-tint label on --jf-info-bg (5.50:1) was reported: ${names(onInfoLegal)}`);
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+// ─── the surface /profile migrated ONTO (card t_f5a7dc24) ────────────────────
+//
+// THE DEFECT this pins. /profile carried 100 raw palette utilities; its identity
+// badge (the 80px initial circle) was the SOLID indigo-100 step and is now
+// `bg-[var(--jf-primary-tint-strong)]`. The surface model above is a list of class
+// STRINGS, so a tint the model does not know is an element declared with NO
+// surface: every muted label inside it inherits nothing to be judged against and
+// reads clean. That is the silent-skip shape this file refuses, and the reason a
+// page migration and its surface model move in ONE commit.
+//
+// The token must be refused as a muted surface, not merely known: `--jf-muted`
+// measures 3.92:1 on #e0e7ff (indigo-100's sRGB value) while `--jf-muted-on-tint`
+// clears it at 4.855:1 — the same pair `indigo100Tint.test.ts` records for the
+// base text tokens on this tint.
+test("the surface model sees the strong brand tint /profile migrated onto", () => {
+  const problems: string[] = [];
+  const names = (f: string[]) => f.join(" | ");
+  const badge = (inner: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[var(--jf-primary-tint-strong)]">',
+      inner,
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
+  // (1) A muted label on the strong tint is 3.92:1 — reported against THAT surface.
+  const muted = findingsIn("fixture.tsx", badge('      <span className="text-[var(--jf-muted)]">note</span>'));
+  if (!muted.some((f) => f.includes("text-[var(--jf-muted)]") && f.includes("bg-[var(--jf-primary-tint-strong)]"))) {
+    problems.push(
+      `--jf-muted on bg-[var(--jf-primary-tint-strong)] (3.92:1, under AA) was not reported: ${names(muted)}`,
+    );
+  }
+
+  // (2) The tint-safe token clears it (4.855:1) and must NOT be reported, so the
+  //     model is not simply "every token on the strong tint is bad".
+  const safe = findingsIn(
+    "fixture.tsx",
+    badge('      <span className="text-[var(--jf-muted-on-tint)]">note</span>'),
+  );
+  if (safe.length !== 0) {
+    problems.push(`the legal --jf-muted-on-tint label on the strong tint (4.855:1) was reported: ${names(safe)}`);
+  }
+
+  // (3) Shape (a) — the token and its surface in ONE class list — must judge it
+  //     too, or the hole re-opens for the next inline label.
+  const sameElement = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <p className="bg-[var(--jf-primary-tint-strong)] text-[var(--jf-muted)]">a summary</p>',
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!sameElement.some((f) => f.includes("bg-[var(--jf-primary-tint-strong)]"))) {
+    problems.push(`the same-element shape stopped reporting --jf-muted on the strong tint: ${names(sameElement)}`);
+  }
+
   assert.deepEqual(problems, [], problems.join("\n"));
 });
 
@@ -1845,6 +1963,27 @@ test("a gray label on a .jf-btn-ghost button is judged on the button's own three
   if (onTint.length !== 0) {
     problems.push(
       `--jf-muted-on-tint clears every ghost surface (4.831:1 worst) and must not be reported: ${names(onTint)}`,
+    );
+  }
+
+  // (4b) THE MIGRATED TREE's gray step (card t_3a2b6a9f): `/form-settings`'
+  //      four clear/cancel ghost buttons now paint `text-[var(--jf-text-secondary)]`
+  //      instead of `text-slate-600`. The model has to keep seeing them — the
+  //      token form must be JUDGED (not skipped) and must come out clean, because
+  //      #374151 clears all three surfaces.
+  const tokenSecondary = findingsIn("fixture.tsx", button("jf-btn-ghost text-xs text-[var(--jf-text-secondary)]"));
+  if (tokenSecondary.length !== 0) {
+    problems.push(
+      `text-[var(--jf-text-secondary)] clears every ghost surface and must not be reported: ${names(tokenSecondary)}`,
+    );
+  }
+  // …and the model really resolves it: the regex accepts the spelling AND the
+  // colour comes out of the stylesheet, so the arm above is DECIDED rather than
+  // silently dropped by a pattern that never matched.
+  if (!GHOST_GRAY_RE.test("text-[var(--jf-text-secondary)]") || grayTokenRgb("text-[var(--jf-text-secondary)]") === null) {
+    problems.push(
+      "the token form `text-[var(--jf-text-secondary)]` is not resolved by rule (d) — a converted " +
+        "ghost button would be skipped in silence",
     );
   }
 

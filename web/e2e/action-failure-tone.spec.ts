@@ -68,6 +68,15 @@ const RED_50 = "#fef2f2";
 const EMERALD_50 = "#ecfdf5";
 /** Tailwind v4's `text-red-700` — the failure ink, 5.87:1 on red-50 (AA). */
 const RED_700 = "#c10007";
+/**
+ * `--jf-danger-text` (#bf000f) — the app's measured danger TEXT step, 5.96:1 on
+ * the same #fef2f2 fill. `/sales` paints this since card t_57059864 moved its
+ * banner onto the token layer, and `/form-settings` since card t_3a2b6a9f; the
+ * pages still on the palette pin are `/spam` and the CONTROL arms. The assertion
+ * is per-page so a migrated page is RE-ANCHORED on its own ink rather than
+ * deleted from this guard.
+ */
+const JF_DANGER_TEXT = "#bf000f";
 /** The pre-fix ink: `--jf-primary`, which is what BOTH outcomes used to be. */
 const JF_PRIMARY = "#5e6ad2";
 
@@ -186,7 +195,7 @@ async function settledReading(page: Page): Promise<Reading> {
 }
 
 /** Every assertion the card's acceptance makes, in one place per reading. */
-function expectFailure(r: Reading, where: string, mustContain: string) {
+function expectFailure(r: Reading, where: string, mustContain: string, ink: string = RED_700) {
   expect(r.text, `${where}: the failure sentence`).toContain(mustContain);
   expect(
     r.bg,
@@ -195,10 +204,12 @@ function expectFailure(r: Reading, where: string, mustContain: string) {
   ).toBe(RED_50);
   expect(
     r.ink,
-    `${where}: the failure ink is ${r.ink}. It must be text-red-700 (${RED_700}, 5.87:1 on red-50 — the ` +
-      `same ink /settings paints its failure banner with) — the pre-fix indigo (--jf-primary ` +
-      `${JF_PRIMARY}) is the very reading this card is about`,
-  ).toBe(RED_700);
+    `${where}: the failure ink is ${r.ink}. It must be ${ink} — text-red-700 (${RED_700}, 5.87:1 on ` +
+      `red-50) on the pages that still spell the palette class, and --jf-danger-text ` +
+      `(${JF_DANGER_TEXT}, 5.96:1 on the same fill) on /sales and /form-settings, which the ` +
+      `token layer owns — the pre-fix indigo (--jf-primary ${JF_PRIMARY}) is the very reading ` +
+      `this card is about`,
+  ).toBe(ink);
   expect(r.tone, `${where}: the banner does not report its failure tone`).toBe("failure");
   // A failure must also be ANNOUNCED, not only seen: the same silence for a
   // screen reader is the other half of "the merchant cannot tell them apart".
@@ -304,7 +315,7 @@ test("a FAILED refund on /sales is red-filled and a live alert, not the success 
   console.log(`/sales refund 500 -> ${JSON.stringify(r)}`);
   // The page's OWN sentence: the 500 body carries no code apiErr can map, so it
   // falls back to the refund path's localized refusal, "Refund gagal <ref>."
-  expectFailure(r, "/sales refund 500", "Refund gagal");
+  expectFailure(r, "/sales refund 500", "Refund gagal", JF_DANGER_TEXT);
 });
 
 test("CONTROL: a SUCCESSFUL refund on /sales does NOT wear the failure chrome", async ({ page }) => {
@@ -379,7 +390,7 @@ test("a FAILED sound-setting save on /sales reaches a visible failure banner (t_
   ).toHaveAttribute("aria-checked", "false", { timeout: 30_000 });
   const r = await settledReading(page);
   console.log(`/sales sound PUT 500 -> switch aria-checked=${await page.getByRole("switch").getAttribute("aria-checked")} banner=${JSON.stringify(r)}`);
-  expectFailure(r, "/sales sound PUT 500", DICT["sales.soundSaveFail"].en);
+  expectFailure(r, "/sales sound PUT 500", DICT["sales.soundSaveFail"].en, JF_DANGER_TEXT);
 });
 
 test("CONTROL: a SUCCESSFUL sound-setting save on /sales renders no failure banner (t_bfe1cda5)", async ({ page }) => {
@@ -493,7 +504,7 @@ test("a MIXED bulk-capture on /sales is red-filled and a live alert (t_0863b3ca)
   await driveSalesBulkCapture(page, { captured: 0, requested: 1, failed: 1 });
   const r = await settledReading(page);
   console.log(`/sales bulk-capture failed=1 -> ${JSON.stringify(r)}`);
-  expectFailure(r, "/sales bulk-capture failed=1", "Captured 0/1");
+  expectFailure(r, "/sales bulk-capture failed=1", "Captured 0/1", JF_DANGER_TEXT);
   expect(r.text, "/sales bulk-capture failed=1: the mixed run must say to check each status").toContain(
     "1 failed",
   );
@@ -611,7 +622,7 @@ test("a FAILED save on /form-settings is red-filled and a live alert, not the su
   await driveFormSettingsSave(page, 500);
   const r = await settledReading(page);
   console.log(`/form-settings save 500 -> ${JSON.stringify(r)}`);
-  expectFailure(r, "/form-settings save 500", DICT["prof.failed"].en);
+  expectFailure(r, "/form-settings save 500", DICT["prof.failed"].en, JF_DANGER_TEXT);
 });
 
 test("CONTROL: a SUCCESSFUL save on /form-settings does NOT wear the failure chrome", async ({ page }) => {

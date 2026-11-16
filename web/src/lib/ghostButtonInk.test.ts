@@ -180,6 +180,35 @@ function tailwindPalette(): Map<string, RGB> {
 
 const PALETTE = tailwindPalette();
 
+/**
+ * The `--jf-*` colour tokens declared in `:root` of `globals.css`, for the TOKEN
+ * FORM of this family's ink (`text-[var(--jf-danger-text)]`). `:root` only —
+ * the dark block re-declares the same names, and last-wins over the whole file
+ * would measure the light tree against the dark values.
+ */
+function jfTokens(): Map<string, RGB> {
+  const css = read("../app/globals.css").split('\n[data-theme="dark"] {')[0];
+  const out = new Map<string, RGB>();
+  for (const m of css.matchAll(/--(jf-[a-z0-9-]+):\s*(#[0-9a-fA-F]{3,6})\s*;/g)) {
+    const h = m[2].replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    out.set(m[1], [0, 2, 4].map((i) => parseInt(full.slice(i, i + 2), 16)) as RGB);
+  }
+  return out;
+}
+
+const JF_TOKENS = jfTokens();
+
+/**
+ * The `--jf-*` names this family's token form may name (card t_3a2b6a9f).
+ * `--jf-danger` is included because it is the token a converted page is most
+ * likely to reach for by mistake — `globals.css` records it as a MARKER (3.76:1
+ * on white, 3.30:1 on the danger tint), so as ghost ink it fails and must be
+ * reported; `--jf-danger-text-strong` is the DEEPER hover step `/form-settings`
+ * needed, and `--jf-danger-text` is the resting step four pages already paint.
+ */
+const FAMILY_TOKENS = new Set(["jf-danger", "jf-danger-text", "jf-danger-text-strong"]);
+
 // ─── the surfaces `.jf-btn-ghost` itself paints, read from globals.css ──────
 
 /** `#rgb` / `#rrggbb`, or a `var(--jf-*)` token declared in the same stylesheet. */
@@ -256,22 +285,45 @@ const PSEUDO = new Set(["hover", "focus", "focus-visible", "active", "visited", 
  * The red/rose/sky TEXT token an element carries in `pseudo` ("" = the resting
  * state, i.e. a class list with no pseudo-class prefix at all).
  *
+ * TWO SPELLINGS, ONE FAMILY. `text-red-700` is the palette step; after a page
+ * migrates, the same ink is painted `text-[var(--jf-danger-text)]` (card
+ * t_3a2b6a9f moved `/form-settings`' five destructive ghost buttons onto it).
+ * The family is the INK, not the class string, so both are read — a guard that
+ * only spoke the palette spelling would stop seeing a converted button and read
+ * clean for a reason it never decided.
+ *
  * The prefix vocabulary comes from `jsxSource.splitState`, which returns the
  * state WITH its colon and keeps every variant (`sm:hover:`), so the match is on
  * the colon-separated segments rather than on string equality — a `sm:` in front
  * of a `hover:` must not hide the token from this rule.
  */
+const FAMILY_TOKEN_RE = new RegExp(
+  `^text-\\[var\\(--(jf-[a-z0-9-]+)\\)\\]$|^text-(?:red|rose|sky)-\\d+$`,
+);
+function familyToken(tok: string): string {
+  if (!FAMILY_TOKEN_RE.test(tok)) return "";
+  const css = /^text-\[var\(--(jf-[a-z0-9-]+)\)\]$/.exec(tok);
+  if (css && !FAMILY_TOKENS.has(css[1])) return "";
+  return tok;
+}
 function tokenInState(tag: Tag, pseudo: GhostState): string {
   for (const v of tag.variants) {
     for (const cls of v.split(/\s+/)) {
       const [pre, bareCls] = splitState(cls);
-      if (!bareCls || !/^text-(?:red|rose|sky)-\d+$/.test(bareCls)) continue;
+      if (!bareCls || !familyToken(bareCls)) continue;
       const segs = pre.split(":").filter(Boolean);
       const isRest = !segs.some((s) => PSEUDO.has(s));
       if (pseudo === "" ? isRest : segs.includes(pseudo)) return bareCls;
     }
   }
   return "";
+}
+
+/** The sRGB a family ink paints: the palette step from the theme, the token form from globals.css. */
+function inkRgb(tok: string): RGB | null {
+  const css = /^text-\[var\(--(jf-[a-z0-9-]+)\)\]$/.exec(tok);
+  if (css) return JF_TOKENS.get(css[1]) ?? null;
+  return PALETTE.get(tok.replace(/^text-/, "")) ?? null;
 }
 
 function isGhost(tag: Tag): boolean {
@@ -336,14 +388,17 @@ function findingsIn(rel: string, src: string): string[] {
     const rows: Array<{ surface: GhostSurface; token: string; rgb: RGB; ratio: number }> = [];
     for (const surface of GHOST) {
       const token = effectiveToken(tag, surface.state, resting);
-      const rgb = PALETTE.get(token.replace(/^text-/, ""));
-      if (!rgb) continue; // a step the installed theme does not declare
+      const rgb = inkRgb(token);
+      if (!rgb) continue; // a step the installed theme / globals.css does not declare
       rows.push({ surface, token, rgb, ratio: contrast(rgb, surface.rgb) });
     }
     const worst = rows.reduce((a, b) => (b.ratio < a.ratio ? b : a), rows[0]);
     if (!worst || worst.ratio >= AA_FLOOR) continue;
 
-    const safe = safeStep(worst.token.replace(/^text-([a-z]+)-\d+$/, "$1"));
+    const isTokenForm = /^text-\[var\(/.test(worst.token);
+    const safe = isTokenForm ? null : safeStep(worst.token.replace(/^text-([a-z]+)-\d+$/, "$1"));
+    const stepRgb = JF_TOKENS.get("jf-danger-text") ?? null;
+    const stepWorst = stepRgb ? Math.min(...GHOST.map((g) => contrast(stepRgb, g.rgb))) : null;
     const table = rows
       .map(
         (r) =>
@@ -357,7 +412,10 @@ function findingsIn(rel: string, src: string): string[] {
         `under the ${AA_FLOOR}:1 AA floor — its worst of the three surfaces the button paints (${table}). ` +
         (safe
           ? `Use ${safe.token} (${hexOf(safe.rgb)}, worst ghost surface ${safe.worst.toFixed(3)}:1).`
-          : `No step of that hue clears all three surfaces; re-colour the site.`),
+          : isTokenForm && stepWorst !== null
+            ? `Use the family's text step \`text-[var(--jf-danger-text)]\` ` +
+              `(${hexOf(stepRgb!)}, worst ghost surface ${stepWorst.toFixed(3)}:1).`
+            : `No step of that hue clears all three surfaces; re-colour the site.`),
     );
   }
   return [...new Set(out)];
@@ -390,11 +448,14 @@ test("the rule is looking at real, reachable markup, and it judges every state",
   //  (c) the three surfaces were READ from globals.css, not defaulted.
   let ghosts = 0;
   let familyTokens = 0;
+  let tokenFormTokens = 0;
   for (const rel of FILES) {
     for (const e of jsxTags(codeOnly(readFileSync(`${SRC}${rel}`, "utf8")))) {
       if (!isGhost(e.tag)) continue;
       ghosts += 1;
-      if (tokenInState(e.tag, "")) familyTokens += 1;
+      const tok = tokenInState(e.tag, "");
+      if (tok) familyTokens += 1;
+      if (/^text-\[var\(/.test(tok)) tokenFormTokens += 1;
     }
   }
   assert.ok(ghosts >= 50, `the walk found only ${ghosts} .jf-btn-ghost elements in web/src`);
@@ -402,6 +463,14 @@ test("the rule is looking at real, reachable markup, and it judges every state",
     familyTokens >= 5,
     `the walk found only ${familyTokens} ghost buttons carrying a red/rose/sky label — this rule is no ` +
       `longer looking at the sites it was written for, so re-anchor it rather than letting it pass`,
+  );
+  // …and the TOKEN SPELLING is actually being read (card t_3a2b6a9f): /form-settings
+  // converted its five destructive ghost buttons to `text-[var(--jf-danger-text)]`,
+  // and a rule that only spoke the palette spelling would see none of them.
+  assert.ok(
+    tokenFormTokens >= 5,
+    `the walk found only ${tokenFormTokens} ghost buttons carrying the TOKEN form of a family ink — ` +
+      `the converted sites are being skipped, which is the silent-skip shape this file exists to refuse`,
   );
   assert.deepEqual(
     GHOST.map((g) => `${g.state || "rest"} ${hexOf(g.rgb)}`),
@@ -459,6 +528,27 @@ test("a sub-AA label on a ghost button is REPORTED — the defect this file clos
   const redFound = findingsIn("red.tsx", red);
   assert.equal(redFound.length, 1, `expected one finding, got ${redFound.length}`);
   assert.match(redFound[0], /4\.334:1/);
+
+  // THE TOKEN FORM IS JUDGED (card t_3a2b6a9f). `/form-settings` paints its five
+  // destructive ghost buttons with `text-[var(--jf-danger-text)]` — the family's
+  // token step, which clears every ghost surface and must NOT be reported… unless
+  // the page reaches for the MARKER token, which fails at rest (3.76:1 on the
+  // button's white) and must be.
+  const tokenStep =
+    `export const S = () => <button className="jf-btn-ghost text-xs text-[var(--jf-danger-text)]">Remove</button>;\n`;
+  assert.deepEqual(findingsIn("token-ok.tsx", tokenStep), []);
+
+  const tokenMarker =
+    `export const M = () => <button className="jf-btn-ghost text-xs text-[var(--jf-danger)]">Remove</button>;\n`;
+  const markerFound = findingsIn("token-bad.tsx", tokenMarker);
+  assert.equal(markerFound.length, 1, `expected the MARKER token form to be reported, got ${markerFound.length}`);
+  assert.match(markerFound[0], /text-\[var\(--jf-danger\)\]/);
+  assert.match(markerFound[0], /3\.761:1|3\.7\d\d:1/, `the resting ratio must be quoted: ${markerFound[0]}`);
+  assert.match(
+    markerFound[0],
+    /text-\[var\(--jf-danger-text\)\]/,
+    "the finding must name the family's token step as the fix",
+  );
 });
 
 test("a PASSING label is left alone in every state, and a hover override is honoured", () => {

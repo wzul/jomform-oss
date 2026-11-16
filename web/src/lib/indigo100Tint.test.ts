@@ -12,6 +12,15 @@
 //                                           with no uploaded avatar sees)
 //     web/src/app/profile/page.tsx          the 80px identity badge
 //
+//   Card t_f5a7dc24 migrated the /profile badge off the palette class: it now
+//   paints `bg-[var(--jf-primary-tint-strong)]`, the token added for exactly this
+//   step (light #e0e7ff, the same pixel as indigo-100; dark #1e1b4b, indigo-950).
+//   The RULE below matches BOTH spellings, because a guard keyed on the palette
+//   name alone would have stopped judging the element the moment it migrated —
+//   silently, which is the failure mode this file is written against. The dark
+//   value re-measures the same verdict: --jf-primary on #1e1b4b is 3.40:1, still
+//   clear of the 3:1 large-text floor; `src/lib/designTokenRatios.ts` records it.
+//
 //   MEASURED on the real values (indigo-100 is `oklch(93% 0.034 272.788)` in
 //   tailwindcss/theme.css, which is #e0e7ff):
 //
@@ -120,7 +129,16 @@ function classTokens(variant: string): string[] {
 
 // Solid indigo-100 with its state prefix split out: "" for the resting state,
 // "hover" / "focus" / "md:hover" for a state-qualified one. NOT `bg-indigo-100/50`.
-const TINT_RE = /^((?:[a-z-]+:)*)bg-indigo-100$/;
+//
+// TWO SPELLINGS, ONE SURFACE (card t_f5a7dc24). The palette class `bg-indigo-100`
+// and the token `bg-[var(--jf-primary-tint-strong)]` are the same #e0e7ff in the
+// light palette; `/profile` migrated its badge to the token, `Shell.tsx` still
+// paints the palette class. A rule keyed on the palette name alone would stop
+// seeing the migrated element in silence — the exact failure this guard exists to
+// refuse — so both spellings are matched and BOTH stay judged. In the dark theme
+// the token is indigo-950 (#1e1b4b), where the same base token measures 3.40:1
+// (still clear of the 3:1 large-text floor); `designTokenRatios.ts` records both.
+const TINT_RE = /^((?:[a-z-]+:)*)(?:bg-indigo-100|bg-\[var\(--jf-primary-tint-strong\)\])$/;
 // Any text token declared through a --jf-* custom property, base or on-tint.
 const ANY_JF_TEXT_RE = /^((?:[a-z-]+:)*)text-\[var\(--jf-[a-z-]+\)\]$/;
 // The two BASE tokens (the on-tint pair deliberately does not match).
@@ -222,7 +240,8 @@ function findingsIn(rel: string, src: string): string[] {
     // The large-text justification, read off the SAME class list.
     if (classes.some(declaresLargeText)) continue;
     findings.push(
-      `${rel}:${el.line} — <${el.name}> paints ${toks.join(" + ")} on bg-indigo-100 ` +
+      `${rel}:${el.line} — <${el.name}> paints ${toks.join(" + ")} on the indigo-100 tint ` +
+        `(bg-indigo-100 / --jf-primary-tint-strong) ` +
         `without a large-scale size on the element. Use the on-tint tokens ` +
         `(--jf-primary-on-tint / --jf-muted-on-tint), or declare text-2xl (24px = 18pt) ` +
         `or larger if this site really is large text`,
@@ -291,6 +310,23 @@ test("the rule bites on the shape it is for, and the large-text carve-out is nar
   // The on-tint token needs no justification at any size.
   const fixed = `export function E() { return <div className="rounded-full bg-indigo-100 text-xs font-semibold text-[var(--jf-primary-on-tint)]">W</div>; }`;
   assert.deepEqual(findingsIn("fixture.tsx", fixed), [], "the on-tint token is the fix");
+
+  // THE TOKEN SPELLING of the same tint (card t_f5a7dc24). /profile's badge paints
+  // `bg-[var(--jf-primary-tint-strong)]` now; the rule must keep judging it in BOTH
+  // directions — a normal-size base token flagged, the 24px one clean — or the
+  // migration would have turned the guard off for the site it was written for.
+  const tokenSmall = `export function F() { return <div className="rounded-full bg-[var(--jf-primary-tint-strong)] text-xs font-semibold text-[var(--jf-primary)]">W</div>; }`;
+  assert.equal(
+    findingsIn("fixture.tsx", tokenSmall).length,
+    1,
+    "the TOKEN spelling of the tint is not judged — the migrated /profile badge would read clean",
+  );
+  const tokenLarge = `export function G() { return <div className="rounded-full bg-[var(--jf-primary-tint-strong)] text-2xl font-semibold text-[var(--jf-primary)]">W</div>; }`;
+  assert.deepEqual(
+    findingsIn("fixture.tsx", tokenLarge),
+    [],
+    "the migrated 24px badge must keep the verdict the palette spelling had",
+  );
 });
 
 test("the repo-wide rule is looking at real, reachable markup", () => {
@@ -323,7 +359,7 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
   for (const rel of ["components/Shell.tsx", "app/profile/page.tsx"]) {
     assert.ok(
       tinted.some((t) => t.startsWith(rel)),
-      `no element in ${rel} paints bg-indigo-100 any more, so this guard no longer covers the ` +
+      `no element in ${rel} paints the indigo-100 tint any more, so this guard no longer covers the ` +
         `site this card measured. Found: ${JSON.stringify(tinted)}`,
     );
     // ANTI-VACUITY, and it is the check that caught this guard being blind: a
@@ -342,5 +378,13 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     globals,
     /--jf-primary-on-tint:\s*#4338ca/,
     `globals.css lost --jf-primary-on-tint — the AA-safe token this tint needs`,
+  );
+  // The token spelling of the tint itself, pinned to the value the 3.814 verdict is
+  // about: if the light step moves, every number in this file is about a pixel the
+  // app no longer paints (card t_f5a7dc24).
+  assert.match(
+    globals,
+    /--jf-primary-tint-strong:\s*#e0e7ff/,
+    `globals.css lost --jf-primary-tint-strong (#e0e7ff = indigo-100) — the surface this guard judges`,
   );
 });

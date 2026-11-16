@@ -1246,4 +1246,62 @@ export function tintedSurfaceFindings(rel: string, src: string): string[] {
   return [...new Set(findings)];
 }
 
+// ─── raw Tailwind palette COLOUR utilities (card t_cff48545) ─────────────────
+//
+// A palette FAMILY + numeric STEP (`bg-slate-50`, `text-slate-700`,
+// `hover:bg-slate-50/60`) is a colour painted from Tailwind's default scale
+// instead of from a `--jf-*` token. It cannot follow the app's dark block, and it
+// is what the design-system migration removes one page/component at a time
+// (/builder #1761, /login and /sales since). Those cards each ran a counting
+// instrument by hand; this is that instrument as a function, so the next page or
+// component is judged by the same rule instead of by a remembered one-liner.
+//
+// THE VARIANT PREFIX IS PART OF THE TOKEN. A prefix-less regex reads
+// `hover:bg-slate-50` as clean, and that is exactly the miss that let the last
+// one in `components/FormModeControl.tsx` survive a whole page migration: the
+// class only ever appears under `hover:`, so a scan for `^bg-slate-…` finds
+// nothing while the browser paints it in the state every pointer lands on.
+//
+// COMMENTS ARE STRIPPED (`codeOnly`), so a class quoted in a comment neither
+// paints nor satisfies the rule.
+//
+// DELIBERATELY NOT MATCHED:
+//   * `bg-white` / `bg-black/40` — no numeric step. The white/black bucket is a
+//     separate, larger migration; folding it in here would fail the tree for a
+//     different question than the one this rule asks.
+//   * arbitrary values already in token form — `bg-[var(--jf-bg-soft)]`,
+//     `border-[var(--jf-border)]`, `text-[var(--jf-text-secondary)]`.
+//   * non-colour utilities that share a prefix — `text-xs`, `text-sm`,
+//     `border-b`, `divide-y`, `shadow-md`, `outline-none`. (The directional
+//     border forms ARE colour utilities and are matched: `border-t-slate-200`.)
+export const PALETTE_FAMILIES =
+  "slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
+
+/** Colour-carrying utility prefixes (with the directional border/divide forms). */
+const COLOUR_UTILS =
+  "bg|text|border(?:-[trblxyse])?|ring(?:-offset)?|from|via|to|fill|stroke|divide(?:-[xy])?|outline|decoration|accent|caret|placeholder";
+
+/**
+ * Every raw palette colour utility in a source string, with the line it sits on.
+ *
+ * `util` is the WHOLE class token including its variant prefix, so a finding
+ * names what the browser paints (`hover:bg-slate-50`) rather than the bare
+ * utility — the dropped prefix is what made the original count read 0.
+ */
+export function rawPaletteUtilities(src: string): Array<{ util: string; line: number }> {
+  const code = codeOnly(src);
+  const out: Array<{ util: string; line: number }> = [];
+  const re = new RegExp(
+    // A variant prefix is any `…:` run before the utility, including arbitrary
+    // ones (`data-[state=open]:`, `md:hover:`).
+    `(?<![\\w:.-])((?:[a-z0-9_\\[\\]/=.&>-]+:)*(?:${COLOUR_UTILS})-(?:${PALETTE_FAMILIES})-\\d{2,3}(?:/\\d{1,3})?)(?![\\w-])`,
+    "g",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code))) {
+    out.push({ util: m[1], line: code.slice(0, m.index).split("\n").length });
+  }
+  return out;
+}
+
 

@@ -816,3 +816,49 @@ test("the repo-wide rule is looking at real, reachable markup", () => {
     `globals.css lost --jf-muted-on-tint — the AA-safe token a tinted surface's muted line needs`,
   );
 });
+
+// ─── the migrated page keeps every tinted site (card t_3a2b6a9f) ─────────────
+//
+// `/form-settings` was the page this guard's card was written against: its five
+// status / image-size / image-layout / "default" chips painted a SOLID
+// `bg-indigo-50`. The migration to the token form (`bg-[var(--jf-primary-tint)]`)
+// must not cost the guard a single site — the whole point of matching both
+// spellings is that the SURFACE moved and the rule still sees it.
+//
+// Counted per SITE, not per file: the repo-wide floor above counts FILES, so a
+// page that lost four of its five tints would still pass it. Five before, five
+// after — and each one paired with the on-tint token in the same class list,
+// because a tint without its AA pair is the defect this guard exists for.
+test("/form-settings keeps its five selected-state tints after the token migration", () => {
+  const rel = "app/form-settings/page.tsx";
+  const src = readFileSync(`${SRC}${rel}`, "utf8");
+  const code = codeOnly(src);
+  const TINT =
+    /(?:^|[\s"'`])(?:(?:[a-z-]+:)*)(?:bg-indigo-50|bg-\[var\(--jf-primary-tint\)\])(?![^"'\s`])/g;
+  const sites = [...code.matchAll(TINT)].map((m) => m.index!);
+  assert.equal(
+    sites.length,
+    5,
+    `the page paints ${sites.length} solid tints, not 5 — the migration moved a surface this guard ` +
+      `was written to see, or added one; re-anchor the count deliberately rather than letting it drift`,
+  );
+
+  // Each tint sits in the same class list as the AA pair. Walk back to the
+  // opening quote of the literal the class sits in, so the assertion is about
+  // the ELEMENT's class list and not about the file.
+  const offPair: string[] = [];
+  for (const idx of sites) {
+    const start = code.lastIndexOf('"', idx);
+    const end = code.indexOf('"', idx);
+    const list = start >= 0 && end > idx ? code.slice(start + 1, end) : "";
+    if (!list.includes("text-[var(--jf-primary-on-tint)]")) offPair.push(list);
+  }
+  assert.deepEqual(
+    offPair,
+    [],
+    `these tinted class lists lost their on-tint text pair: ${offPair.join(" | ")}`,
+  );
+
+  // …and the file is still clean under the rule itself.
+  assert.deepEqual(tintedSurfaceFindings(rel, src), []);
+});

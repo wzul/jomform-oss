@@ -18,12 +18,12 @@
 //
 //     refunded   -> no colour token in the className; rgb(23, 24, 28) on #ffffff
 //     authorized -> same
-//     paid       -> bg-blue-50 text-blue-700
-//     cancelled  -> bg-slate-100 + text-[var(--jf-muted-on-tint)]
+//     paid       -> the informational arm (blue-50 tint / blue-700 ink)
+//     cancelled  -> the neutral chip fill + text-[var(--jf-muted-on-tint)]
 //
-//   `/sales` paints the same `refunded` sale orange, so the dashboard was the one
-//   surface where a real status painted a colourless pill — and it disagreed with
-//   `/sales` about what a refunded sale looks like.
+// `/sales` painted the same `refunded` sale amber-orange, so the dashboard was the
+// one surface where a real status painted a colourless pill — and it disagreed
+// with `/sales` about what a refunded sale looks like.
 //
 // WHY THIS IS MEASURED AND NOT AN axe VIOLATION
 //
@@ -40,13 +40,12 @@
 //   1. NON-VACUITY: `/` renders (no redirect to /login), the Recent-sales table
 //      holds the four fixture rows, and the named `paid` arm paints a surface that
 //      is not white — so the measurement is reading a real painted pill.
-//   2. `refunded` paints the SAME surface as a probe carrying `bg-orange-50`, the
-//      class `/sales` uses for it, and a different surface from `paid`. That is
-//      the card's claim (a). The probe is the design system's own class list,
-//      measured through the same canvas path, so no palette value is hardcoded
-//      here.
+//   2. `refunded` paints the SAME surface as a probe carrying its own warning
+//      tint, and a different surface from `paid`. That is the card's claim (a).
+//      The probe is the design system's own token class list, measured through the
+//      same canvas path, so no palette value is hardcoded here.
 //   3. `authorized` (no map arm) paints the SAME surface and the SAME text colour
-//      as `cancelled` (the named `bg-slate-100` + `--jf-muted-on-tint` arm) and as
+//      as `cancelled` (the named neutral chip arm + `--jf-muted-on-tint`) and as
 //      the probe of that pair. That is the card's claim (b): an unnamed status
 //      takes the on-tint pair rather than an uncoloured pill.
 //   4. The pill's own text clears its floor on its own painted surface.
@@ -55,7 +54,7 @@
 //   6. CONTROL (the arm that makes the rest bite): the PRE-FIX class list is
 //      replayed on the SHIPPED `refunded` element — the exact bytes the helper
 //      produced before the fix — and it must land on the card's white, NOT on the
-//      orange probe, and its text must not be the on-tint token. If that
+//      warning probe, and its text must not be the on-tint token. If that
 //      discriminator could not see an uncoloured pill, the assertion above would
 //      be green on the tree that rendered the defect.
 //   7. FRESHNESS, and CONTROLS for it: the run must START with no stored locale,
@@ -102,10 +101,18 @@ const SALES = [
   created_at: "2026-10-01T02:00:00Z",
 }));
 
-/** The design system's own class lists, measured as PROBES in the same page. */
-const PROBE_BLUE = "bg-blue-50";
-const PROBE_ORANGE = "bg-orange-50";
-const PROBE_ON_TINT = "bg-slate-100 text-[var(--jf-muted-on-tint)]";
+/** The design system's own class lists, measured as PROBES in the same page.
+ *
+ * Card t_57059864 moved BOTH status surfaces onto the token layer (`/sales` and
+ * this dashboard helper carry the same six arms — `statusBadgeArms.test.ts`
+ * fails when they disagree), so the probes are the token spellings the app now
+ * paints. `--jf-warning-bg` is the tint the `refunded` arm now names (the same
+ * #fffbeb the warning family already carried); the assertion is about which
+ * a status paints, not about the palette name, which is why it is measured
+ * through the same canvas path rather than compared as a string. */
+const PROBE_INFO = "bg-[var(--jf-info-bg)]";
+const PROBE_WARNING = "bg-[var(--jf-warning-bg)]";
+const PROBE_ON_TINT = "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)]";
 /**
  * The wrapper the badge renders, with NO colour arm — i.e. exactly what the
  * pre-fix `|| ""` fallback produced on the shipped element. Kept as the class
@@ -113,7 +120,7 @@ const PROBE_ON_TINT = "bg-slate-100 text-[var(--jf-muted-on-tint)]";
  */
 const PRE_FIX_PILL = "whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-medium ";
 
-const PROBES = [PROBE_BLUE, PROBE_ORANGE, PROBE_ON_TINT, PRE_FIX_PILL];
+const PROBES = [PROBE_INFO, PROBE_WARNING, PROBE_ON_TINT, PRE_FIX_PILL];
 
 // ─── the in-page measurement ────────────────────────────────────────────────
 //
@@ -363,36 +370,36 @@ async function probes(page: Page): Promise<Measured[]> {
 }
 
 test.describe("the dashboard's Recent-sales status pill", () => {
-  test("MEASURES: `refunded` is the orange entry /sales uses, an unnamed status takes the on-tint pair", async ({
+  test("MEASURES: `refunded` is the warning entry /sales uses, an unnamed status takes the on-tint pair", async ({
     page,
     baseURL,
   }) => {
     await openDashboard(page, baseURL);
 
-    const [blue, orange, onTint] = await probes(page);
+    const [info, warning, onTint] = await probes(page);
     const paid = await measure(page, "REF-PAID");
     const refunded = await measure(page, "REF-REFUNDED");
     const authorized = await measure(page, "REF-AUTHORIZED");
     const cancelled = await measure(page, "REF-CANCELLED");
     const all = { paid, refunded, authorized, cancelled };
     console.log(
-      `[dashboard status pill] ${JSON.stringify(all)}\n[probes] orange=${orange.surface} ` +
-        `onTint=${onTint.surface}/${onTint.fg} blue=${blue.surface}`,
+      `[dashboard status pill] ${JSON.stringify(all)}\n[probes] warning=${warning.surface} ` +
+        `onTint=${onTint.surface}/${onTint.fg} info=${info.surface}`,
     );
 
     // (1) NON-VACUITY: the named `paid` arm paints a surface of its own. If this
     // is the card's white, the measurement is not reading a painted pill and every
     // assertion below would be about nothing.
     expect(paid.surface.toLowerCase(), "the `paid` control pill painted no surface").not.toBe("#ffffff");
-    expect(paid.surface, "the `paid` pill is not the blue arm's paint").toBe(blue.surface);
+    expect(paid.surface, "the `paid` pill is not the informational arm's paint").toBe(info.surface);
 
-    // (2) CLAIM (a): `refunded` paints the orange class `/sales` uses for it — the
-    // defect was that it painted NOTHING (prod: rgb(23,24,28) on #ffffff).
+    // (2) CLAIM (a): `refunded` paints the warning surface — the defect was that it
+    // painted NOTHING (prod: rgb(23,24,28) on #ffffff).
     expect(
       refunded.surface,
-      `the \`refunded\` pill does not paint the orange surface /sales uses for it ` +
+      `the \`refunded\` pill does not paint the warning surface its own arm names ` +
         `(measured ${JSON.stringify(refunded)})`,
-    ).toBe(orange.surface);
+    ).toBe(warning.surface);
     expect(
       refunded.surface,
       "the `refunded` and `paid` pills paint the same surface — the status maps have collapsed",
@@ -442,20 +449,20 @@ test.describe("the dashboard's Recent-sales status pill", () => {
     await expectGateSeesAriaViolation(page, "table", "the Recent-sales table");
   });
 
-  test("CONTROL: the pre-fix class list lands off the orange, so the assertion above bites", async ({
+  test("CONTROL: the pre-fix class list lands off the warning tint, so the assertion above bites", async ({
     page,
     baseURL,
   }) => {
     await openDashboard(page, baseURL);
 
-    // PROBES is [blue, orange, on-tint, pre-fix pill] — index 1 is the orange.
-    const [, orange] = await probes(page);
+    // PROBES is [info, warning, on-tint, pre-fix pill] — index 1 is the warning.
+    const [, warning] = await probes(page);
     const refunded = await measure(page, "REF-REFUNDED");
     const authorized = await measure(page, "REF-AUTHORIZED");
     expect(
       refunded.surface,
-      "the SHIPPED pill is not on the orange surface, so this control is not a control",
-    ).toBe(orange.surface);
+      "the SHIPPED pill is not on the warning surface, so this control is not a control",
+    ).toBe(warning.surface);
 
     // Replay the PRE-FIX bytes on the shipped element: the wrapper's classes only,
     // which is exactly what `({ … })[s] || ""` produced for a status the map did
@@ -470,9 +477,9 @@ test.describe("the dashboard's Recent-sales status pill", () => {
     expect(stripped.text, "the control measured a different element").toBe("refunded");
     expect(
       stripped.surface,
-      `an uncoloured pill is still on the orange surface, so the measurement cannot see the ` +
+      `an uncoloured pill is still on the warning surface, so the measurement cannot see the ` +
         `defect this file exists for: ${JSON.stringify(stripped)}`,
-    ).not.toBe(orange.surface);
+    ).not.toBe(warning.surface);
     expect(
       stripped.surface.toLowerCase(),
       "an uncoloured pill does not fall back to the card behind it — the composite is not being read",
@@ -482,15 +489,15 @@ test.describe("the dashboard's Recent-sales status pill", () => {
       "the uncoloured pill took the on-tint token, so the two arms are not distinguishable",
     ).not.toBe(authorized.fg);
 
-    // …and restoring the app's own class list puts it back on the orange, so the
+    // …and restoring the app's own class list puts it back on the warning, so the
     // discriminator is the class list and not the element, the viewport or a
     // one-off rendering.
     await badgeOf(page, "REF-REFUNDED").evaluate((el, cls) => {
       el.setAttribute("class", cls);
     }, before);
     const restored = await measure(page, "REF-REFUNDED");
-    expect(restored.surface, "restoring the app's own classes did not restore the orange pill").toBe(
-      orange.surface,
+    expect(restored.surface, "restoring the app's own classes did not restore the warning pill").toBe(
+      warning.surface,
     );
   });
 

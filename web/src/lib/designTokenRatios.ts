@@ -85,6 +85,11 @@ export const LIGHT_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-danger-border", bg: "--jf-danger-bg", ratio: 1.33, min: 1.0, role: "a danger callout's edge on its own tint" },
   { fg: "--jf-warning-border", bg: "--jf-surface", ratio: 1.24, min: 1.0, role: "the edge of a warning callout (amber-200)" },
   { fg: "--jf-warning-border", bg: "--jf-warning-bg", ratio: 1.2, min: 1.0, role: "a warning callout's edge on its own tint" },
+  { fg: "--jf-warning-border-strong", bg: "--jf-surface", ratio: 1.45, min: 1.0, role: "the STRONGER warning edge (amber-300), one step above the callout's" },
+  { fg: "--jf-warning-border-strong", bg: "--jf-warning-bg", ratio: 1.4, min: 1.0, role: "the stronger warning edge on the warning tint" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-surface", ratio: 8.36, min: 4.5, role: "a destructive text button's HOVER, one step darker than its resting ink" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-bg", ratio: 7.85, min: 4.5, role: "the destructive hover on the page" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-danger-bg", ratio: 7.64, min: 4.5, role: "the destructive hover on a danger tint" },
   { fg: "--jf-success-border", bg: "--jf-surface", ratio: 1.28, min: 1.0, role: "the edge of a success callout (emerald-200)" },
   { fg: "--jf-success-border", bg: "--jf-success-bg", ratio: 1.21, min: 1.0, role: "a success callout's edge on its own tint" },
   { fg: "--jf-info-border", bg: "--jf-surface", ratio: 1.42, min: 1.0, role: "the edge of an informational callout (blue-200)" },
@@ -95,6 +100,26 @@ export const LIGHT_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-neutral-fill-strong", bg: "--jf-surface", ratio: 1.49, min: 1.0, role: "a skeleton block / a stronger neutral chip (slate-300)" },
   { fg: "--jf-text-secondary", bg: "--jf-neutral-fill", ratio: 8.36, min: 4.5, role: "the number inside a step badge" },
   { fg: "--jf-text-secondary", bg: "--jf-neutral-fill-strong", ratio: 6.93, min: 4.5, role: "a label on the stronger neutral fill" },
+  // ── the informational tint and the dialog scrim (card t_57059864) ──────────
+  // `--jf-info` already had its accent pairing on the card; these name the
+  // SURFACE an informational chip is painted with (blue-50, the value the /sales
+  // `paid` chip already carried) and the alpha the drawer's backdrop carries.
+  { fg: "--jf-info", bg: "--jf-info-bg", ratio: 6.16, min: 4.5, role: "an informational chip's text on its own tint" },
+  { fg: "--jf-info-border", bg: "--jf-info-bg", ratio: 1.31, min: 1.0, role: "an informational chip's edge on its own tint (decoration)" },
+  { fg: "--jf-info-bg", bg: "--jf-surface", ratio: 1.09, min: 1.0, role: "the informational tint behind a chip" },
+  { fg: "--jf-scrim", bg: "--jf-surface", ratio: 2.12, min: 1.0, role: "the dialog scrim, composited over the page it dims" },
+  // ── the strong brand tint (card t_f5a7dc24) ────────────────────────────────
+  // `--jf-primary-tint` above is the 13% wash a selected row wears; this is the
+  // SOLID indigo-100 step (one stronger), the surface the /profile identity
+  // badge paints its initial on. That initial is 24px = 18pt = WCAG large-scale
+  // text, so the BASE token is held to the 3.0 floor on this surface — the same
+  // verdict `src/lib/indigo100Tint.test.ts` re-derives from the class list — and
+  // the on-tint token is the AA replacement for any normal-size label that ever
+  // lands here. `--jf-muted` is 3.92:1 on it and is refused in
+  // `src/lib/mutedText.test.ts` rather than listed as a pair.
+  { fg: "--jf-primary", bg: "--jf-primary-tint-strong", ratio: 3.81, min: 3.0, role: "the 24px avatar initial on the strong tint — large text (18pt), 3:1 floor" },
+  { fg: "--jf-primary-on-tint", bg: "--jf-primary-tint-strong", ratio: 6.41, min: 4.5, role: "a normal-size label on the strong tint (the AA step)" },
+  { fg: "--jf-primary-tint-strong", bg: "--jf-surface", ratio: 1.23, min: 1.0, role: "the strong brand tint as a chip surface" },
   // The INK BAND (card t_09f60795): a fixed dark slab on the landing hero, so its
   // ink is held to the band's own two fills rather than to the page.
   { fg: "--jf-ink-text", bg: "--jf-ink", ratio: 17.48, min: 4.5, role: "the ink band's primary text" },
@@ -149,6 +174,11 @@ export const DARK_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-danger-border", bg: "--jf-danger-bg", ratio: 1.65, min: 1.0, role: "a danger callout's edge on its dark tint" },
   { fg: "--jf-warning-border", bg: "--jf-surface", ratio: 2.21, min: 1.0, role: "the edge of a warning callout on the dark page" },
   { fg: "--jf-warning-border", bg: "--jf-warning-bg", ratio: 2.01, min: 1.0, role: "a warning callout's edge on its dark tint" },
+  { fg: "--jf-warning-border-strong", bg: "--jf-surface", ratio: 3.09, min: 1.0, role: "the STRONGER warning edge on the dark page, one step above the callout's" },
+  { fg: "--jf-warning-border-strong", bg: "--jf-warning-bg", ratio: 2.82, min: 1.0, role: "the stronger warning edge on the dark warning tint" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-surface", ratio: 12.03, min: 4.5, role: "the destructive HOVER in dark — a text colour goes LIGHTER here" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-bg", ratio: 13.06, min: 4.5, role: "the destructive hover on the dark page" },
+  { fg: "--jf-danger-text-strong", bg: "--jf-danger-bg", ratio: 11.91, min: 4.5, role: "the destructive hover on the dark danger tint" },
   { fg: "--jf-success-border", bg: "--jf-surface", ratio: 2.35, min: 1.0, role: "the edge of a success callout on the dark page" },
   { fg: "--jf-success-border", bg: "--jf-success-bg", ratio: 2.06, min: 1.0, role: "a success callout's edge on its dark tint" },
   { fg: "--jf-info-border", bg: "--jf-surface", ratio: 1.65, min: 1.0, role: "the edge of an informational callout on the dark page" },
@@ -159,6 +189,21 @@ export const DARK_CONTRASTS: readonly ContrastPair[] = [
   { fg: "--jf-neutral-fill-strong", bg: "--jf-surface", ratio: 1.48, min: 1.0, role: "a skeleton block on the dark page" },
   { fg: "--jf-text-secondary", bg: "--jf-neutral-fill", ratio: 8.71, min: 4.5, role: "the number inside a dark step badge" },
   { fg: "--jf-text-secondary", bg: "--jf-neutral-fill-strong", ratio: 7.2, min: 4.5, role: "a label on the dark stronger neutral fill" },
+  // The informational tint and the scrim, re-measured on the DARK surface (card
+  // t_57059864). The dark scrim is 45% rather than 30% — over a #0f1115 page the
+  // lighter alpha barely separates a drawer from what is behind it.
+  { fg: "--jf-info", bg: "--jf-info-bg", ratio: 8.54, min: 4.5, role: "an informational chip's text on its dark tint" },
+  { fg: "--jf-info-border", bg: "--jf-info-bg", ratio: 1.46, min: 1.0, role: "an informational chip's edge on its dark tint" },
+  { fg: "--jf-info-bg", bg: "--jf-surface", ratio: 1.13, min: 1.0, role: "the informational tint on the dark page" },
+  { fg: "--jf-scrim", bg: "--jf-surface", ratio: 1.11, min: 1.0, role: "the dark dialog scrim, composited over the page" },
+  // The strong brand tint in dark (card t_f5a7dc24): indigo-950, the deepest step
+  // of the same hue, because a solid light lavender glares on #0f1115. The base
+  // token clears the 3:1 large-text floor the 24px initial is held to (the 20%
+  // alpha tint's composite would measure 2.99:1, UNDER it); the on-tint token is
+  // the AA step; the tint itself sits at the family's weight (1.13 / 1.14).
+  { fg: "--jf-primary", bg: "--jf-primary-tint-strong", ratio: 3.4, min: 3.0, role: "the 24px avatar initial on the dark strong tint — large text" },
+  { fg: "--jf-primary-on-tint", bg: "--jf-primary-tint-strong", ratio: 10.72, min: 4.5, role: "a normal-size label on the dark strong tint" },
+  { fg: "--jf-primary-tint-strong", bg: "--jf-surface", ratio: 1.09, min: 1.0, role: "the dark strong brand tint as a chip surface" },
 ];
 
 // ── the pairs that are FORBIDDEN as text (card t_46ae7ad7) ───────────────────

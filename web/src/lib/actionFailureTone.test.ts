@@ -474,11 +474,18 @@ test("the element rendering {msg} branches its chrome on the tone, and a failure
     // A failure must be RED-FILLED. (The failure INK is measured for AA by the
     // browser spec and by the sibling colour guards; this pins the fill, which is
     // the visible half of "you cannot tell them apart".)
-    if (!/bg-red-50/.test(cls[1])) {
-      offenders.push(`${name} — the {msg} element has no failure fill (bg-red-50) in its tone branch`);
+    //
+    // THE TOKEN FORM COUNTS (card t_57059864). A page that moves its banner onto
+    // the token layer paints `bg-[var(--jf-danger-bg)]` — the same #fef2f2 — so a
+    // rule that only knew the palette spelling would red on the CORRECT fix and
+    // push the next page back to hand-picked colours. The fill and the success
+    // pair are matched in either spelling, and `/sales` (the first converted page)
+    // carries the token form while the other three still spell the palette.
+    if (!/bg-red-50|bg-\[var\(--jf-danger-bg\)\]/.test(cls[1])) {
+      offenders.push(`${name} — the {msg} element has no failure fill (bg-red-50 / --jf-danger-bg) in its tone branch`);
     }
-    if (!/emerald/.test(cls[1])) {
-      offenders.push(`${name} — the {msg} element has no success branch (an emerald fill/ink)`);
+    if (!/emerald|--jf-success/.test(cls[1])) {
+      offenders.push(`${name} — the {msg} element has no success branch (an emerald fill/ink, or --jf-success)`);
     }
     // A failure must be ANNOUNCED, not only seen — and the tone must be
     // OBSERVABLE, which is what lets the browser spec in

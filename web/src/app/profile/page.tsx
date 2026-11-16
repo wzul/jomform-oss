@@ -726,7 +726,7 @@ export default function ProfilePage() {
             them differently. */}
         <div
           role="tablist"
-          className="mt-4 flex flex-wrap gap-1 border-b border-slate-200"
+          className="mt-4 flex flex-wrap gap-1 border-b border-[var(--jf-border)]"
           onKeyDown={tablistKeyDown}
         >
           {TAB_IDS.map((id) => (
@@ -740,8 +740,8 @@ export default function ProfilePage() {
               role="tab"
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
                 tab === id
-                  ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
+                  ? "border-[var(--jf-text)] text-[var(--jf-text)]"
+                  : "border-transparent text-[var(--jf-muted)] hover:text-[var(--jf-text)]"
               }`}
             >
               <span className="sm:hidden">{t(`prof.${id}` as const)}</span>
@@ -751,8 +751,8 @@ export default function ProfilePage() {
         </div>
 
         {/* Banners — shown above tab content regardless of active tab */}
-        {msg && <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
-        {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
+        {msg && <p className="mt-4 rounded-lg bg-[var(--jf-success-bg)] px-3 py-2 text-sm text-[var(--jf-success-text)]">{msg}</p>}
+        {err && <p className="mt-4 rounded-lg bg-[var(--jf-danger-bg)] px-3 py-2 text-sm text-[var(--jf-danger-text)]">{err}</p>}
 
         {/* Identity tab */}
         {tab === "identity" && (
@@ -772,7 +772,7 @@ export default function ProfilePage() {
                       src={avatarPreview || avatarUrl}
                       alt={name || email || ""}
                       onError={() => setAvatarFailed(true)}
-                      className="h-20 w-20 rounded-full object-cover ring-1 ring-slate-200"
+                      className="h-20 w-20 rounded-full object-cover ring-1 ring-[var(--jf-border)]"
                     />
                   ) : (
                     // This 24px (text-2xl) initial IS WCAG large-scale text —
@@ -782,9 +782,10 @@ export default function ProfilePage() {
                     // t_86755e43: swapping a passing site's colour to please the
                     // 4.5 floor it is not subject to is not a fix). The size class
                     // is load-bearing: `src/lib/indigo100Tint.test.ts` requires a
-                    // large-scale size on any base token painted on bg-indigo-100,
-                    // and goes RED here if this badge is ever resized smaller.
-                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-indigo-100 text-2xl font-semibold text-[var(--jf-primary)] ring-1 ring-slate-200">
+                    // large-scale size on any base token painted on the strong brand
+                    // tint (`--jf-primary-tint-strong`, the indigo-100 step), and goes RED
+                    // here if this badge is ever resized smaller.
+                    <div className="flex h-20 w-20 items-center justify-center rounded-full bg-[var(--jf-primary-tint-strong)] text-2xl font-semibold text-[var(--jf-primary)] ring-1 ring-[var(--jf-border)]">
                       {((name || email || "?")[0] || "?").toUpperCase()}
                     </div>
                   )}
@@ -806,14 +807,14 @@ export default function ProfilePage() {
                     />
                   </label>
                   {(avatarUrl || avatarPreview) && (
-                    <button onClick={removeAvatar} className="self-start px-2 text-sm text-red-700 hover:underline">
+                    <button onClick={removeAvatar} className="self-start px-2 text-sm text-[var(--jf-danger-text)] hover:underline">
                       {t("prof.removeAvatar")}
                     </button>
                   )}
                 </div>
               </div>
-              <div className="mt-4 border-t border-slate-100 pt-4">
-              <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-name">{t("prof.displayName")}</label>
+              <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
+              <label className="mt-3 block text-xs text-[var(--jf-muted)]" htmlFor="prof-name">{t("prof.displayName")}</label>
               <input id="prof-name" maxLength={PROFILE_NAME_MAX_CHARS} value={name} onChange={(e) => setName(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder={t("prof.yourName")} />
               <button
                 onClick={async () => { if (await post("/api/auth/profile/name", { name })) setName(normalizeProfileName(name)); }}
@@ -821,8 +822,8 @@ export default function ProfilePage() {
               >{t("prof.saveName")}</button>
               </div>
               {/* Issue #181: optional phone number — blank = not set. */}
-              <div className="mt-4 border-t border-slate-100 pt-4">
-                <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-phone">{t("prof.phone")}</label>
+              <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
+                <label className="mt-3 block text-xs text-[var(--jf-muted)]" htmlFor="prof-phone">{t("prof.phone")}</label>
                 <input
                   id="prof-phone"
                   value={phone}
@@ -837,8 +838,8 @@ export default function ProfilePage() {
                 >{t("prof.savePhone")}</button>
               </div>
               {/* Issue #191: preferred timezone — Auto (browser/PC) or a hard-coded IANA timezone. */}
-              <div className="mt-4 border-t border-slate-100 pt-4">
-                <label className="mt-3 block text-xs text-slate-500" htmlFor="prof-tz">{t("prof.timezone")}</label>
+              <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
+                <label className="mt-3 block text-xs text-[var(--jf-muted)]" htmlFor="prof-tz">{t("prof.timezone")}</label>
                 <select
                   id="prof-tz"
                   value={timezone}
@@ -862,9 +863,9 @@ export default function ProfilePage() {
                   plainly that this is NOT the public form's language. The
                   control reads ctxLang (the i18n context, hydrated from
                   /api/auth/profile) so there is exactly one source of truth. */}
-              <div className="mt-4 border-t border-slate-100 pt-4">
+              <div className="mt-4 border-t border-[var(--jf-border)] pt-4">
                 <div className="mt-3 flex items-center gap-2">
-                  <label className="block text-xs text-slate-500" htmlFor="prof-lang">{t("prof.language")}</label>
+                  <label className="block text-xs text-[var(--jf-muted)]" htmlFor="prof-lang">{t("prof.language")}</label>
                   {/* Inline "?" doc link (AGENTS.md docs-parity rule 4): the
                       dashboard-language vs form-language split is the thing
                       users get wrong, so the doc is one click from the field. */}
@@ -873,7 +874,7 @@ export default function ProfilePage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     title={t("prof.languageDocs")}
-                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-2xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                   >
                     ?
                   </a>
@@ -907,7 +908,7 @@ export default function ProfilePage() {
                 {p ? (
                   <strong>{p.email}</strong>
                 ) : (
-                  <span aria-hidden="true" className="inline-block h-3 w-44 animate-pulse rounded bg-slate-200 align-middle" />
+                  <span aria-hidden="true" className="inline-block h-3 w-44 animate-pulse rounded bg-[var(--jf-neutral-fill)] align-middle" />
                 )}
               </p>
               <label className="mt-3 block text-sm" htmlFor="prof-new-email">{t("prof.newEmail")}</label>
@@ -965,12 +966,12 @@ export default function ProfilePage() {
                   target="_blank"
                   rel="noopener noreferrer"
                   title={t("prof.twoFaDocs")}
-                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                 >
                   ?
                 </a>
               </h2>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-[var(--jf-muted)]">
                 {t("prof.status")} <strong>{p?.totp_enabled ? t("prof.enabled") : t("prof.notEnabled")}</strong>
               </p>
               <button
@@ -1008,13 +1009,13 @@ export default function ProfilePage() {
                     // server-side, so refresh the management list too.
                     loadTrust();
                   }}
-                  className="ml-2 px-4 py-2 text-sm text-red-700 hover:underline"
+                  className="ml-2 px-4 py-2 text-sm text-[var(--jf-danger-text)] hover:underline"
                 >{t("prof.disable2fa")}</button>
               )}
               {/* Issue #63: trust this device status + forget control. */}
               {p?.totp_enabled && trustedUntil && (
-                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                  <span className="text-emerald-700">
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2 text-sm">
+                  <span className="text-[var(--jf-success-text)]">
                     {t("prof.trusted", { date: formatDate(trustedUntil, sessionUser?.timezone) })}
                   </span>
                   <button
@@ -1022,7 +1023,7 @@ export default function ProfilePage() {
                       const r = await fetch("/api/auth/trust/forget", { method: "POST" });
                       if (r.ok) { setTrustedUntil(""); loadTrust(); }
                     }}
-                    className="text-jf-sm text-red-700 hover:underline"
+                    className="text-jf-sm text-[var(--jf-danger-text)] hover:underline"
                   >{t("prof.forgetDevice")}</button>
                 </div>
               )}
@@ -1034,7 +1035,7 @@ export default function ProfilePage() {
             {p?.totp_enabled && (
               <section className="jf-card mt-6 p-6">
                 <h2 className="text-lg font-semibold">{t("prof.trustedDevices")}</h2>
-                <p className="mt-1 text-sm text-slate-500">{t("prof.trustedDevicesHelp")}</p>
+                <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("prof.trustedDevicesHelp")}</p>
                 {trustDevices.length === 0 ? (
                   <p className="mt-3 text-sm text-[var(--jf-muted)]">{t("prof.trustedDevicesEmpty")}</p>
                 ) : (
@@ -1043,18 +1044,18 @@ export default function ProfilePage() {
                       {trustDevices.map((d) => (
                         <li
                           key={d.id}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-100 px-3 py-2 text-sm"
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--jf-border)] px-3 py-2 text-sm"
                         >
                           <div className="min-w-0">
-                            <p className="font-medium text-slate-800">
+                            <p className="font-medium text-[var(--jf-text)]">
                               {d.label || t("prof.deviceUnknown")}
                               {d.current && (
-                                <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-jf-2xs font-medium text-emerald-700">
+                                <span className="ml-2 rounded bg-[var(--jf-success-bg)] px-1.5 py-0.5 text-jf-2xs font-medium text-[var(--jf-success-text)]">
                                   {t("prof.deviceThis")}
                                 </span>
                               )}
                             </p>
-                            <p className="mt-0.5 text-jf-xs text-slate-500">
+                            <p className="mt-0.5 text-jf-xs text-[var(--jf-muted)]">
                               {d.ip && <span>{t("prof.deviceIP")}: {d.ip} · </span>}
                               {d.first_seen && (
                                 <span>{t("prof.deviceFirstSeen")}: {formatDate(d.first_seen, sessionUser?.timezone)} · </span>
@@ -1071,7 +1072,7 @@ export default function ProfilePage() {
                               if (r.ok) { setMsg(t("prof.revoked")); loadTrust(); }
                               else { setErr(t("prof.failed")); }
                             }}
-                            className="text-jf-sm text-red-700 hover:underline"
+                            className="text-jf-sm text-[var(--jf-danger-text)] hover:underline"
                           >{t("prof.revoke")}</button>
                         </li>
                       ))}
@@ -1083,7 +1084,7 @@ export default function ProfilePage() {
                         if (r.ok) { setMsg(t("prof.revoked")); setTrustedUntil(""); loadTrust(); }
                         else { setErr(t("prof.failed")); }
                       }}
-                      className="mt-4 px-4 py-2 text-sm text-red-700 hover:underline"
+                      className="mt-4 px-4 py-2 text-sm text-[var(--jf-danger-text)] hover:underline"
                     >{t("prof.revokeAll")}</button>
                   </>
                 )}
@@ -1111,12 +1112,12 @@ export default function ProfilePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 title={t("prof.passkeysDocs")}
-                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
               >
                 ?
               </a>
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-[var(--jf-muted)]">
               {t("prof.passkeyDesc")}
             </p>
             <button onClick={registerPasskey} className="jf-btn-primary mt-3">
@@ -1125,15 +1126,15 @@ export default function ProfilePage() {
             {passkeys.length > 0 && (
               <ul className="mt-3 space-y-1.5">
                 {passkeys.map((k) => (
-                  <li key={k.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-xs">
-                    <span className="font-mono text-slate-500">{k.id.slice(0, 20)}…</span>
+                  <li key={k.id} className="flex items-center justify-between rounded-md border border-[var(--jf-border)] px-3 py-2 text-xs">
+                    <span className="font-mono text-[var(--jf-muted)]">{k.id.slice(0, 20)}…</span>
                     <button
                       onClick={async () => {
                         if (!window.confirm(t("prof.removePasskeyConfirm"))) return;
                         await fetch(`/api/auth/passkeys/${k.id}`, { method: "DELETE" });
                         load();
                       }}
-                      className="text-red-700 hover:underline"
+                      className="text-[var(--jf-danger-text)] hover:underline"
                     >{t("prof.remove")}</button>
                   </li>
                 ))}
@@ -1166,7 +1167,7 @@ export default function ProfilePage() {
                     <p className="text-jf-2xs text-[var(--jf-muted)]">{t("prof.linked")} {l.linked_at ? formatDate(l.linked_at, sessionUser?.timezone) : ""}</p>
                   </div>
                   <button onClick={async () => { await fetch(`/api/auth/social/${l.provider}`, { method: "DELETE" }); load(); }}
-                    className="text-xs text-slate-500 hover:text-red-700">{t("prof.unlink")}</button>
+                    className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]">{t("prof.unlink")}</button>
                 </li>
               ))}
               {social.length === 0 && (
@@ -1204,7 +1205,7 @@ export default function ProfilePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 title={t("prof.mcpDocs")}
-                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
               >
                 ?
               </a>
@@ -1221,13 +1222,13 @@ export default function ProfilePage() {
                 (client, scopes, expiry, Approve/Deny) still appear only after a
                 lookup resolves. Two entry points, one card: the email/CLI link
                 (which prefills and resolves immediately) and the typed code. */}
-            <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
+            <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">
               <h3 className="text-sm font-semibold">{t("prof.deviceTitle")}</h3>
-              <p id="prof-device-help" className="mt-1 text-xs text-slate-500">
+              <p id="prof-device-help" className="mt-1 text-xs text-[var(--jf-muted)]">
                 {deviceConsent ? t("prof.deviceHelp") : t("prof.deviceEmptyHint")}
               </p>
               <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={submitDeviceCode}>
-                <label htmlFor="prof-device-code" className="text-xs font-medium text-slate-500">
+                <label htmlFor="prof-device-code" className="text-xs font-medium text-[var(--jf-muted)]">
                   {t("prof.deviceEnterCode")}
                 </label>
                 <input
@@ -1250,7 +1251,7 @@ export default function ProfilePage() {
                   autoCapitalize="characters"
                   placeholder="KX9M-X5BS"
                   aria-describedby="prof-device-help"
-                  className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 font-mono text-sm tracking-widest"
+                  className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1 font-mono text-sm tracking-widest"
                 />
                 {/* No size/opacity utilities here: `.jf-btn-ghost` declares its
                     own disabled treatment outside any @layer (globals.css), so a
@@ -1274,12 +1275,12 @@ export default function ProfilePage() {
                     was a red "not valid or has expired" banner painted above a
                     fully rendered consent card with Approve/Deny on it. */}
                 {deviceErr && !deviceConsent && (
-                  <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                  <p className="mt-3 rounded-md bg-[var(--jf-danger-bg)] px-3 py-2 text-xs text-[var(--jf-danger-text)]">
                     {deviceErr}
                   </p>
                 )}
                 {deviceConsent && deviceCanDecide(deviceConsent) && (
-                  <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+                  <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] p-3">
                     <p className="text-sm">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceClient")}: </span>
                       {deviceConsent.client}
@@ -1287,7 +1288,7 @@ export default function ProfilePage() {
                     {/* Card t_762ada65: the card names the code it belongs to, in
                         the same words the authorisation email uses, so a person
                         holding two mails can tell which one is on screen. */}
-                    <p className="mt-1 text-xs text-slate-600">
+                    <p className="mt-1 text-xs text-[var(--jf-text-secondary)]">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceYourCode")}: </span>
                       <span className="font-mono tracking-widest">{deviceConsent.user_code}</span>
                     </p>
@@ -1299,7 +1300,7 @@ export default function ProfilePage() {
                         the user re-granted it — which meant the Connected-apps
                         scope change, which ROTATES the credential. */}
                     <fieldset className="mt-2">
-                      <legend className="text-xs font-medium text-slate-500">
+                      <legend className="text-xs font-medium text-[var(--jf-muted)]">
                         {t("prof.deviceScopeLegend")}
                       </legend>
                       <div className="mt-1.5 space-y-1.5">
@@ -1307,7 +1308,7 @@ export default function ProfilePage() {
                           <label
                             key={opt.value}
                             htmlFor={`prof-device-scope-${opt.value}`}
-                            className="flex cursor-pointer items-start gap-2 text-xs text-slate-700"
+                            className="flex cursor-pointer items-start gap-2 text-xs text-[var(--jf-text-secondary)]"
                           >
                             <input
                               id={`prof-device-scope-${opt.value}`}
@@ -1335,7 +1336,7 @@ export default function ProfilePage() {
                                   : t("prof.deviceScopeReadWrite")}
                               </span>
                               {" — "}
-                              <span className="text-slate-600">
+                              <span className="text-[var(--jf-text-secondary)]">
                                 {opt.value === "read"
                                   ? t("prof.deviceScopeReadHelp")
                                   : t("prof.deviceScopeReadWriteHelp")}
@@ -1345,7 +1346,7 @@ export default function ProfilePage() {
                         ))}
                       </div>
                     </fieldset>
-                    <p className="mt-1 text-xs text-slate-600">
+                    <p className="mt-1 text-xs text-[var(--jf-text-secondary)]">
                       <span className="text-[var(--jf-muted)]">{t("prof.deviceExpires")}: </span>
                       {formatDate(deviceConsent.expires_at)}
                     </p>
@@ -1370,7 +1371,7 @@ export default function ProfilePage() {
                   </div>
                 )}
                 {deviceConsent && !deviceCanDecide(deviceConsent) && (
-                  <p className="mt-3 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                  <p className="mt-3 rounded-md bg-[var(--jf-surface)] px-3 py-2 text-xs text-[var(--jf-text-secondary)]">
                     {deviceConsent.state === "approved"
                       ? t("prof.deviceApproved")
                       : deviceConsent.state === "denied"
@@ -1388,7 +1389,7 @@ export default function ProfilePage() {
             {/* Issue #426: server URL in a dedicated, copyable code box
                 (full-width, wraps cleanly) instead of inline in a paragraph. */}
             <div className="mt-4">
-              <p className="text-xs font-medium text-slate-500">{t("set.serverUrl")}</p>
+              <p className="text-xs font-medium text-[var(--jf-muted)]">{t("set.serverUrl")}</p>
               <div className="relative mt-1.5">
                 <button
                   onClick={() => {
@@ -1397,11 +1398,11 @@ export default function ProfilePage() {
                       setTimeout(() => setCopied(false), 1500);
                     });
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-medium text-white hover:opacity-90"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md bg-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-medium text-[var(--jf-on-color)] hover:opacity-90"
                 >
                   {copied ? t("mcp.copied") : t("mcp.copy")}
                 </button>
-                <code className="block w-full break-all rounded-lg border border-[var(--jf-border)] bg-slate-50 px-3 py-2.5 pr-20 text-sm text-slate-700">
+                <code className="block w-full break-all rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2.5 pr-20 text-sm text-[var(--jf-text-secondary)]">
                   https://mcp.jomform.com/mcp
                 </code>
               </div>
@@ -1418,7 +1419,7 @@ export default function ProfilePage() {
               ].map((d) => (
                 <li
                   key={d.label}
-                  className="flex items-center gap-2 rounded-lg border border-[var(--jf-border)] px-3 py-2 text-sm text-slate-600"
+                  className="flex items-center gap-2 rounded-lg border border-[var(--jf-border)] px-3 py-2 text-sm text-[var(--jf-text-secondary)]"
                 >
                   <span aria-hidden="true">{d.icon}</span>
                   <span>{d.label}</span>
@@ -1439,7 +1440,7 @@ export default function ProfilePage() {
                       await fetch(`/api/auth/mcp-agents/${encodeURIComponent(a.client_id)}`, { method: "DELETE" });
                       load();
                     }}
-                    className="text-xs text-slate-500 hover:text-red-700"
+                    className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                   >
                     {t("set.revoke")}
                   </button>
@@ -1448,7 +1449,7 @@ export default function ProfilePage() {
               {agents.length === 0 && (
                 <li className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-[var(--jf-border)] px-4 py-6 text-center">
                   <span className="text-2xl" aria-hidden="true">🤖</span>
-                  <p className="text-sm font-medium text-slate-600">{t("prof.mcpEmptyTitle")}</p>
+                  <p className="text-sm font-medium text-[var(--jf-text-secondary)]">{t("prof.mcpEmptyTitle")}</p>
                   <p className="max-w-sm text-xs text-[var(--jf-muted)]">{t("prof.mcpEmptyHelp")}</p>
                   <a
                     href="/mcp"
@@ -1475,20 +1476,20 @@ export default function ProfilePage() {
                   target="_blank"
                   rel="noopener noreferrer"
                   title={t("prof.appsDocs")}
-                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                 >
                   ?
                 </a>
               </h3>
-              <p className="mt-1 text-xs text-slate-500">{t("prof.appsHelp")}</p>
+              <p className="mt-1 text-xs text-[var(--jf-muted)]">{t("prof.appsHelp")}</p>
               {newGrant && (
-                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
-                  <p className="text-xs font-semibold text-amber-900">{t("prof.appsRotatedTitle")}</p>
-                  <p className="mt-1 text-xs text-amber-900">{t("prof.appsRotatedHelp")}</p>
-                  <code className="mt-2 block break-all rounded bg-white px-2 py-1.5 text-jf-2xs text-slate-700">
+                <div className="mt-3 rounded-lg border border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)] p-3">
+                  <p className="text-xs font-semibold text-[var(--jf-warning-text)]">{t("prof.appsRotatedTitle")}</p>
+                  <p className="mt-1 text-xs text-[var(--jf-warning-text)]">{t("prof.appsRotatedHelp")}</p>
+                  <code className="mt-2 block break-all rounded bg-[var(--jf-surface)] px-2 py-1.5 text-jf-2xs text-[var(--jf-text-secondary)]">
                     {newGrant.access}
                   </code>
-                  <code className="mt-1 block break-all rounded bg-white px-2 py-1.5 text-jf-2xs text-slate-700">
+                  <code className="mt-1 block break-all rounded bg-[var(--jf-surface)] px-2 py-1.5 text-jf-2xs text-[var(--jf-text-secondary)]">
                     {newGrant.refresh}
                   </code>
                 </div>
@@ -1518,7 +1519,7 @@ export default function ProfilePage() {
                           id={`app-scope-${app.id}`}
                           value={isWrite ? "readwrite" : "read"}
                           onChange={(e) => void changeAppScope(app, e.target.value)}
-                          className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
+                          className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1 text-xs"
                         >
                           <option value="read">{t("prof.appsScopeRead")}</option>
                           <option value="readwrite">{t("prof.appsScopeReadWrite")}</option>
@@ -1526,7 +1527,7 @@ export default function ProfilePage() {
                         <button
                           type="button"
                           onClick={() => void revokeApp(app)}
-                          className="text-xs text-slate-500 hover:text-red-700"
+                          className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                         >
                           {t("prof.appsRevoke")}
                         </button>
@@ -1544,9 +1545,9 @@ export default function ProfilePage() {
 
             {/* Issue #426: scope presented as a small info card with a clear
                 heading, not plain text. */}
-            <div className="mt-6 rounded-lg border border-[var(--jf-border)] bg-slate-50 p-4">
+            <div className="mt-6 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">
               <h3 className="text-sm font-semibold">{t("prof.mcpScopeTitle")}</h3>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-[var(--jf-muted)]">
                 {t("prof.mcpScopeHelp")}
               </p>
             </div>
@@ -1558,7 +1559,7 @@ export default function ProfilePage() {
             code-confirmation step before the account is actually enabled. */}
         {show2FA && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--jf-scrim)] p-4"
             role="dialog"
             aria-modal="true"
             aria-label={t("prof.twoFaSetupTitle")}
@@ -1569,11 +1570,11 @@ export default function ProfilePage() {
               onClick={(e) => e.stopPropagation()}
             >
               <h2 className="text-lg font-semibold">{t("prof.twoFaSetupTitle")}</h2>
-              <ol className="mt-3 space-y-2 text-sm text-slate-600">
+              <ol className="mt-3 space-y-2 text-sm text-[var(--jf-text-secondary)]">
                 <li>{t("prof.twoFaScan")}</li>
                 <li>
                   {t("prof.twoFaManual")}
-                  <div className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs tracking-widest select-all">
+                  <div className="mt-1 rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2 font-mono text-xs tracking-widest select-all">
                     {secretText}
                   </div>
                 </li>
@@ -1585,10 +1586,10 @@ export default function ProfilePage() {
                   alt={t("prof.qrAlt")}
                   width={220}
                   height={220}
-                  className="mx-auto mt-3 rounded border border-slate-200"
+                  className="mx-auto mt-3 rounded border border-[var(--jf-border)]"
                 />
               ) : (
-                <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-slate-200 bg-slate-50 text-xs text-[var(--jf-muted-on-tint)]">…</div>
+                <div className="mx-auto mt-3 flex h-[220px] w-[220px] items-center justify-center rounded border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] text-xs text-[var(--jf-muted-on-tint)]">…</div>
               )}
               <label className="mt-4 block text-sm" htmlFor="prof-totp-code">{t("prof.twoFaCodeLabel")}</label>
               <input

@@ -506,7 +506,7 @@ function TriToggle({
             onClick={() => onChange(o.v)}
             className={`rounded-lg border px-3 py-1.5 text-xs ${
               value === o.v
-                ? "border-[var(--jf-primary)] bg-[var(--jf-primary)] text-white"
+                ? "border-[var(--jf-primary)] bg-[var(--jf-primary)] text-[var(--jf-on-color)]"
                 : "border-[var(--jf-border)] text-[var(--jf-muted)] hover:text-[var(--jf-text-secondary)]"
             } disabled:opacity-50`}
           >
@@ -1804,7 +1804,7 @@ function FormSettingsInner() {
   }
 
   const inputCls = "jf-input mt-1 w-full max-w-xl";
-  const labelCls = "text-xs text-slate-500";
+  const labelCls = "text-xs text-[var(--jf-muted)]";
 
   // The header's way into this form's entries: Sales for a payment form,
   // Submission for a response form. Both are /sales?form=<id>; that page
@@ -1922,7 +1922,7 @@ function FormSettingsInner() {
             </nav>
 
             {loading && <p className="mt-6 text-sm text-[var(--jf-muted)]">{t("fs.loading")}</p>}
-            {err && <p className="mt-6 text-sm text-red-700">{err}</p>}
+            {err && <p className="mt-6 text-sm text-[var(--jf-danger-text)]">{err}</p>}
             {/* The page's save feedback. ONE state (`msg`) carries BOTH outcomes
                 — every save below writes a confirmation on success and a
                 failure sentence when the API refuses — so its TONE is painted
@@ -1938,8 +1938,8 @@ function FormSettingsInner() {
                 role={msgOk ? undefined : "alert"}
                 className={`mt-3 inline-block rounded-md px-2.5 py-1.5 text-xs ${
                   msgOk
-                    ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border border-red-200 bg-red-50 font-medium text-red-700"
+                    ? "border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]"
+                    : "border border-[var(--jf-danger-border)] bg-[var(--jf-danger-bg)] font-medium text-[var(--jf-danger-text)]"
                 }`}
               >
                 {msg}
@@ -1968,7 +1968,7 @@ function FormSettingsInner() {
                             href="/docs#form-url-slug"
                             title={t("fs.slugDocTitle")}
                             aria-label={t("fs.slugDocTitle")}
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--jf-border-strong)] text-jf-3xs font-semibold text-[var(--jf-muted)] hover:bg-[var(--jf-bg-soft)] hover:text-[var(--jf-text-secondary)]"
                             target="_blank"
                             rel="noreferrer"
                           >
@@ -1988,7 +1988,7 @@ function FormSettingsInner() {
                             form and that the old URL keeps working, otherwise
                             the field reads as cosmetic (the reported defect was
                             exactly that — a field that looked like it worked). */}
-                        <p className="mt-1 text-jf-2xs text-slate-500">{t("fs.slugHint")}</p>
+                        <p className="mt-1 text-jf-2xs text-[var(--jf-muted)]">{t("fs.slugHint")}</p>
                         {/* t_f76f81eb: a well-formed but RESERVED name (login,
                             api, docs, privacy, …) is refused by the API, and the
                             field normalises rather than rejects, so without this
@@ -2001,7 +2001,7 @@ function FormSettingsInner() {
                           <p
                             id="fs-slug-error"
                             role="alert"
-                            className="mt-1 text-jf-2xs font-medium text-red-700"
+                            className="mt-1 text-jf-2xs font-medium text-[var(--jf-danger-text)]"
                           >
                             {slugProblemText(slugProblem)}
                           </p>
@@ -2031,8 +2031,8 @@ function FormSettingsInner() {
                               onClick={() => setStatus(s)}
                               className={`whitespace-nowrap rounded-md border px-2 py-2 text-xs font-medium transition-colors ${
                                 status === s
-                                  ? "border-[var(--jf-accent)]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-slate-50"
+                                  ? "border-[var(--jf-accent)]/60 bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)]"
+                                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
                               }`}
                             >
                               {t(`bld.status${s[0].toUpperCase()}${s.slice(1)}` as import("../../components/i18n").Key)}
@@ -2041,7 +2041,7 @@ function FormSettingsInner() {
                         </div>
                         {status === "private" && (
                           <div className="mt-2">
-                            <label className="block text-jf-2xs text-slate-500">{t("bld.accessPassword")}</label>
+                            <label className="block text-jf-2xs text-[var(--jf-muted)]">{t("bld.accessPassword")}</label>
                             <input
                               type="password"
                               value={accessPw}
@@ -2064,7 +2064,7 @@ function FormSettingsInner() {
                             href="/docs/customize#brand-colour"
                             title={t("fs.themeDocTitle")}
                             aria-label={t("fs.themeDocTitle")}
-                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                            className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--jf-border-strong)] text-jf-3xs font-semibold text-[var(--jf-muted)] hover:bg-[var(--jf-bg-soft)] hover:text-[var(--jf-text-secondary)]"
                             target="_blank"
                             rel="noreferrer"
                           >
@@ -2092,8 +2092,8 @@ function FormSettingsInner() {
                               onClick={() => setFsImgSize(sz)}
                               className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
                                 fsImgSize === sz
-                                  ? "border-[var(--jf-accent)]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-slate-50"
+                                  ? "border-[var(--jf-accent)]/60 bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)]"
+                                  : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
                               }`}
                             >
                               {t(`fs.prodImgSize${sz[0].toUpperCase()}${sz.slice(1)}` as import("../../components/i18n").Key)}
@@ -2111,8 +2111,8 @@ function FormSettingsInner() {
                                 disabled={fsImgSize === "hidden"}
                                 className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
                                   fsImgLayout === ly
-                                    ? "border-[var(--jf-accent)]/60 bg-indigo-50 text-[var(--jf-primary-on-tint)]"
-                                    : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-slate-50"
+                                    ? "border-[var(--jf-accent)]/60 bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)]"
+                                    : "border-[var(--jf-border)] text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
                                 }`}
                               >
                                 {t(`fs.prodImgLayout${ly === "image-top" ? "Top" : "Left"}` as import("../../components/i18n").Key)}
@@ -2122,7 +2122,7 @@ function FormSettingsInner() {
                         </div>
                         {/* Live preview of the chosen size/layout. */}
                         {fsImgSize !== "hidden" && (
-                          <div className="mt-3 max-w-xl rounded-lg border border-[var(--jf-border)] bg-white p-3">
+                          <div className="mt-3 max-w-xl rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] p-3">
                             <p className="mb-2 text-jf-3xs uppercase tracking-wide text-[var(--jf-muted)]">
                               {t("fs.prodImgPreview")}
                             </p>
@@ -2132,7 +2132,7 @@ function FormSettingsInner() {
                               }`}
                             >
                               <div
-                                className="shrink-0 rounded-[10px] bg-slate-100"
+                                className="shrink-0 rounded-[10px] bg-[var(--jf-surface-2)]"
                                 style={
                                   fsImgLayout === "image-top"
                                     ? { width: "100%", height: fsImgSize === "large" ? 120 : 84 }
@@ -2140,8 +2140,8 @@ function FormSettingsInner() {
                                 }
                               />
                               <div className={fsImgLayout === "image-top" ? "flex w-full items-center gap-3" : "flex flex-1 items-center gap-3"}>
-                                <span className="inline-block h-5 w-5 shrink-0 rounded border-2 border-slate-300 bg-white" />
-                                <span className="flex-1 text-sm font-medium text-slate-700">{t("fs.prodImgSample")}</span>
+                                <span className="inline-block h-5 w-5 shrink-0 rounded border-2 border-[var(--jf-border-strong)] bg-[var(--jf-surface)]" />
+                                <span className="flex-1 text-sm font-medium text-[var(--jf-text-secondary)]">{t("fs.prodImgSample")}</span>
                                 <span className="ml-auto text-sm font-semibold text-[var(--jf-primary)]">{formatPrice(1200, currency)}</span>
                               </div>
                             </div>
@@ -2154,7 +2154,7 @@ function FormSettingsInner() {
                             at the field, instead of a silently broken image
                             on the buyer's page. */}
                         {fsLogoErr && (
-                          <p className="mt-1 rounded-md bg-red-50 px-2 py-1 text-jf-2xs font-medium text-red-700">
+                          <p className="mt-1 rounded-md bg-[var(--jf-danger-bg)] px-2 py-1 text-jf-2xs font-medium text-[var(--jf-danger-text)]">
                             {fsLogoErr}
                           </p>
                         )}
@@ -2193,14 +2193,14 @@ function FormSettingsInner() {
                                 role="img"
                                 aria-label={logoBadge}
                                 title={logoBadge}
-                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-[var(--jf-border)] bg-white text-center text-jf-2xs font-bold text-[var(--jf-primary-strong)]"
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] text-center text-jf-2xs font-bold text-[var(--jf-primary-strong)]"
                               >
                                 {logoBadge}
                               </div>
                             ) : logoPending ? (
                               /* the mime is still resolving — same box, no text,
                                  so an SVG logo never flashes its broken frame */
-                              <div className="h-12 w-12 rounded-lg border border-[var(--jf-border)] bg-slate-50" />
+                              <div className="h-12 w-12 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)]" />
                             ) : (
                               /* eslint-disable-next-line @next/next/no-img-element */
                               <img
@@ -2229,7 +2229,7 @@ function FormSettingsInner() {
                                   setFsLogo("");
                                   setFsLogoMedia(null);
                                 }}
-                                className="jf-btn-ghost text-red-700"
+                                className="jf-btn-ghost text-[var(--jf-danger-text)]"
                               >
                                 {t("mediaPicker.remove")}
                               </button>
@@ -2240,7 +2240,7 @@ function FormSettingsInner() {
                       {/* Issue #388: power-user custom JS. Owner-gated (write
                           role) + scanned server-side; runs on the buyer's page. */}
                       <details className="rounded-md border border-[var(--jf-border)] p-3">
-                        <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                        <summary className="cursor-pointer text-sm font-medium text-[var(--jf-text-secondary)]">
                           {t("bld.customJs")}
                         </summary>
                         <div className="mt-2 space-y-2">
@@ -2253,12 +2253,12 @@ function FormSettingsInner() {
                             placeholder="// e.g. document.querySelector('#of').addEventListener('submit', ...)"
                             className={`${inputCls} font-mono text-xs`}
                           />
-                          <p className="text-jf-2xs leading-relaxed text-amber-600">
+                          <p className="text-jf-2xs leading-relaxed text-[var(--jf-warning-text)]">
                             {t("bld.customJsWarning")}
                           </p>
                         </div>
                       </details>
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                         <input type="checkbox" checked={fsEmbed} onChange={(e) => setFsEmbed(e.target.checked)} className="accent-[var(--jf-primary)]" />
                         {t("bld.allowEmbed")}
                         {/* Issue #456: inline doc link to the embed guide (auto-height + snippet). */}
@@ -2267,7 +2267,7 @@ function FormSettingsInner() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title={t("bld.embedDocs")}
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                         >
                           ?
                         </a>
@@ -2275,11 +2275,11 @@ function FormSettingsInner() {
                       {/* Issue #438: QR ordering flow — generate a QR for the
                           form's public URL, optionally encoding a table number. */}
                       <details className="rounded-md border border-[var(--jf-border)] p-3">
-                        <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                        <summary className="cursor-pointer text-sm font-medium text-[var(--jf-text-secondary)]">
                           {t("fs.qrTitle")}
                         </summary>
                         <div className="mt-2 space-y-2">
-                          <p className="text-jf-2xs leading-relaxed text-slate-500">{t("fs.qrHelp")}</p>
+                          <p className="text-jf-2xs leading-relaxed text-[var(--jf-muted)]">{t("fs.qrHelp")}</p>
                           <div className="flex flex-wrap items-center gap-2">
                             <input
                               aria-label={t("fs.qrTablePh")}
@@ -2369,7 +2369,7 @@ function FormSettingsInner() {
                         rel="noopener noreferrer"
                         title={t("fs.menuDocs")}
                         aria-label={t("fs.menuDocs")}
-                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-2xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                       >
                         ?
                       </a>
@@ -2379,7 +2379,7 @@ function FormSettingsInner() {
                       <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                         <div>
                           <p className="text-sm font-medium">{t("set.menuEnabledTitle")}</p>
-                          <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.menuEnabledHelp")}</p>
+                          <p className="mt-0.5 max-w-md text-xs text-[var(--jf-muted)]">{t("set.menuEnabledHelp")}</p>
                         </div>
                         <Switch
                           checked={menuEnabled}
@@ -2391,7 +2391,7 @@ function FormSettingsInner() {
                       {menuEnabled && (
                         <>
                           {menuProducts.length === 0 ? (
-                            <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-jf-2xs leading-relaxed text-amber-800">
+                            <p className="rounded-md border border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)] px-2.5 py-2 text-jf-2xs leading-relaxed text-[var(--jf-warning-text)]">
                               {t("fs.menuNoProducts")}
                             </p>
                           ) : (
@@ -2401,7 +2401,7 @@ function FormSettingsInner() {
                                 <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-border)] p-2">
                                   {menuBestSeller && menuProductByID(menuBestSeller) ? (
                                     <>
-                                      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                                      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--jf-surface-2)]">
                                         {menuProductByID(menuBestSeller)?.images?.[0] ? (
                                           /* eslint-disable-next-line @next/next/no-img-element */
                                           <img
@@ -2429,7 +2429,7 @@ function FormSettingsInner() {
                                       <button
                                         type="button"
                                         onClick={() => setMenuBestSeller("")}
-                                        className="jf-btn-ghost text-red-700"
+                                        className="jf-btn-ghost text-[var(--jf-danger-text)]"
                                       >
                                         {t("set.menuClearBestSeller")}
                                       </button>
@@ -2461,6 +2461,7 @@ function FormSettingsInner() {
                                     <div key={i} className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] p-3">
                                       <div className="flex items-center gap-2">
                                         <input
+                                          aria-label={t("set.menuCatName")}
                                           value={c.name}
                                           onChange={(e) =>
                                             setMenuCategories((arr) =>
@@ -2473,7 +2474,7 @@ function FormSettingsInner() {
                                         <button
                                           type="button"
                                           onClick={() => setMenuCategories((arr) => arr.filter((_, j) => j !== i))}
-                                          className="jf-btn-ghost text-red-700"
+                                          className="jf-btn-ghost text-[var(--jf-danger-text)]"
                                         >
                                           {t("set.menuCatRemove")}
                                         </button>
@@ -2485,10 +2486,10 @@ function FormSettingsInner() {
                                             <span
                                               key={id}
                                               className={`inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${
-                                                p ? "border-[var(--jf-border)] bg-white" : "border-amber-300 bg-amber-50"
+                                                p ? "border-[var(--jf-border)] bg-[var(--jf-surface)]" : "border-[var(--jf-warning-border-strong)] bg-[var(--jf-warning-bg)]"
                                               }`}
                                             >
-                                              <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100">
+                                              <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--jf-surface-2)]">
                                                 {p?.images?.[0] ? (
                                                   /* eslint-disable-next-line @next/next/no-img-element */
                                                   <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
@@ -2511,7 +2512,7 @@ function FormSettingsInner() {
                                                     )
                                                   )
                                                 }
-                                                className="text-[var(--jf-muted)] hover:text-red-700"
+                                                className="text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                                               >
                                                 ✕
                                               </button>
@@ -2545,9 +2546,21 @@ function FormSettingsInner() {
                                   checkout fields. Its field blocks ARE the
                                   extra fields the menu checkout collects. */}
                               <div>
-                                <label className={labelCls}>{t("set.menuOrderForm")}</label>
+                                {/* The select needs an accessible NAME: axe
+                                    (wcag2a `select-name`) flagged this control
+                                    as an unlabelled combobox on /form-settings
+                                    the moment the menu's order-form section
+                                    rendered — reproduced on the base tree, so
+                                    it is pre-existing and independent of the
+                                    token migration (card t_3a2b6a9f fixed it
+                                    here because the card's acceptance is a
+                                    clean axe run on this page). The label and
+                                    the control are now associated; the visible
+                                    label is unchanged. */}
+                                <label className={labelCls} htmlFor="fs-menu-order-form">{t("set.menuOrderForm")}</label>
                                 <div className="mt-1 max-w-xl space-y-2">
                                   <select
+                                    id="fs-menu-order-form"
                                     value={menuOrderFormSlug}
                                     onChange={(e) => setMenuOrderFormSlug(e.target.value)}
                                     className="jf-input"
@@ -2559,10 +2572,10 @@ function FormSettingsInner() {
                                       </option>
                                     ))}
                                   </select>
-                                  <p className="text-jf-2xs leading-relaxed text-slate-500">
+                                  <p className="text-jf-2xs leading-relaxed text-[var(--jf-muted)]">
                                     {t("set.menuOrderFormHelp")}
                                   </p>
-                                  <p className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-jf-2xs leading-relaxed text-amber-800">
+                                  <p className="rounded-md border border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)] px-2.5 py-2 text-jf-2xs leading-relaxed text-[var(--jf-warning-text)]">
                                     {t("set.menuOrderFormMandatory")}
                                   </p>
                                   {menuOrderFormSlug && (
@@ -2603,7 +2616,7 @@ function FormSettingsInner() {
                                     })}
                                   </span>
                                 </div>
-                                <p className="mt-0.5 max-w-xl text-xs text-slate-500">
+                                <p className="mt-0.5 max-w-xl text-xs text-[var(--jf-muted)]">
                                   {t("set.menuPreviewHelp")}
                                 </p>
                                 {menuPreviewSections().length === 0 && (
@@ -2622,9 +2635,9 @@ function FormSettingsInner() {
                                           return (
                                             <span
                                               key={id}
-                                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--jf-border)] bg-white px-2 py-1"
+                                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1"
                                             >
-                                              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100">
+                                              <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--jf-surface-2)]">
                                                 {p.images?.[0] ? (
                                                   /* eslint-disable-next-line @next/next/no-img-element */
                                                   <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
@@ -2633,7 +2646,7 @@ function FormSettingsInner() {
                                                 )}
                                               </span>
                                               <span className="text-xs">
-                                                <span className="block max-w-[10rem] truncate font-medium text-slate-700">
+                                                <span className="block max-w-[10rem] truncate font-medium text-[var(--jf-text-secondary)]">
                                                   {p.name}
                                                 </span>
                                                 <span className="block text-jf-3xs text-[var(--jf-muted)]">
@@ -2724,7 +2737,7 @@ function FormSettingsInner() {
                                   className="jf-input w-56 text-sm"
                                 />
                                 {c.is_default && (
-                                  <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-2xs font-medium text-indigo-600">
+                                  <span className="rounded-full border border-[var(--jf-primary-border)] bg-[var(--jf-primary-tint)] px-2 py-0.5 text-jf-2xs font-medium text-[var(--jf-primary-on-tint)]">
                                     {t("fs.confDefault")}
                                   </span>
                                 )}
@@ -2733,14 +2746,14 @@ function FormSettingsInner() {
                                 <button
                                   onClick={() => removeConfirmation(i)}
                                   disabled={!canWrite}
-                                  className="jf-btn-ghost text-red-700"
+                                  className="jf-btn-ghost text-[var(--jf-danger-text)]"
                                 >
                                   {t("fs.confDelete")}
                                 </button>
                               )}
                             </div>
                             <div className="mt-3 flex flex-wrap items-center gap-3">
-                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                              <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                                 <input
                                   type="radio"
                                   name={`conf-type-${i}`}
@@ -2750,7 +2763,7 @@ function FormSettingsInner() {
                                 />
                                 {t("fs.confMessage")}
                               </label>
-                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                              <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                                 <input
                                   type="radio"
                                   name={`conf-type-${i}`}
@@ -2786,7 +2799,7 @@ function FormSettingsInner() {
                               </div>
                             )}
                             <div className="mt-3">
-                              <label className="flex items-center gap-2 text-sm text-slate-700">
+                              <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                                 <input
                                   type="checkbox"
                                   checked={!!c.condition}
@@ -2891,7 +2904,7 @@ function FormSettingsInner() {
                         target="_blank"
                         rel="noopener noreferrer"
                         title={t("fs.notifDocs")}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-2xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                       >
                         ?
                       </a>
@@ -2920,7 +2933,7 @@ function FormSettingsInner() {
                             href="/docs/customize#language"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                            className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                             title={t("set.emelLanguageRule")}
                             aria-label={t("set.emelLanguageRule")}
                           >
@@ -2943,7 +2956,7 @@ function FormSettingsInner() {
                             href="/docs/customize#language"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                            className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                             title={t("set.emelLanguageRule")}
                             aria-label={t("set.emelLanguageRule")}
                           >
@@ -3017,7 +3030,7 @@ function FormSettingsInner() {
                         <button onClick={saveFormEmailSettings} disabled={!canWrite || emelSaving} className="jf-btn-primary">
                           {t("fs.emelSave")}
                         </button>
-                        <button onClick={clearFormEmailOverrides} disabled={!canWrite || emelSaving} className="jf-btn-ghost text-slate-600">
+                        <button onClick={clearFormEmailOverrides} disabled={!canWrite || emelSaving} className="jf-btn-ghost text-[var(--jf-text-secondary)]">
                           {t("fs.emelClear")}
                         </button>
                       </div>
@@ -3047,11 +3060,11 @@ function FormSettingsInner() {
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium">{n.name || t("fs.notifName")}</span>
                               {n.is_default && (
-                                <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-indigo-600">
+                                <span className="rounded-full border border-[var(--jf-primary-border)] bg-[var(--jf-primary-tint)] px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                                   {t("fs.notifDefault")}
                                 </span>
                               )}
-                              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-jf-3xs text-slate-500">
+                              <span className="rounded-full border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-2 py-0.5 text-jf-3xs text-[var(--jf-muted)]">
                                 {t(notifEventKey(n.event))}
                               </span>
                               {!n.enabled && (
@@ -3062,7 +3075,7 @@ function FormSettingsInner() {
                               <button onClick={() => openEditNotification(n)} disabled={!canWrite} className="jf-btn-ghost">
                                 {t("fs.notifEdit")}
                               </button>
-                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost text-red-700">
+                              <button onClick={() => deleteNotification(n)} disabled={!canWrite} className="jf-btn-ghost text-[var(--jf-danger-text)]">
                                 {t("fs.notifDelete")}
                               </button>
                             </div>
@@ -3107,7 +3120,7 @@ function FormSettingsInner() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 title={t("fs.notifDocs")}
-                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                               >
                                 ?
                               </a>
@@ -3128,7 +3141,7 @@ function FormSettingsInner() {
                                 href="/docs/customize#language"
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                                className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                                 title={t("set.emelLanguageRule")}
                                 aria-label={t("set.emelLanguageRule")}
                               >
@@ -3147,7 +3160,7 @@ function FormSettingsInner() {
                                 href="/docs/customize#language"
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                                className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                                 title={t("set.emelLanguageRule")}
                                 aria-label={t("set.emelLanguageRule")}
                               >
@@ -3158,7 +3171,7 @@ function FormSettingsInner() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 title={t("fs.notifDocs")}
-                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                               >
                                 ?
                               </a>
@@ -3166,7 +3179,7 @@ function FormSettingsInner() {
                             <textarea id="fs-notif-body" value={edBody} onChange={(e) => setEdBody(e.target.value)} rows={6} className={`${inputCls} font-mono text-xs`} placeholder={hasSystemDefaultNotification(edEvent) ? t("fs.notifBodyPh") : undefined} />
                           </div>
                           <div>
-                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                               <input type="checkbox" checked={edEnabled} onChange={(e) => setEdEnabled(e.target.checked)} />
                               {t("fs.notifEnabled")}
                             </label>
@@ -3190,7 +3203,7 @@ function FormSettingsInner() {
                                   t={t}
                                   compact
                                 />
-                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost text-slate-600">
+                                <button onClick={() => setEdHasCond(false)} className="jf-btn-ghost text-[var(--jf-text-secondary)]">
                                   {t("fs.notifCondRemove")}
                                 </button>
                               </div>
@@ -3200,7 +3213,7 @@ function FormSettingsInner() {
                             <button onClick={saveNotification} disabled={!canWrite} className="jf-btn-primary">
                               {t("fs.notifSave")}
                             </button>
-                            <button onClick={closeEditor} className="jf-btn-ghost text-slate-600">
+                            <button onClick={closeEditor} className="jf-btn-ghost text-[var(--jf-text-secondary)]">
                               {t("fs.notifCancel")}
                             </button>
                           </div>
@@ -3218,7 +3231,7 @@ function FormSettingsInner() {
                     <p className="mt-1 text-sm text-[var(--jf-muted)]">{t("fs.chipHint")}</p>
                     <div className="mt-3">
                       <span className={`rounded-full border px-2.5 py-0.5 text-jf-2xs font-medium ${
-                        chipConfigured ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"
+                        chipConfigured ? "border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]" : "border-[var(--jf-border)] bg-[var(--jf-bg-soft)] text-[var(--jf-muted)]"
                       }`}>
                         {chipConfigured ? t("fs.chipConfigured") : t("fs.chipNotConfigured")}
                       </span>
@@ -3244,7 +3257,7 @@ function FormSettingsInner() {
                         <button onClick={saveChipOverride} disabled={!canWrite || !ovBrand || !ovSecret} className="jf-btn-primary">
                           {t("bld.saveOverride")}
                         </button>
-                        <button onClick={clearChipOverride} disabled={!canWrite} className="jf-btn-ghost text-slate-600">
+                        <button onClick={clearChipOverride} disabled={!canWrite} className="jf-btn-ghost text-[var(--jf-text-secondary)]">
                           {t("set.clear")}
                         </button>
                       </div>
@@ -3268,7 +3281,7 @@ function FormSettingsInner() {
                               <button
                                 onClick={() => removeChipFeed(f.id)}
                                 disabled={!canWrite}
-                                className="text-jf-2xs text-red-700 hover:text-red-800"
+                                className="text-jf-2xs text-[var(--jf-danger-text)] hover:text-[var(--jf-danger-text-strong)]"
                               >
                                 {t("fs.chipFeedRemove")}
                               </button>
@@ -3335,7 +3348,7 @@ function FormSettingsInner() {
                                         : null,
                                     })
                                   }
-                                  className="w-full rounded border border-slate-200 px-2 py-1 text-xs sm:w-44"
+                                  className="w-full rounded border border-[var(--jf-border)] px-2 py-1 text-xs sm:w-44"
                                 >
                                   <option value="">{t("fs.chipFeedNoCondition")}</option>
                                   {formBlocks.map((b) => (
@@ -3417,7 +3430,7 @@ function FormSettingsInner() {
                                 className="jf-input mt-1 w-full"
                               />
                             </div>
-                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                               <input
                                 type="checkbox"
                                 checked={set.isDefault}
@@ -3429,7 +3442,7 @@ function FormSettingsInner() {
                               type="button"
                               onClick={() => setShipSets((prev: ShipSetDraft[]) => prev.filter((_, i) => i !== si))}
                               disabled={!canWrite}
-                              className="text-xs text-slate-500 hover:text-red-700"
+                              className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                             >
                               {t("fs.shipDelete")}
                             </button>
@@ -3463,7 +3476,7 @@ function FormSettingsInner() {
                                       className="jf-input mt-1 w-full"
                                     />
                                   </div>
-                                  <label className="flex items-center gap-2 text-xs text-slate-700">
+                                  <label className="flex items-center gap-2 text-xs text-[var(--jf-text-secondary)]">
                                     <input
                                       type="checkbox"
                                       checked={zone.fallback}
@@ -3477,7 +3490,7 @@ function FormSettingsInner() {
                                       updShipSet(si, { zones: set.zones.filter((_, j) => j !== zi) })
                                     }
                                     disabled={!canWrite}
-                                    className="text-xs text-slate-500 hover:text-red-700"
+                                    className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                                   >
                                     {t("fs.shipDelete")}
                                   </button>
@@ -3606,7 +3619,7 @@ function FormSettingsInner() {
                                           updShipZone(si, zi, { rates: zone.rates.filter((_, k) => k !== ri) })
                                         }
                                         disabled={!canWrite}
-                                        className="text-xs text-slate-500 hover:text-red-700"
+                                        className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                                       >
                                         {t("fs.shipDelete")}
                                       </button>
@@ -3836,10 +3849,10 @@ function FormSettingsInner() {
                         <button className="jf-btn-primary" disabled={!canWrite}>{t("set.add")}</button>
                       </div>
                       <div className="mt-2">
-                        <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                        <p className="text-xs text-[var(--jf-muted)]">{t("webhook.eventsTitle")}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-3">
                           {WEBHOOK_EVENTS.map((ev) => (
-                            <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                            <label key={ev} className="flex items-center gap-1 text-sm text-[var(--jf-text-secondary)]">
                               <input type="checkbox" checked={whEvents.includes(ev)} onChange={() => toggleWhEvent(ev)} />
                               {ev}
                             </label>
@@ -3862,7 +3875,7 @@ function FormSettingsInner() {
                               <p className="mt-0.5 text-jf-2xs text-[var(--jf-muted)]">{(wh.events || []).join(", ")}</p>
                             </div>
                             <button onClick={() => deleteFormWebhook(wh.id)} disabled={!canWrite}
-                              className="shrink-0 text-xs text-slate-500 hover:text-red-700">✕</button>
+                              className="shrink-0 text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]">✕</button>
                           </li>
                         ))}
                       </ul>

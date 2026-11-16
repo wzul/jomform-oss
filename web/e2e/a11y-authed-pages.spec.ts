@@ -177,6 +177,51 @@ const FORM = {
   allow_embed: true,
 };
 
+/**
+ * The ONE product the menu tab is allowed to offer.
+ *
+ * `/form-settings`' menu panel resolves its products from the form's own
+ * `config.blocks` (a `product` block's `product_id`) against
+ * `/api/rest/products` — an account product the form does not reference is
+ * never offered (#497). So a stub that populates the PANEL needs both halves:
+ * the block here and the product below.
+ */
+const MENU_PRODUCT = {
+  id: "p1",
+  name: "Alpha",
+  price_sen: 1000,
+  images: [] as string[],
+  active: true,
+};
+
+/**
+ * The menu the form has SAVED, in the shape `GET /api/rest/forms/{id}/menu`
+ * writes it (api/internal/httpapi/rest_form_menu.go): enabled, one category,
+ * one product in it, and that product as the best-seller.
+ *
+ * WHY IT IS NOT `{}` ANY MORE (card t_e5b01cf0). The panel renders NOTHING but
+ * its toggle when the menu is disabled or the form references no product — the
+ * whole "Extra checkout fields" section, including the order-form `<select>`
+ * that shipped a critical `select-name` violation (a visible `<label>` with no
+ * `htmlFor`, and no `id` on the control), sat one `menuEnabled &&` branch below
+ * a stub that never entered it. Every a11y run over this file was green over
+ * that node because the node was never on the page. The stub now renders the
+ * panel it is supposed to scan: an enabled menu, one category carrying the
+ * product, and the best-seller — and the tab walk asserts the section really
+ * rendered (see the `menu` branch below), so re-emptying this stub fails the
+ * arm instead of quietly shrinking what is scanned.
+ */
+const MENU = {
+  enabled: true,
+  categories: [{ name: "Mains", product_ids: ["p1"] }],
+  best_seller: "p1",
+  order_form_slug: "",
+};
+
+/** The form's own blocks: one `product` block, so `menuProducts` resolves. */
+const MENU_BLOCKS = [{ id: "b1", value: "Alpha", type: "product", product_id: "p1" }];
+
+
 /** One row per list, so the table pages paint a row and not just the empty state. */
 const SALE = {
   ref_code: "R1",
@@ -299,12 +344,17 @@ const CONFIRMATION = {
   position: 0,
 };
 
-async function stubAPI(page: Page): Promise<void> {
+async function stubAPI(page: Page, opts: { menu?: boolean } = {}): Promise<void> {
   const json = (body: unknown) => ({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+  // The form /form-settings renders. The menu-panel arms get the variant that
+  // carries a `product` block: without it the panel's product list is empty by
+  // design and its "Extra checkout fields" section never renders (t_e5b01cf0).
+  const FORM_NOW = opts.menu ? { ...FORM, config: { blocks: MENU_BLOCKS } } : FORM;
+
   // Catch-all FIRST, specific routes AFTER it: Playwright resolves matching
   // routes in reverse registration order, so the later (specific) ones win.
   await page.route(/(.*)\/api\/.*$/, (route) => route.fulfill(json({})));
@@ -318,14 +368,20 @@ async function stubAPI(page: Page): Promise<void> {
   // one is stubbed in the shape its Go handler writes — the notifications list is
   // an ARRAY (rest_form_notifications.go writes `list`, and `[]` when the store
   // is not wired), the others are objects.
-  await page.route(/(.*)\/api\/rest\/forms(\?.*)?$/, (r) => r.fulfill(json([FORM])));
+  await page.route(/(.*)\/api\/rest\/forms(\?.*)?$/, (r) => r.fulfill(json([FORM_NOW])));
   await page.route(/(.*)\/api\/rest\/forms\/f1\/notifications(\?.*)?$/, (r) => r.fulfill(json([NOTIFICATION])));
   await page.route(/(.*)\/api\/rest\/forms\/f1\/chip-feeds(\?.*)?$/, (r) => r.fulfill(json({ feeds: [FEED] })));
   await page.route(/(.*)\/api\/rest\/forms\/f1\/email-settings(\?.*)?$/, (r) => r.fulfill(json({})));
   await page.route(/(.*)\/api\/rest\/forms\/f1\/confirmations(\?.*)?$/, (r) =>
     r.fulfill(json({ confirmations: [CONFIRMATION] })),
   );
-  await page.route(/(.*)\/api\/rest\/forms\/f1\/menu(\?.*)?$/, (r) => r.fulfill(json({})));
+  // The Restaurant-menu tab reads this form's SAVED menu. Populated, not `{}`:
+  // the panel's own controls (the order-form select included) only exist one
+  // `menuEnabled` branch down, and an empty body left every one of them
+  // unscanned (t_e5b01cf0).
+  await page.route(/(.*)\/api\/rest\/forms\/f1\/menu(\?.*)?$/, (r) =>
+    r.fulfill(json(opts.menu ? MENU : {})),
+  );
   // The Shipping tab reads the workspace's managed zone sets. Stubbed with a
   // real configuration so the tab's OWN controls are on the page when axe and
   // the unnamed-control check run — an empty `{}` body would render the empty
@@ -365,7 +421,7 @@ async function stubAPI(page: Page): Promise<void> {
       }),
     ),
   );
-  await page.route(/(.*)\/api\/rest\/forms\/[^/?]+(\?.*)?$/, (r) => r.fulfill(json(FORM)));
+  await page.route(/(.*)\/api\/rest\/forms\/[^/?]+(\?.*)?$/, (r) => r.fulfill(json(FORM_NOW)));
   await page.route(/(.*)\/api\/rest\/webhooks(\?.*)?$/, (r) => r.fulfill(json([])));
 
   // The twelve routes' own lists.
@@ -400,6 +456,12 @@ async function stubAPI(page: Page): Promise<void> {
     r.fulfill(json({ available: true, max_history_turns: 16, limits: { max_message_chars: 2000, messages_per_hour: 20 } })),
   );
   await page.route(/(.*)\/api\/rest\/products[^?]*(.*)$/, (r) => r.fulfill(json([])));
+  // …and, for the menu panel only, the ONE product the form's block references.
+  // Scoped to this option on purpose: the /builder arm shares the empty list
+  // above, and giving IT a product row would change what that arm scans.
+  if (opts.menu) {
+    await page.route(/(.*)\/api\/rest\/products(\?.*)?$/, (r) => r.fulfill(json([MENU_PRODUCT])));
+  }
   await page.route(/(.*)\/api\/rest\/currency\/rates(\?.*)?$/, (r) => r.fulfill(json({ rates: [], cached: false })));
 }
 
@@ -579,7 +641,10 @@ type Settled = {
  */
 async function openRoute(page: Page, route: Route, baseURL?: string): Promise<{ status: number } & Settled> {
   await freshState(page);
-  await stubAPI(page);
+  // The /form-settings arms get the POPULATED menu (t_e5b01cf0): its menu tab is
+  // walked below, so the stubs have to render that tab's panel — an empty menu
+  // body scanned the toggle and nothing else.
+  await stubAPI(page, { menu: route.name === "form-settings" });
   const response = await page.goto(route.path, { waitUntil: "domcontentloaded" });
   const status = response?.status() ?? 0;
   expect(
@@ -959,7 +1024,37 @@ test.describe("a11y: /form-settings, every tab", () => {
       );
       console.log(`[form-settings] ${key}: bodyText=${bodyText} controls=${controls} heading=${JSON.stringify(wantHeading)}`);
 
+      if (key === "menu") {
+        // NON-VACUITY FOR THE MENU PANEL (card t_e5b01cf0). The "Extra checkout
+        // fields" section — and the order-form `<select>` that shipped a
+        // critical `select-name` violation in it — only exists when the menu is
+        // ENABLED and the form references a product. With the stub at `{}` this
+        // arm scanned the toggle alone and was green over that node; these two
+        // structural readings are what make that impossible to reintroduce
+        // silently. Located WITHOUT the accessible name, so on a tree where the
+        // name is missing the run still reaches the axe scan below (which is
+        // what names the defect) rather than failing on a lookup.
+        await expect(
+          page.locator("select"),
+          'the menu tab must render the order-form <select> — the populated menu stub is what puts the "Extra checkout fields" section on the page',
+        ).toHaveCount(1);
+        await expect(
+          page.getByPlaceholder(DICT["set.menuCatName"].en),
+          "the stub's one menu category must render, or this tab is being scanned as an empty panel",
+        ).toHaveCount(1);
+      }
+
       await scanDocument(page, `/form-settings → ${key}`);
+
+      if (key === "menu") {
+        // …and the control that section carries is NAMED (the defect itself):
+        // a visible `<label>` bound by `htmlFor`, not a sibling with nothing in
+        // common with the control.
+        await expect(
+          page.getByLabel(DICT["set.menuOrderForm"].en, { exact: true }),
+          'the menu tab\'s order-form <select> has no accessible name — its <label> carries no htmlFor and the control no id (the `select-name` violation this card makes the gate able to see)',
+        ).toHaveCount(1);
+      }
 
       const unnamed = await readUnnamedControls(page);
       expect(

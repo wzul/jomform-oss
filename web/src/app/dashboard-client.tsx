@@ -253,15 +253,20 @@ export default function Dashboard() {
   // `/sales` uses, and anything the map does not name gets the design system's
   // on-tint pair instead of an uncoloured pill. `src/lib/statusBadgeArms.test.ts`
   // reads both helpers against the DB's own CHECK list so neither can drift back.
+  // Card t_57059864: these arms are the SAME strings the /sales `saleBadge` map
+  // carries, and `src/lib/statusBadgeArms.test.ts` fails the build when the two
+  // surfaces disagree about one status — so the palette→token move on /sales
+  // moves this helper in the same commit rather than leaving one sale painted
+  // two ways. Nothing else on this page changes.
   const badge = (s: string) =>
     ({
-      pending: "bg-amber-50 text-amber-700 border-amber-200",
-      paid: "bg-blue-50 text-blue-700 border-blue-200",
-      confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      failed: "bg-red-50 text-red-700 border-red-200",
-      cancelled: "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200",
-      refunded: "bg-orange-50 text-orange-700 border-orange-200",
-    })[s] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
+      pending: "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning-border)]",
+      paid: "bg-[var(--jf-info-bg)] text-[var(--jf-info)] border-[var(--jf-info-border)]",
+      confirmed: "bg-[var(--jf-success-bg)] text-[var(--jf-success-text)] border-[var(--jf-success-border)]",
+      failed: "bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)] border-[var(--jf-danger-border)]",
+      cancelled: "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)] border-[var(--jf-border)]",
+      refunded: "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning)]",
+    })[s] || "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)] border-[var(--jf-border)]";
 
   // issue #106: per-sale receipt email status label + badge colour.
   const emailLabel = (s?: string) =>

@@ -154,7 +154,7 @@ function SaleFeeNote({ sale }: { sale: Sale }) {
       </span>
       <span className="block">
         {t("sales.feeNet")}{" "}
-        <span className="font-semibold text-slate-700">{money(fee.netSen, cur)}</span>
+        <span className="font-semibold text-[var(--jf-text-secondary)]">{money(fee.netSen, cur)}</span>
       </span>
     </span>
   );
@@ -195,40 +195,57 @@ function playBeep() {
 }
 
 /* same status badge colors as the dashboard Recent sales table.
-   Card t_10266084: `cancelled` and the FALLBACK both sit on `bg-slate-100`,
-   where `text-slate-500` (#62748e) measures 4.349:1 — under the 4.5:1 floor for
+   Card t_10266084: `cancelled` and the FALLBACK both sit on the neutral chip
+   fill, where --jf-muted (#6b7280) measures 4.349:1 — under the 4.5:1 floor for
    this 10px/12px badge. `--jf-muted-on-tint` (#5b6472) measures 5.460:1 on the
-   same tint. Neither class list was visible to `mutedText.test.ts` until the
-   shared source reader learned to follow a local helper call (this card). */
+   same fill. Neither arm was visible to `mutedText.test.ts` until the shared
+   source reader learned to follow a local helper call (that card).
+
+   Card t_57059864: every arm is now a TOKEN, so the surface it paints and the
+   text colour on it are the measured pair in `designTokenRatios.ts` and not a
+   palette class nobody owns. `refunded` was orange — a family this app has no
+   token for — and it collapses onto the warning family (its meaning is "money
+   went back", the same family the partial-refund marker wears); it is kept
+   distinct from `pending` by the recorded `--jf-warning` MARKER step as its
+   edge (3.19:1 on the card) where pending keeps the pastel
+   `--jf-warning-border` (1.24:1). */
 const saleBadge = (s: string) =>
   ({
-    pending: "bg-amber-50 text-amber-700 border-amber-200",
-    paid: "bg-blue-50 text-blue-700 border-blue-200",
-    confirmed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    failed: "bg-red-50 text-red-700 border-red-200",
-    cancelled: "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200",
-    refunded: "bg-orange-50 text-orange-700 border-orange-200",
-  })[s] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
+    pending: "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning-border)]",
+    paid: "bg-[var(--jf-info-bg)] text-[var(--jf-info)] border-[var(--jf-info-border)]",
+    confirmed: "bg-[var(--jf-success-bg)] text-[var(--jf-success-text)] border-[var(--jf-success-border)]",
+    failed: "bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)] border-[var(--jf-danger-border)]",
+    cancelled: "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)] border-[var(--jf-border)]",
+    refunded: "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning)]",
+  })[s] || "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)] border-[var(--jf-border)]";
 
 /* Issue #518: the partial-refund chip. A partially refunded sale keeps its
    paid/confirmed status, so it needs its own visible marker — otherwise the
-   merchant reads the sale as fully paid while money has already gone back. */
-const refundBadge = "bg-amber-50 text-amber-700 border-amber-300";
+   merchant reads the sale as fully paid while money has already gone back.
+   Card t_57059864: it wears the same pair as the `refunded` arm above (warning
+   tint + warning text + the `--jf-warning` marker step as its edge), so the two
+   refund surfaces of this page speak one language instead of three ambers. */
+const refundBadge = "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning)]";
 
 /* email delivery status badge colors (issue #194).
-   Card t_10266084: the FALLBACK (a status the map does not name) sits on
-   `bg-slate-100`, where `text-slate-500` (#62748e) measures 4.349:1 — under the
+   Card t_10266084: the FALLBACK (a status the map does not name) sits on the
+   neutral chip fill, where --jf-muted (#6b7280) measures 4.349:1 — under the
    4.5:1 floor for this 10px badge; `--jf-muted-on-tint` (#5b6472) measures
-   5.460:1 on the same tint. Invisible to `mutedText.test.ts` until the shared
-   source reader learned to follow a local helper call (this card). */
+   5.460:1 on the same fill. Invisible to `mutedText.test.ts` until the shared
+   source reader learned to follow a local helper call (that card).
+
+   Card t_57059864: `complaint` was orange and `click` violet — two families this
+   app has no token for. Each collapses onto the family that carries its meaning:
+   a complaint is a WARNING (same pair as `pending`), a click is ENGAGEMENT on the
+   brand (the `--jf-primary-tint` pair the responses chip already wears). */
 const emailStatusBadge = (e: string) =>
   ({
-    delivered: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    bounce: "bg-red-50 text-red-700 border-red-200",
-    complaint: "bg-orange-50 text-orange-700 border-orange-200",
-    open: "bg-blue-50 text-blue-700 border-blue-200",
-    click: "bg-violet-50 text-violet-700 border-violet-200",
-  })[e] || "bg-slate-100 text-[var(--jf-muted-on-tint)] border-slate-200";
+    delivered: "bg-[var(--jf-success-bg)] text-[var(--jf-success-text)] border-[var(--jf-success-border)]",
+    bounce: "bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)] border-[var(--jf-danger-border)]",
+    complaint: "bg-[var(--jf-warning-bg)] text-[var(--jf-warning-text)] border-[var(--jf-warning-border)]",
+    open: "bg-[var(--jf-info-bg)] text-[var(--jf-info)] border-[var(--jf-info-border)]",
+    click: "bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)] border-[var(--jf-primary-border)]",
+  })[e] || "bg-[var(--jf-surface-2)] text-[var(--jf-muted-on-tint)] border-[var(--jf-border)]";
 
 /* localized label for an email delivery event type (issue #194) */
 const emailStatusLabel = (e: string, t: (k: Key) => string) =>
@@ -880,13 +897,13 @@ function SalesPageInner() {
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-jf-2xs font-medium ${
                 live
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-slate-200 bg-slate-50 text-slate-500"
+                  ? "border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]"
+                  : "border-[var(--jf-border)] bg-[var(--jf-bg-soft)] text-[var(--jf-muted-on-tint)]"
               }`}
               title={t("sales.liveHint")}
             >
               <span
-                className={`h-1.5 w-1.5 rounded-full ${live ? "bg-emerald-500" : "bg-slate-400"}`}
+                className={`h-1.5 w-1.5 rounded-full ${live ? "bg-[var(--jf-success)]" : "bg-[var(--jf-switch-off)]"}`}
               />
               {live ? t("sales.live") : t("sales.offline")}
             </span>
@@ -910,7 +927,7 @@ function SalesPageInner() {
                 — the branch moved the anchor to /docs/sales (where the full
                 text is now) and main carries #738's AA value for the muted
                 glyph. Taking either side wholesale loses the other: the
-                branch's pre-#738 text-slate-500 is 4.48:1 on --jf-bg (axe
+                branch's pre-#738 palette grey (4.48:1 on --jf-bg, axe
                 serious), and main's /docs#realtime-notifications anchor is a
                 summary, not the guide the switch is meant to open.
                 t_a4adf2f1: #738's --jf-muted is 4.5438:1 on --jf-bg — a PASS
@@ -922,7 +939,7 @@ function SalesPageInner() {
                 surface, and it measures 5.6221:1 here / 5.9817:1 on white. */}
             <a
               href="/docs/sales#realtime-notifications"
-              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-slate-50"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--jf-border-strong)] text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-[var(--jf-bg-soft)]"
               aria-label={t("sales.soundDocs")}
               title={t("sales.soundDocs")}
             >
@@ -932,7 +949,7 @@ function SalesPageInner() {
                 say the setting could not be read instead of showing a state the
                 workspace may not hold. */}
             {soundReadFailed && (
-              <span role="status" className="text-jf-2xs text-amber-700">
+              <span role="status" className="text-jf-2xs text-[var(--jf-warning-text)]">
                 {t("sales.soundReadFail")}
               </span>
             )}
@@ -1011,7 +1028,7 @@ function SalesPageInner() {
               <button
                 onClick={captureAllPending}
                 disabled={busyRef !== null}
-                className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-medium text-[var(--jf-on-color)] hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busyRef === "__all__" ? "…" : `${t("sales.captureAll")} (${rows.filter(isCapturePending).length})`}
               </button>
@@ -1039,8 +1056,8 @@ function SalesPageInner() {
             role={msgOk ? undefined : "alert"}
             className={`mt-3 inline-block rounded-md px-2.5 py-1.5 text-xs ${
               msgOk
-                ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border border-red-200 bg-red-50 font-medium text-red-700"
+                ? "border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]"
+                : "border border-[var(--jf-danger-border)] bg-[var(--jf-danger-bg)] font-medium text-[var(--jf-danger-text)]"
             }`}
           >
             {msg}
@@ -1098,7 +1115,7 @@ function SalesPageInner() {
                           <span className="block break-words">{s.buyer_phone}</span>
                         )}
                         {!isResponse && s.table_number && (
-                          <span className="mt-1 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
+                          <span className="mt-1 inline-block rounded-full bg-[var(--jf-primary-tint)] px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
                             {t("sales.table")} {s.table_number}
                           </span>
                         )}
@@ -1110,7 +1127,7 @@ function SalesPageInner() {
                     meta={isResponse ? undefined : money(s.total_sen, s.currency)}
                     badges={
                       isResponse ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
+                        <span className="rounded-full border border-[var(--jf-primary-border)] bg-[var(--jf-primary-tint)] px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (
@@ -1197,8 +1214,8 @@ function SalesPageInner() {
                               disabled={busyRef !== null}
                               className={
                                 a.event === "capture"
-                                  ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-                                  : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                  ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-[var(--jf-on-color)] hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                                  : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)] disabled:cursor-not-allowed disabled:opacity-40"
                               }
                             >
                               {busyRef === s.ref_code ? "…" : actionLabel(a)}
@@ -1288,10 +1305,10 @@ function SalesPageInner() {
                   header still lines up with both kinds. */}
               {rows.map((s) =>
                 mixedView ? (
-                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-[var(--jf-bg-soft)]">
                     <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">
                       {rowKind(s) === "response" ? (
-                        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
+                        <span className="rounded-full border border-[var(--jf-primary-border)] bg-[var(--jf-primary-tint)] px-2 py-0.5 text-jf-3xs font-medium text-[var(--jf-primary-on-tint)]">
                           {t("bld.responses")}
                         </span>
                       ) : (
@@ -1344,7 +1361,7 @@ function SalesPageInner() {
                 ) : rowKind(s) === "response" ? (
                   <tr
                     key={rowKey(s)}
-                    className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60"
+                    className="border-b border-[var(--jf-border)] last:border-0 hover:bg-[var(--jf-bg-soft)]"
                   >
                     <td className="whitespace-nowrap px-4 py-3 text-jf-2xs text-[var(--jf-muted)]">
                       {formatDateTime(s.created_at, user?.timezone)}
@@ -1374,7 +1391,7 @@ function SalesPageInner() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-slate-50/60">
+                  <tr key={rowKey(s)} className="border-b border-[var(--jf-border)] last:border-0 hover:bg-[var(--jf-bg-soft)]">
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-jf-2xs">{s.ref_code}</td>
                   <td className="max-w-32 truncate px-2 py-3 text-xs">
                     {s.buyer || "—"}
@@ -1382,7 +1399,7 @@ function SalesPageInner() {
                       <span className="block truncate text-jf-3xs text-[var(--jf-muted)]">{s.buyer_email}</span>
                     )}
                     {s.table_number && (
-                      <span className="mt-0.5 inline-block rounded-full bg-indigo-50 px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
+                      <span className="mt-0.5 inline-block rounded-full bg-[var(--jf-primary-tint)] px-1.5 py-0.5 text-jf-3xs font-semibold text-[var(--jf-primary-on-tint)]">
                         {t("sales.table")} {s.table_number}
                       </span>
                     )}
@@ -1440,8 +1457,8 @@ function SalesPageInner() {
                             disabled={busyRef !== null}
                             className={
                               a.event === "capture"
-                                ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-white hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-                                : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                ? "rounded-md bg-[var(--jf-primary)] px-2 py-1 text-jf-3xs font-medium text-[var(--jf-on-color)] hover:bg-[var(--jf-primary-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                                : "rounded-md border border-[var(--jf-border)] px-2 py-1 text-jf-3xs text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)] disabled:cursor-not-allowed disabled:opacity-40"
                             }
                           >
                             {busyRef === s.ref_code ? "…" : actionLabel(a)}
@@ -1510,10 +1527,10 @@ function SalesPageInner() {
 
         {/* Row detail drawer */}
         {detail && (
-          <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={() => setDetail(null)}>
+          <div className="fixed inset-0 z-50 flex justify-end bg-[var(--jf-scrim)]" onClick={() => setDetail(null)}>
             <div
               ref={drawerRef}
-              className="h-full w-full max-w-lg overflow-y-auto bg-white p-6 shadow-xl md:max-w-xl"
+              className="h-full w-full max-w-lg overflow-y-auto bg-[var(--jf-surface)] p-6 shadow-xl md:max-w-xl"
               onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-label={t("sales.detail")}
@@ -1579,10 +1596,10 @@ function SalesPageInner() {
                   {detail.status}
                 </span>
                 {isCapturePending(detail) && (
-                  <span className="ml-2 text-xs text-amber-600">{t("sales.unauthorized")}</span>
+                  <span className="ml-2 text-xs text-[var(--jf-warning-text)]">{t("sales.unauthorized")}</span>
                 )}
                 {detail.authorized && detail.captured_at && (
-                  <span className="ml-2 text-xs text-emerald-700">{t("sales.authorized")}</span>
+                  <span className="ml-2 text-xs text-[var(--jf-success-text)]">{t("sales.authorized")}</span>
                 )}
               </div>
 
@@ -1662,7 +1679,7 @@ function SalesPageInner() {
               </section>
 
               {/* Totals */}
-              <section className="mt-5 rounded-lg bg-slate-50 p-3 text-sm">
+              <section className="mt-5 rounded-lg bg-[var(--jf-bg-soft)] p-3 text-sm">
                 {/* Card t_4ca2da1f: the drawer breaks the money down the way the
                     buyer's checkout does — subtotal, then the processing fee,
                     then the total — so "what the buyer paid" and "what I
@@ -1721,7 +1738,7 @@ function SalesPageInner() {
                       {feeLine(t("sales.fee"), detailFee.rateLabel)}
                       <a
                         href="/docs/payment-fees#what-lands-on-the-sale"
-                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-slate-50"
+                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--jf-border-strong)] text-jf-3xs font-semibold text-[var(--jf-muted-on-tint)] hover:bg-[var(--jf-bg-soft)]"
                         aria-label={t("sales.feeDocs")}
                         title={t("sales.feeDocs")}
                       >
@@ -1748,7 +1765,7 @@ function SalesPageInner() {
                 {/* Issue #518: partial-refund accounting in the detail drawer. */}
                 {(detail.refunded_sen ?? 0) > 0 && (
                   <>
-                    <div className="mt-1 flex justify-between gap-4 text-amber-700">
+                    <div className="mt-1 flex justify-between gap-4 text-[var(--jf-warning-text)]">
                       <span>{t("sales.refundBalance")}</span>
                       <span>−{money(detail.refunded_sen || 0, detail.currency)}</span>
                     </div>
@@ -1761,7 +1778,7 @@ function SalesPageInner() {
               </section>
 
               {isPartiallyRefunded(detail) && (
-                <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                <p className="mt-3 rounded-lg border border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)] p-3 text-xs text-[var(--jf-warning-text)]">
                   {t("sales.refundPartialHelp")}
                 </p>
               )}
@@ -1771,7 +1788,7 @@ function SalesPageInner() {
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--jf-muted)]">
                   {t("sales.payment")}
                 </h3>
-                <div className="mt-2 space-y-1 text-sm">
+                <dl className="mt-2 space-y-1 text-sm">
                   <div className="flex justify-between gap-4">
                     <dt className="text-[var(--jf-muted)]">{t("sales.method")}</dt>
                     <dd>{detail.payment_method || "—"}</dd>
@@ -1790,7 +1807,7 @@ function SalesPageInner() {
                       <dd>{formatDateTime(detail.captured_at, user?.timezone)}</dd>
                     </div>
                   )}
-                </div>
+                </dl>
               </section>
 
               {/* Email delivery timeline (issue #194) */}
@@ -1800,14 +1817,16 @@ function SalesPageInner() {
                 </h3>
                 {detail.email_status ? (
                   <div className="mt-2 space-y-1 text-sm">
-                    <div className="flex justify-between gap-4">
-                      <dt className="text-[var(--jf-muted)]">{t("dash.email")}</dt>
-                      <dd>
-                        <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${emailStatusBadge(detail.email_status)}`}>
-                          {emailStatusLabel(detail.email_status, t)}
-                        </span>
-                      </dd>
-                    </div>
+                    <dl>
+                      <div className="flex justify-between gap-4">
+                        <dt className="text-[var(--jf-muted)]">{t("dash.email")}</dt>
+                        <dd>
+                          <span className={`rounded-full border px-2 py-0.5 text-jf-3xs font-medium ${emailStatusBadge(detail.email_status)}`}>
+                            {emailStatusLabel(detail.email_status, t)}
+                          </span>
+                        </dd>
+                      </div>
+                    </dl>
                     <p className="text-xs text-[var(--jf-muted)]">{t("dash.emailStatusNote")}</p>
                   </div>
                 ) : (

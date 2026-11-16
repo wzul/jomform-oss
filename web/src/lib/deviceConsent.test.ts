@@ -234,7 +234,7 @@ test("the panel stays on the MCP tab even when the field is empty", () => {
     "the consent panel is gated on a code again — clearing the input would take the input with it",
   );
   assert.match(PAGE, /id="prof-device-code"/, "the always-on code field is gone");
-  assert.match(PAGE, /<div className="mt-4 rounded-lg border border-\[var\(--jf-border\)\] bg-slate-50 p-4">/);
+  assert.match(PAGE, /<div className="mt-4 rounded-lg border border-\[var\(--jf-border\)\] bg-\[var\(--jf-bg-soft\)\] p-4">/);
 });
 
 test("the card names the code it belongs to, in the email's own words", () => {

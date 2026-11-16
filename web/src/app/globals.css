@@ -230,6 +230,68 @@
   --jf-neutral-fill: #e2e8f0;
   --jf-neutral-fill-strong: #cad5e2;
 
+  /* ── the STRONG warning edge and the DEEPER danger step (card t_3a2b6a9f) ───
+     `/form-settings` carried two one-off steps the palette-replacement block
+     above could not name, and both are a RENAME of the pixel already painted,
+     not a new colour choice:
+
+       --jf-warning-border-strong #ffd230  = amber-300, the edge of the menu
+            chip that names a product the form references but the catalogue no
+            longer has. `--jf-warning-border` is amber-200, i.e. exactly one
+            palette step weaker, so the two are a MEASURED ladder rather than a
+            hand-picked hex: on `--jf-warning-bg` the pair reads 1.20:1 (the
+            recorded weaker step) and 1.40:1 (this one), and on `--jf-surface`
+            1.24 / 1.45. Both are decoration (a callout's edge, never the only
+            signal), so the 1.0 floor applies.
+
+       --jf-danger-text-strong    #9f0712  = red-800, the HOVER of a destructive
+            text button whose resting ink is `--jf-danger-text` (#bf000f,
+            red-700). A destructive hover has to go DARKER than the resting
+            step, and `--jf-danger-text` is already the recorded step, so the
+            darker one is its own name: measured 8.36:1 on `--jf-surface`,
+            7.85:1 on `--jf-bg` and 7.64:1 on `--jf-danger-bg`. In dark the
+            direction inverts (text gets LIGHTER, #fecaca, 12.03:1 there) —
+            the same rule `--jf-danger-text` and `--jf-danger-fill` already
+            follow. Both themes are measured in `src/lib/designTokenRatios.ts`. */
+  --jf-warning-border-strong: #ffd230;
+  --jf-danger-text-strong: #9f0712;
+
+  /* ── the INFORMATIONAL TINT (card t_57059864) ──────────────────────────────
+     The `/sales` `paid` chip was painted `bg-blue-50` because the app had no
+     informational SURFACE: `--jf-info` names the accent (text, icon) and
+     `--jf-info-border` its edge, but a chip's tint had no name. #eff6ff is
+     blue-50 — the value the chip already painted, converted from oklch to sRGB
+     the way the browser paints it, so the converted class is a rename and not a
+     redesign. Measured: `--jf-info` on it 6.16:1, its border 1.31:1 (a chip's
+     edge is decoration), and the tint itself 1.09:1 on `--jf-surface`. */
+  --jf-info-bg: #eff6ff;
+
+  /* ── the STRONG brand tint (card t_f5a7dc24) ───────────────────────────────
+     `--jf-primary-tint` is the 13% indigo wash a selected row wears (indigo-50
+     equivalent). The /profile identity badge is the OTHER tint step: a SOLID
+     `bg-indigo-100` (#e0e7ff), one step stronger. It is the surface the
+     large-scale (24px) avatar initial is painted on, and `--jf-primary` measures
+     3.814:1 there — legal only because 24px is WCAG large-scale text (3:1), which
+     is the verdict `src/lib/indigo100Tint.test.ts` owns.
+
+     A solid step, not an alpha: the two sites paint different weights and folding
+     this into the 13% token would lighten the badge. MEASURED here (and recorded
+     in `src/lib/designTokenRatios.ts`, which recomputes both): --jf-primary
+     3.81:1, --jf-primary-on-tint 6.41:1 (the AA step for normal-size text),
+     --jf-muted 3.92:1 (UNDER AA — that pairing is refused in
+     `src/lib/mutedText.test.ts`), and the tint itself 1.23:1 on --jf-surface. */
+  --jf-primary-tint-strong: #e0e7ff;
+
+  /* ── the dialog SCRIM (card t_57059864) ────────────────────────────────────
+     The `/sales` row-detail drawer's backdrop was `bg-black/30`, the one class on
+     that page no token could carry: 30% black is a DIMMING layer whose composite
+     depends on what is behind it. A token can carry the alpha itself (8 digits,
+     composited by the browser, exactly like `--jf-primary-tint`), which names the
+     layer instead of leaving the number at a call site — and lets the dark theme
+     use its own strength. Composited over `--jf-surface` it is 2.12:1: a dimming
+     layer, never a legibility pairing. */
+  --jf-scrim: #0000004d;
+
   /* Type scale. Each step carries its PAIRED line-height, so a primitive sets
      one utility and cannot pick a size without the line box that belongs to it
      (`--jf-text-md` at 16px on the 24px baseline grid). */
@@ -420,10 +482,38 @@
   --jf-success-text: #6ee7b7;
   --jf-neutral-fill: #262b36;
   --jf-neutral-fill-strong: #323846;
+  /* The two steps `/form-settings` needed (card t_3a2b6a9f) move with the theme.
+     `--jf-warning-border-strong` is one step ABOVE `--jf-warning-border`
+     (#6f4a10, 2.21:1 on the surface) at the same weight the light ladder has:
+     #8a5f14 measures 3.09:1 on `--jf-surface` and 2.82:1 on `--jf-warning-bg`,
+     so the edge reads stronger than the callout's weaker step without becoming
+     a line that shouts. `--jf-danger-text-strong` goes LIGHTER here (#fecaca,
+     12.03:1 on the surface), because a text colour and a light page move in
+     opposite directions — the same rule the block above records. */
+  --jf-warning-border-strong: #8a5f14;
+  --jf-danger-text-strong: #fecaca;
+  /* The informational tint and the scrim move with the theme too (card
+     t_57059864). `--jf-info-bg` is a dark blue wash at the same WEIGHT as the
+     other dark tints (1.13:1 on `--jf-surface`, against success's 1.14), with
+     `--jf-info` on it 8.54:1 and `--jf-info-border` 1.46:1. The scrim is
+     STRONGER in dark (45% instead of 30%): a 30% black over a #0f1115 page
+     barely separates the drawer from what is behind it. */
+  --jf-info-bg: #12263a;
+  --jf-scrim: #00000073;
   /* 8-digit values composite against whatever is behind them, so the alpha is
      halved here rather than the RGB inverted: a dark page needs LESS tint, not a
      light one. */
   --jf-primary-tint: #5e6ad233;
+  /* The STRONG brand tint in dark (card t_f5a7dc24). The light value is a solid
+     #e0e7ff, and a light lavender disc on a #0f1115 page glares — the same reason
+     the other dark tints are deep washes (--jf-success-bg #0f2a22,
+     --jf-info-bg #12263a). This is indigo-950, the deepest step of the SAME hue:
+     --jf-primary on it measures 3.40:1 (clearing the 3:1 large-text floor the
+     24px avatar initial is held to), --jf-primary-on-tint 10.72:1, and the tint
+     itself 1.09:1 on --jf-surface — the family's weight (the other dark tints are
+     1.13 / 1.14). The 20% alpha tint's composite (#252a44) would measure 2.99:1
+     for the base token, UNDER the floor, so this step may not be an alpha. */
+  --jf-primary-tint-strong: #1e1b4b;
   /* `--jf-on-color` is NOT overridden: it names the ink painted on a COLOURED
      fill, and the fills above are still dark enough for white. */
   --jf-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
