@@ -517,6 +517,21 @@ func TestFormOrdersMatrix(t *testing.T) {
 			code: FormOrderClosed,
 		},
 		{
+			// The submit-side boundary (card t_305be5b1): a POST that arrives
+			// exactly at start_at is INSIDE the window, because the rule is
+			// "now is before start" — not "now is not after start".
+			name: "exactly at start accepts",
+			form: &dbstore.Form{Status: dbstore.FormStatusPublished, StartAt: &now,
+				Config: map[string]any{"blocks": blocksWithProduct}},
+			code: FormOrderAccepting,
+		},
+		{
+			name: "exactly at end accepts",
+			form: &dbstore.Form{Status: dbstore.FormStatusPublished, EndAt: &now,
+				Config: map[string]any{"blocks": blocksWithProduct}},
+			code: FormOrderAccepting,
+		},
+		{
 			name: "entry limit reached",
 			form: &dbstore.Form{Status: dbstore.FormStatusPublished, EntryLimit: &limit,
 				Config: map[string]any{"blocks": blocksWithProduct}},
@@ -619,6 +634,59 @@ func TestFormOrdersMatrix(t *testing.T) {
 		}
 		if got.BlockID != c.blockID {
 			t.Errorf("%s: block id = %q, want %q", c.name, got.BlockID, c.blockID)
+		}
+	}
+}
+
+// TestFormOrdersJudgesTheWindowAtThePostedInstant is the (state × submit) arm
+// (card t_305be5b1). The row does not change between the page load and the
+// POST: only the clock does. That is exactly the vector the defect was found
+// through — a buyer loads the form inside the window and submits after it has
+// closed — so the predicate is driven at the instants a submission can arrive
+// at, and the answer is pinned for each.
+//
+// The window is the ONLY thing moving here; the entry limit and the product rule
+// are pinned by the matrix above, which is why every row carries a sellable
+// block (so a refusal can only come from the window).
+func TestFormOrdersJudgesTheWindowAtThePostedInstant(t *testing.T) {
+	start := time.Date(2026, 11, 15, 22, 19, 36, 0, time.UTC)
+	end := time.Date(2026, 11, 15, 22, 21, 21, 0, time.UTC)
+	row := &dbstore.Form{
+		Status:  dbstore.FormStatusPublished,
+		StartAt: &start,
+		EndAt:   &end,
+		Config: map[string]any{"blocks": []any{
+			map[string]any{"id": "b1", "type": "name"},
+			map[string]any{"id": "b2", "type": "product", "product_id": "p-1"},
+		}},
+	}
+	cases := []struct {
+		name string
+		at   time.Time
+		code string
+	}{
+		{"a POST one second before the window opens", start.Add(-time.Second), FormOrderScheduled},
+		{"a POST exactly at start_at", start, FormOrderAccepting},
+		{"a POST inside the window", start.Add(time.Minute), FormOrderAccepting},
+		{"a POST exactly at end_at", end, FormOrderAccepting},
+		{"a POST one second after the window closes", end.Add(time.Second), FormOrderClosed},
+	}
+	for _, c := range cases {
+		got := FormOrders(row, FormOrderEnv{Entries: -1, Now: c.at})
+		if got.Code != c.code {
+			t.Errorf("%s: code = %q (%s), want %q", c.name, got.Code, got.Reason, c.code)
+			continue
+		}
+		if got.Accepting != (c.code == FormOrderAccepting) {
+			t.Errorf("%s: accepting = %v with code %q", c.name, got.Accepting, got.Code)
+		}
+	}
+	// The same question with no window at all is always the same answer, so the
+	// instants above cannot be passing because the rows differ.
+	open := &dbstore.Form{Status: dbstore.FormStatusPublished, Config: row.Config}
+	for _, at := range []time.Time{start.Add(-24 * time.Hour), start, end.Add(24 * time.Hour)} {
+		if got := FormOrders(open, FormOrderEnv{Entries: -1, Now: at}); got.Code != FormOrderAccepting {
+			t.Errorf("an unscheduled form answered %q at %s — it has no window to be outside of", got.Code, at.Format(time.RFC3339))
 		}
 	}
 }

@@ -25,7 +25,7 @@ import { workspaceQuery, activeWorkspaceId, soundEnabledFromSettings, soundToggl
 import { fetchJson, runLoad } from "../../lib/wsfetch";
 import { apiErr, translateApiErr } from "../../lib/apiErr";
 import { formatMoney, formatTotals, normaliseCurrency } from "../../lib/money";
-import { enabledSaleActions, saleActions, SALE_ROW_EVENTS, type AvailableEvent } from "../../lib/saleActions";
+import { capturable, enabledSaleActions, saleActions, SALE_ROW_EVENTS, type AvailableEvent } from "../../lib/saleActions";
 
 type Item = {
   product_id: string;
@@ -112,12 +112,14 @@ type FormRow = { id: string; slug: string; title: string; status: string; mode?:
 
 const PAGE_SIZE = 15;
 
-/* an uncaptured skip_capture authorization (issue #12) — CapturedAt is only
-   set once the merchant captures; released sales go cancelled. */
-const isCapturePending = (s: Sale) =>
-  !!s.skip_capture &&
-  !s.captured_at &&
-  (s.status === "pending" || s.status === "authorized" || s.authorized === true);
+/* an uncaptured skip_capture authorization (issue #12): the SERVER's answer —
+   the `capture` action is offered and enabled — never a status guess. The status
+   guess that used to live here counted a confirmed (or paid) hold as nothing, so
+   "Capture all" never sent it and the authorization expired uncharged
+   (t_ee368b62). CapturedAt is only set once the merchant captures, and
+   available_events already refuses a captured row through the same guard the
+   API applies. */
+const isCapturePending = (s: Sale) => capturable(s.available_events);
 
 const STATUSES = ["pending", "paid", "confirmed", "failed", "cancelled", "refunded"] as const;
 

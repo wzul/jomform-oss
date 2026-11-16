@@ -4,9 +4,9 @@
 // THE DEFECT
 //   With no blocks on the canvas the builder renders a dashed drop zone. While a
 //   palette block is dragged over it, `web/src/app/builder/page.tsx` swaps
-//     "border-slate-300 text-[var(--jf-muted-on-tint)]"
+//     "border-[var(--jf-border-strong)] text-[var(--jf-muted-on-tint)]"
 //   for
-//     "border-[#7170ff] bg-indigo-50/50 text-[var(--jf-primary-on-tint)]"
+//     "border-[var(--jf-accent)] bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)]"
 //   and the last token is what this guard is about. Measured on a production
 //   build in a real browser, on the COMPOSITED surface:
 //
@@ -15,7 +15,7 @@
 //
 //   The base token is the trap: it measures 4.700:1 on WHITE, which is where it
 //   was checked, and the drag-over text is never painted on white — it is
-//   painted on `bg-indigo-50/50` composited over the page background
+//   painted on the drag-over tint composited over the page background
 //   (`--jf-bg` #f7f8f8). The card's own arithmetic said #f3f5fc and 4.309:1; the
 //   renderer's oklab mix of the translucent tint lands one step darker at
 //   #f2f5fc, which is what is measured here. The card attributed this to PR 701
@@ -23,6 +23,16 @@
 //   CHANGING `--jf-primary` -> `--jf-primary-on-tint`, i.e. 701 FIXED this line,
 //   so the failing value is the pre-701 one and the defect is long-standing
 //   rather than a regression.
+//
+//   CARD t_fd20447f MOVED THE TINT, SO THE SURFACE MOVED WITH IT. `bg-indigo-50/50`
+//   (#eef2ff at 50%) became the token `bg-[var(--jf-primary-tint)]`
+//   (#5e6ad222, a 13.3% brand wash). The renderer composites that over --jf-bg
+//   to EXACTLY #e3e5f3 (measured on the built page, and read back through the
+//   same canvas the assertion uses), so `DRAG_OVER_SURFACE` is re-anchored
+//   below. The surface got DARKER, which moves the on-tint text DOWN from
+//   7.241:1 to 6.310:1 — still comfortably AA — and the base token further under
+//   the floor (3.753:1). That is the direction a guard wants: the migration did
+//   not buy a pass, it widened the margin this file measures.
 //
 // THE SECOND HALF OF THIS CARD: THE STATE WAS NOT REACHABLE AT ALL
 //   A contrast guard for a state nothing can enter is vacuous, and this one
@@ -87,10 +97,15 @@ const AA_FLOOR = 4.5;
 // composited #f2f5fc the pre-fix build measures 4.306467, pinned here truncated
 // as the sibling guards are.)
 const PRE_FIX_RATIO = 4.306;
-// The composited surface of `bg-indigo-50/50` over --jf-bg. Pinned like the
-// sibling price-contrast guard pins slate-50, so a surface change fails with a
-// message telling the reader what to re-anchor.
-const DRAG_OVER_SURFACE = "#f2f5fc";
+// The composited surface of the drag-over tint over --jf-bg. Pinned like the
+// sibling price-contrast guard pins the canvas card's surface, so a surface
+// change fails with a message telling the reader what to re-anchor.
+//
+// #e3e5f3 is what `--jf-primary-tint` (#5e6ad222) composites to over --jf-bg;
+// it was #f2f5fc while the class was `bg-indigo-50/50` (card t_fd20447f moved
+// the page onto the token). Both numbers are MEASURED on a built page by the
+// assertion below, not computed by hand.
+const DRAG_OVER_SURFACE = "#e3e5f3";
 const TRANSPARENT = "rgba(0, 0, 0, 0)";
 // The dashed border that marks the drag-over state — the non-colour affordance
 // alongside the tint, and what distinguishes this element from the idle branch.
@@ -271,7 +286,7 @@ async function measureDragOver(page: Page): Promise<Zone> {
       {
         timeout: 15_000,
         message:
-          "the drop zone never painted its drag-over tint (`bg-indigo-50/50`) while a block was " +
+          "the drop zone never painted its drag-over tint (`bg-[var(--jf-primary-tint)]`) while a block was " +
           "dragged over it — the highlight is unreachable, so there is nothing to measure",
       },
     )

@@ -360,22 +360,31 @@ test("(4e) the ⋯ button meets the 44px tap target", () => {
 test("(5) BlockPreview draws no faux checkbox or radio that looks tappable", () => {
   // Measured before: a 16px bordered square / bordered ring — the two shapes a
   // person reads as "tap me", in a preview where nothing is interactive.
+  //
+  // Both spellings are matched on purpose (card t_fd20447f): the page paints
+  // these boxes with the token layer now, so a guard that only knew the palette
+  // class would pass on a bordered square it could no longer see. The palette
+  // alternative stays because a reintroduced raw class is the same defect.
+  const BOX_EDGE = "(?:border-slate-300|border-\\[var\\(--jf-border-strong\\)\\])";
   assert.doesNotMatch(
     builder,
-    /inline-block h-4 w-4 rounded border border-slate-300/,
+    new RegExp(`inline-block h-4 w-4 rounded border ${BOX_EDGE}`),
     "the faux checkbox is back to a bordered square — it reads as a tappable control",
   );
   assert.doesNotMatch(
     builder,
-    /inline-block h-4 w-4 rounded-full border border-slate-300/,
+    new RegExp(`inline-block h-4 w-4 rounded-full border ${BOX_EDGE}`),
     "the faux radio is back to a bordered ring — it reads as a tappable control",
   );
-  const fakeBoxes = [...builder.matchAll(/inline-block h-4 w-4 rounded(?:-full)? bg-slate-300/g)];
+  const BOX_FILL = "(?:bg-slate-300|bg-\\[var\\(--jf-neutral-fill-strong\\)\\])";
+  const fakeBoxes = [...builder.matchAll(new RegExp(`inline-block h-4 w-4 rounded(?:-full)? ${BOX_FILL}`, "g"))];
   assert.ok(
     fakeBoxes.length >= 3,
     `expected the flat placeholder boxes (checkbox, consent, radio) — found ${fakeBoxes.length}`,
   );
-  const hidden = [...builder.matchAll(/aria-hidden className="inline-block h-4 w-4 rounded(?:-full)? bg-slate-300/g)];
+  const hidden = [
+    ...builder.matchAll(new RegExp(`aria-hidden className="inline-block h-4 w-4 rounded(?:-full)? ${BOX_FILL}`, "g")),
+  ];
   assert.equal(
     hidden.length,
     fakeBoxes.length,
@@ -400,7 +409,9 @@ test("(5b) the image placeholder is a caption, not a field-shaped box", () => {
   );
   assert.doesNotMatch(
     placeholder,
-    /border-dashed border-slate-300/,
+    // The token spelling too: the page is migrated, so the dashed box this guard
+    // forbids would be written `border-[var(--jf-border-strong)]` (t_fd20447f).
+    /border-dashed border-(?:slate-300|\[var\(--jf-border-strong\)\])/,
     "the image placeholder is a dashed box again — the shape reads as an empty input/slot",
   );
 });

@@ -26,6 +26,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -160,18 +161,81 @@ func (s *ChatSessionStore) Count(ctx context.Context, userID, workspaceID string
 	return n, err
 }
 
+// chatQuerier is the two calls a conversation read needs. *pgxpool.Pool and
+// pgx.Tx both satisfy it, which is what lets one caller run BOTH reads on a
+// single database snapshot — see ByIDWithMessages.
+type chatQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // ByID reads one conversation in the caller's scope.
 func (s *ChatSessionStore) ByID(ctx context.Context, userID, workspaceID, id string) (*ChatSession, error) {
+	return byID(ctx, s.pool, userID, workspaceID, id)
+}
+
+// byID is ByID against a chosen connection, so the same query can run inside the
+// snapshot ByIDWithMessages opens.
+func byID(ctx context.Context, q chatQuerier, userID, workspaceID, id string) (*ChatSession, error) {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(id) == "" {
 		return nil, ErrChatSessionNotFound
 	}
-	row := s.pool.QueryRow(ctx,
+	row := q.QueryRow(ctx,
 		`SELECT `+chatSessionSelect+`,
 		        (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id)
 		   FROM chat_sessions s
 		  WHERE `+chatSessionScope+` AND s.id = $3`,
 		userID, workspaceID, id)
 	return scanChatSessionRow(row)
+}
+
+// ByIDWithMessages reads one conversation AND its turns from ONE snapshot.
+//
+// WHY THIS EXISTS (card t_21caaf69). GET /v1/rest/chat/sessions/{id} answers with
+// the sidebar's message_count and the transcript in the SAME body, so a client
+// renders one conversation out of the two. Reading them with two independent
+// statements makes that body describe two different instants: the count comes
+// from the statement before the turn that is committing right now, the
+// transcript from the one after. Under default READ COMMITTED each statement
+// takes its own snapshot, so the pair routinely disagreed — measured as
+// `message_count = 1` (and 0) against a 2-turn transcript, roughly 3 runs in 100,
+// whenever a reload raced the transcript write a stopped answer triggers (the
+// write happens AFTER the client has gone, which is the one moment the page is
+// likely to reload). The user saw a conversation with two turns labelled as one
+// message.
+//
+// A REPEATABLE READ read-only transaction pins both statements to one snapshot,
+// so the answer is always internally consistent: either the turn is in both
+// halves or in neither. Deriving the count from the turns returned instead would
+// be wrong for a conversation that holds more turns than the model window (the
+// sidebar count is what is STORED, the transcript is capped), so the count stays
+// a real COUNT — just counted on the same snapshot as the rows.
+func (s *ChatSessionStore) ByIDWithMessages(ctx context.Context, userID, workspaceID, id string, limit int) (*ChatSession, []*ChatMessage, error) {
+	if strings.TrimSpace(userID) == "" || strings.TrimSpace(id) == "" {
+		return nil, nil, ErrChatSessionNotFound
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	session, err := byID(ctx, tx, userID, workspaceID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	msgs, err := messages(ctx, tx, userID, workspaceID, session.ID, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Nothing was written; the commit only releases the snapshot.
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return session, msgs, nil
 }
 
 // Messages reads one conversation's turns, oldest first, capped to the newest
@@ -183,6 +247,12 @@ func (s *ChatSessionStore) ByID(ctx context.Context, userID, workspaceID, id str
 // Carrying the scope into this query is what keeps "user A cannot read user B's
 // conversation" a property of the store.
 func (s *ChatSessionStore) Messages(ctx context.Context, userID, workspaceID, sessionID string, limit int) ([]*ChatMessage, error) {
+	return messages(ctx, s.pool, userID, workspaceID, sessionID, limit)
+}
+
+// messages is Messages against a chosen connection, so the same read can run
+// inside the snapshot ByIDWithMessages opens.
+func messages(ctx context.Context, q chatQuerier, userID, workspaceID, sessionID string, limit int) ([]*ChatMessage, error) {
 	if strings.TrimSpace(userID) == "" || strings.TrimSpace(sessionID) == "" {
 		return nil, ErrChatSessionNotFound
 	}
@@ -190,7 +260,7 @@ func (s *ChatSessionStore) Messages(ctx context.Context, userID, workspaceID, se
 	// no session in this scope means no rows, which is mapped to the store's
 	// not-found sentinel below.
 	var exists bool
-	if err := s.pool.QueryRow(ctx,
+	if err := q.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM chat_sessions s WHERE `+chatSessionScope+` AND s.id = $3)`,
 		userID, workspaceID, sessionID).Scan(&exists); err != nil {
 		return nil, chatSessionWriteErr(err)
@@ -201,7 +271,7 @@ func (s *ChatSessionStore) Messages(ctx context.Context, userID, workspaceID, se
 
 	// A cap of 0 means "everything"; a negative cap is treated the same way
 	// rather than as "keep none", which is the direction a caller never intends.
-	q := `SELECT id, session_id, role, content, created_at, meta
+	q2 := `SELECT id, session_id, role, content, created_at, meta
 	        FROM (
 	              SELECT id, session_id, role, content, created_at, meta
 	                FROM chat_messages
@@ -209,12 +279,12 @@ func (s *ChatSessionStore) Messages(ctx context.Context, userID, workspaceID, se
 	               ORDER BY created_at DESC, id DESC`
 	args := []any{sessionID}
 	if limit > 0 {
-		q += ` LIMIT $2`
+		q2 += ` LIMIT $2`
 		args = append(args, limit)
 	}
-	q += `     ) newest ORDER BY created_at, id`
+	q2 += `     ) newest ORDER BY created_at, id`
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := q.Query(ctx, q2, args...)
 	if err != nil {
 		return nil, err
 	}

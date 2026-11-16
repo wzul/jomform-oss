@@ -2846,7 +2846,7 @@ export default function Settings() {
                       ? t("set.feesReceiptFeeLine", { amount: formatPrice(feePreviewSen, currency) })
                       : t("set.feesReceiptNone"),
                 })}
-                <span className="text-[var(--jf-muted)]">, {t("set.feesNeverNamed")}</span>
+                <span className="text-[var(--jf-muted-on-tint)]">, {t("set.feesNeverNamed")}</span>
               </p>
             </div>
 

@@ -32,9 +32,16 @@ import (
 // (docs/CHIP-SANDBOX-E2E.md scenario 4), and `paid → confirmed` is the merchant
 // confirming a CHIP payment (scenario 2: `pending → paid → confirmed`). `capture`
 // is also defined from `paid` and `confirmed` because an authorization can read
-// paid (CHIP reports the authorised purchase as paid) while still uncaptured —
-// ListAwaitingCapture lists `paid` for exactly that — and the old bulk capture
-// had no status check at all; the guard, not the edge, is what keeps it honest.
+// paid (CHIP reports the authorised purchase as paid) or be confirmed by the
+// merchant while the hold is still uncaptured; the old bulk capture had no
+// status check at all, and the guard — not the edge — is what keeps it honest.
+//
+// The bulk queue (dbstore.ListAwaitingCapture) offers EXACTLY the states below
+// that carry a `capture` edge, and
+// TestCaptureQueueOffersExactlyWhatTheTableAllows pins the two sets equal in
+// both directions, so the queue cannot be narrower than the action it performs
+// (it once was: `confirmed` was capturable one sale at a time and never offered
+// by "Capture all").
 
 // `refunded`, `cancelled` and `failed` are terminal except for the repeat of the
 // event that produced them: a redelivered gateway callback is a legal no-op

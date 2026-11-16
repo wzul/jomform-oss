@@ -60,14 +60,21 @@
 //   a decision because it shifts every other use of the token.
 //
 // SCOPE OF *THIS* RULE
-//   Only SOLID tints (`bg-indigo-50`) are flagged. The translucent variants
+//   Only SOLID tints (`bg-indigo-50`, and its token form
+//   `bg-[var(--jf-primary-tint)]` — one surface, two spellings; the token joined
+//   the model when /builder migrated its three indigo tints onto it, card
+//   t_fd20447f) are flagged. The translucent PALETTE variants
 //   (`bg-indigo-50/40|/50|/60`) composite over white to #f8faff / #f7f9ff /
 //   #f5f7ff, where --jf-primary measures 4.50 / 4.46 / 4.39:1 — i.e. at the
 //   floor rather than clearly under it, and one of the three actually passes.
-//   A source guard cannot know what is behind a translucent tint, so flagging
+//   A source guard cannot know what is behind a call-site alpha, so flagging
 //   them here would be a guess; they are measured per site in the browser
-//   instead. `bg-indigo-100` (#e0e7ff) is likewise a DIFFERENT, darker tint
-//   (3.81:1 with --jf-primary) and is tracked separately, not folded in.
+//   instead. The TOKEN tint is the different case: its alpha is part of the
+//   token's declared value (13.3%), so the surface it paints over the app's two
+//   light backdrops is fixed — #e3e5f3 on --jf-bg, #eaebf9 on --jf-surface —
+//   and both fail the base tokens (3.75 / 3.97 for --jf-primary). `bg-indigo-100`
+//   (#e0e7ff) is likewise a DIFFERENT, darker tint (3.81:1 with --jf-primary)
+//   and is tracked separately, not folded in.
 //
 // WHY A SOURCE GUARD AND NOT THE BROWSER GATE
 //   `web/e2e/a11y.spec.ts` scans PUBLIC routes only (/login, /landing,
@@ -675,6 +682,75 @@ test("the shapes that used to be skipped are all caught (in-file bite proof)", (
     if (found.length > 0) wrong.push(`${c.name} — ${JSON.stringify(found)}`);
   }
   assert.deepEqual(wrong, [], `these are NOT defects and must not be reported:\n  ${wrong.join("\n  ")}`);
+});
+
+test("the TOKEN form of the tint is judged, not skipped (card t_fd20447f)", () => {
+  // THE DEFECT this pins. The rule above matches a tint by its class STRING. A
+  // page that migrates its indigo tints onto the token layer stops spelling
+  // `bg-indigo-50`, so a model that only knows the palette name stops SEEING the
+  // surface — the element declares no tint, nothing is attributed to it, and a
+  // 4.0:1 label reads as clean. `/builder` did exactly that in this commit (three
+  // tints -> `bg-[var(--jf-primary-tint)]`), which is why the token form joins
+  // the model here rather than in a later card.
+  //
+  // Measured on the token's own composite: `#5e6ad222` over `--jf-bg` paints
+  // #e3e5f3, where --jf-primary is 3.75:1 and --jf-muted 4.00:1 — both under AA —
+  // while the on-tint pair is 6.31:1. The numbers are the same defect as
+  // indigo-50's, so the rule's verdict must be the same.
+  const problems: string[] = [];
+  const TINT = "bg-[var(--jf-primary-tint)]";
+  const run = (src: string[]) => tintedSurfaceFindings("fixture.tsx", src.join("\n"));
+
+  // (a) same element, resting tint + base token.
+  const sameElement = run([
+    "export function P() {",
+    `  return <span className="${TINT} text-[var(--jf-primary)]">x</span>;`,
+    "}",
+  ]);
+  if (!sameElement.some((f) => f.includes("text-[var(--jf-primary)]") && f.includes(TINT))) {
+    problems.push(`the resting token tint + base token was not reported: ${JSON.stringify(sameElement)}`);
+  }
+
+  // (b) the INHERITED shape — a base token in a child of the tinted element,
+  //     which is how /builder's canvas nests its labels.
+  const inherited = run([
+    "export function P() {",
+    `  return (`,
+    `    <div className="${TINT}">`,
+    `      <span className="text-[var(--jf-muted)]">x</span>`,
+    "    </div>",
+    "  );",
+    "}",
+  ]);
+  if (!inherited.some((f) => f.includes("text-[var(--jf-muted)]") && f.includes(TINT))) {
+    problems.push(`a base token inside the token tint was not attributed to it: ${JSON.stringify(inherited)}`);
+  }
+
+  // (c) a hover tint with no text override: the base token is what is painted
+  //     while the tint shows, which is the same AA obligation.
+  const hovered = run([
+    "export function P() {",
+    `  return <button className="text-[var(--jf-primary)] hover:${TINT}">x</button>;`,
+    "}",
+  ]);
+  if (!hovered.some((f) => f.includes("text-[var(--jf-primary)]"))) {
+    problems.push(`a hover token tint with no text override was not reported: ${JSON.stringify(hovered)}`);
+  }
+
+  // The other direction, in the shape /builder actually renders: the palette
+  // item is `text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary-tint)]`,
+  // and 9.7:1 on that surface is NOT a defect. If the widened model reported it,
+  // the guard would be red on the tree it is meant to keep honest.
+  const paletteItem = run([
+    "export function P() {",
+    `  return <div className="cursor-grab rounded-lg bg-[var(--jf-surface)] text-[var(--jf-text-secondary)] hover:${TINT}">x</div>;`,
+    "}",
+  ]);
+  if (paletteItem.length > 0) {
+    problems.push(`the migrated palette item is NOT a defect and was reported: ${JSON.stringify(paletteItem)}`);
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
 });
 
 test("the repo-wide rule is looking at real, reachable markup", () => {

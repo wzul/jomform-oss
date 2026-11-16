@@ -221,15 +221,17 @@ func (h *RESTHandlers) handleChatSessionGet(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	id := r.PathValue("id")
-	s, err := h.ChatSessions.ByID(r.Context(), uid, workspaceID, id)
-	if err != nil {
-		h.writeChatSessionErr(w, r, err)
-		return
-	}
+	// ONE SNAPSHOT for the session row (which carries the sidebar's message
+	// count) and the turns: this body is rendered as one conversation, so the
+	// count and the transcript must describe the same instant. Read as two
+	// statements — what this handler used to do — a turn committing between them
+	// appears in the transcript and not in the count, and the reload shows a
+	// conversation with two turns labelled "1 message" (card t_21caaf69).
+	//
 	// chat.MaxTurns is the window the assistant itself is given, and the store
 	// trims to it on append; asking for it here is the belt to that braces, so a
 	// conversation written before a cap change cannot be replayed in full.
-	msgs, err := h.ChatSessions.Messages(r.Context(), uid, workspaceID, s.ID, chat.MaxTurns)
+	s, msgs, err := h.ChatSessions.ByIDWithMessages(r.Context(), uid, workspaceID, id, chat.MaxTurns)
 	if err != nil {
 		h.writeChatSessionErr(w, r, err)
 		return

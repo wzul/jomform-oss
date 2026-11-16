@@ -724,8 +724,10 @@ func (h *PublicHandlers) submitOrder(w http.ResponseWriter, r *http.Request, tgt
 // This route is kept as a thin compatibility shim for a cached menu page or an
 // old QR stand that still posts here: it resolves the menu FORM from the
 // request (a `form_slug` in the JSON body + the host's account) and delegates
-// to the exact same form-scoped menu order path. It no longer accepts a
-// formless order — a menu order is always attributed to its form.
+// to the exact same form-scoped submit path (submitResolvedForm), so it applies
+// the same submit gates — draft/private, the schedule window and the entry
+// limit — the form's own order route applies (card t_540c2b87). It no longer
+// accepts a formless order — a menu order is always attributed to its form.
 //
 // Route: POST /menu-order (deprecated; prefer POST /{slug}/order).
 func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request) {
@@ -784,7 +786,15 @@ func (h *PublicHandlers) handleMenuOrder(w http.ResponseWriter, r *http.Request)
 	// Replay the buffered body for the shared core (anti-spam layer 3 reads the
 	// jf_ts field from it, and submitOrder decodes it).
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	h.submitMenuOrderForForm(w, r, f, menu)
+	// Card t_540c2b87: hand the resolved form to the SAME entry every other
+	// submit route uses, instead of calling submitMenuOrderForForm directly.
+	// Calling the menu core here skipped submitResolvedForm entirely, so this
+	// route applied NONE of the gates — the schedule window, the entry limit,
+	// the draft/private checks — and a cached menu page (or a stale QR stand)
+	// could still check out a form whose page refused to render the menu. One
+	// entry point means the two questions ("may this POST store?" on this route
+	// and on /{slug}/order) cannot be answered by different code.
+	h.submitResolvedForm(w, r, f)
 }
 
 // submitMenuOrderForForm runs a menu form's checkout through the ONE shared

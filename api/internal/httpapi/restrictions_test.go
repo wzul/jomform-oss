@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -10,37 +11,92 @@ import (
 
 func ptr(s string) *string { return &s }
 
-func TestScheduleState(t *testing.T) {
-	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+// TestSubmitRestrictionAsksTheOnePredicate is the (state × submit) pin for the
+// SUBMIT side (card t_305be5b1): the same row that makes the page show a
+// pending/expired message must make a direct POST refuse, with the state whose
+// message the page shows. It needs no stores — the window question is answered
+// from the row and the clock alone.
+func TestSubmitRestrictionAsksTheOnePredicate(t *testing.T) {
+	now := time.Now()
 	start := now.Add(-time.Hour)
 	end := now.Add(time.Hour)
+	limit := 5
+	blocksWithProduct := []any{
+		map[string]any{"id": "b1", "type": "name"},
+		map[string]any{"id": "b2", "type": "product", "product_id": "p-1"},
+	}
 
-	// No schedule → always open.
-	if st := scheduleState(&dbstore.Form{}, now); st != restrictionOpen {
-		t.Fatalf("no schedule: got %v, want open", st)
+	cases := []struct {
+		name   string
+		form   *dbstore.Form
+		want   restrictionState
+		refuse bool
+	}{
+		{
+			name:   "within the window",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, StartAt: &start, EndAt: &end},
+			want:   restrictionOpen,
+			refuse: false,
+		},
+		{
+			name:   "no schedule at all",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished},
+			want:   restrictionOpen,
+			refuse: false,
+		},
+		{
+			// The two exact boundaries (at start_at, at end_at) are NOT pinned
+			// here: this helper reads the wall clock, so "exactly at end" would be
+			// "a microsecond after end" by the time the predicate looks. They are
+			// pinned where the clock is injectable —
+			// lifecycle.TestFormOrdersJudgesTheWindowAtThePostedInstant and the
+			// matrix's two boundary rows.
+			name:   "before start refuses as pending",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, StartAt: &end},
+			want:   restrictionPending,
+			refuse: true,
+		},
+		{
+			name:   "after end refuses as expired",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, EndAt: &start},
+			want:   restrictionExpired,
+			refuse: true,
+		},
+		{
+			// The entry limit needs a count, and with no store wired the count is
+			// unknown (-1), which the predicate reads as "skip the arm" — never as
+			// "reached". The limit itself is proven by the integration test that
+			// posts to a real form.
+			name:   "an unmeasurable entry limit is not a refusal",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, EntryLimit: &limit},
+			want:   restrictionOpen,
+			refuse: false,
+		},
+		{
+			// The product rule is the order core's, not this gate's: a payment form
+			// with nothing to sell must not be turned into a 409 here.
+			name:   "a payment form with nothing to sell is not refused by this gate",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, Config: map[string]any{"blocks": []any{map[string]any{"id": "b1", "type": "name"}}}},
+			want:   restrictionOpen,
+			refuse: false,
+		},
+		{
+			name:   "a sellable payment form is not refused",
+			form:   &dbstore.Form{Status: dbstore.FormStatusPublished, Config: map[string]any{"blocks": blocksWithProduct}},
+			want:   restrictionOpen,
+			refuse: false,
+		},
 	}
-	// Only start set, now before start → pending.
-	f := &dbstore.Form{StartAt: &start}
-	if st := scheduleState(f, now.Add(-2*time.Hour)); st != restrictionPending {
-		t.Fatalf("before start: got %v, want pending", st)
-	}
-	// Only end set, now after end → expired.
-	f = &dbstore.Form{EndAt: &end}
-	if st := scheduleState(f, now.Add(2*time.Hour)); st != restrictionExpired {
-		t.Fatalf("after end: got %v, want expired", st)
-	}
-	// Within the window → open.
-	f = &dbstore.Form{StartAt: &start, EndAt: &end}
-	if st := scheduleState(f, now); st != restrictionOpen {
-		t.Fatalf("within window: got %v, want open", st)
-	}
-	// Exactly at start → open (not before).
-	if st := scheduleState(f, start); st != restrictionOpen {
-		t.Fatalf("at start: got %v, want open", st)
-	}
-	// Exactly at end → open (not after).
-	if st := scheduleState(f, end); st != restrictionOpen {
-		t.Fatalf("at end: got %v, want open", st)
+	h := &PublicHandlers{}
+	for _, c := range cases {
+		got, refused := h.submitRestriction(context.Background(), c.form)
+		if refused != c.refuse {
+			t.Errorf("%s: refused = %v, want %v (state %v)", c.name, refused, c.refuse, got)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: state = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

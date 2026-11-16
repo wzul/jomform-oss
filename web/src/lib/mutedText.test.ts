@@ -234,17 +234,29 @@ function splitState(cls: string): [string, string] {
 const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }> = {
   "text-[var(--jf-muted)]": {
     token: "text-[var(--jf-muted)]",
-    // 4.54:1 on #f7f8f8, 4.83:1 white, 4.62:1 slate-50, but 4.41:1 slate-100,
-    // 3.92:1 slate-200, 4.32:1 indigo-50 and 4.32:1 `--jf-surface-2` (#f1f2f5).
-    bad: ["bg-slate-100", "bg-slate-200", "bg-indigo-50", "bg-[var(--jf-surface-2)]"],
-    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100 and 4.32:1 on --jf-surface-2",
+    // 4.54:1 on #f7f8f8, 4.83:1 white, 4.55:1 --jf-bg-soft, but 4.41:1 slate-100,
+    // 3.92:1 --jf-neutral-fill, 3.25:1 --jf-neutral-fill-strong, 4.32:1
+    // --jf-surface-2 and 4.42:1 on --jf-danger-bg.
+    bad: [
+      "bg-slate-100",
+      "bg-slate-200",
+      "bg-indigo-50",
+      "bg-[var(--jf-surface-2)]",
+      "bg-[var(--jf-neutral-fill)]",
+      "bg-[var(--jf-neutral-fill-strong)]",
+      "bg-[var(--jf-danger-bg)]",
+    ],
+    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100, 4.32:1 on --jf-surface-2 and 3.25:1 on --jf-neutral-fill-strong",
   },
   "text-[var(--jf-muted-on-tint)]": {
     token: "text-[var(--jf-muted-on-tint)]",
     // 5.35:1 or better on every light surface in the app — including 5.34:1 on
-    // `--jf-surface-2`, which is why it is the token a converted tint uses.
-    bad: [],
-    note: "--jf-muted-on-tint clears 4.5:1 on every surface in the app (5.34:1 on --jf-surface-2)",
+    // `--jf-surface-2`, which is why it is the token a converted tint uses. The
+    // ONE exception is the stronger neutral fill: 4.02:1 on
+    // `--jf-neutral-fill-strong` (the recorded forbidden pair in
+    // designTokenRatios.ts — tint-safe is not fill-safe).
+    bad: ["bg-[var(--jf-neutral-fill-strong)]"],
+    note: "--jf-muted-on-tint clears 4.5:1 on every surface in the app (5.34:1 on --jf-surface-2) except --jf-neutral-fill-strong, where it is 4.02:1",
   },
   "text-slate-400": {
     // #90a1b9: 2.63:1 white, 2.47:1 #f7f8f8, 2.40:1 slate-100 — it is short
@@ -255,9 +267,12 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
       "bg-[var(--jf-surface)]",
       "bg-[var(--jf-bg)]",
       "bg-slate-50",
+      "bg-[var(--jf-bg-soft)]",
       "bg-slate-100",
       "bg-slate-200",
       "bg-indigo-50",
+      "bg-[var(--jf-neutral-fill)]",
+      "bg-[var(--jf-neutral-fill-strong)]",
     ],
     note: "text-slate-400 (#90a1b9) is 2.63:1 on white — too light for any surface here",
   },
@@ -291,13 +306,21 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
  * and the only reason it did not flag the two `/profile` help lines the card's
  * axe run named (they are `text-slate-400` inside a `.jf-card`).
  *
+ * The `bg-[var(--jf-…)]` token surfaces are here because a migrated page paints
+ * them instead of the palette class it used to (card t_fd20447f moved /builder's
+ * 86 raw utilities onto this layer). Every surface a page can migrate ONTO
+ * belongs in this list in the SAME commit as the page, or the migration makes
+ * the page invisible to every rule below — the silent-skip shape `/login`
+ * already fixed once for `--jf-surface-2`.
+ *
  * Translucent backgrounds (`bg-slate-900/5`, `bg-black/40`) are NOT matched:
  * their composite depends on what is behind them, so a source scan cannot judge
  * them. `bg-white/10` on the MCP code block is one of those and is measured in
- * the browser instead.
+ * the browser instead. `--jf-primary-tint` (#5e6ad222) is the same case and is
+ * owned by `tintedSurface.test.ts`, which judges the BASE text tokens on it.
  */
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg|bg-soft|neutral-fill-strong|neutral-fill|danger-bg|warning-bg|success-bg)\)\]|jf-card|jf-input)$/;
 
 /**
  * Canonical surface name for the class that declares it.
@@ -1238,6 +1261,101 @@ test("the surface model sees bg-[var(--jf-surface-2)] and refuses --jf-muted on 
   );
   if (onWhite.length !== 0) {
     problems.push(`a legal --jf-muted label on white was reported: ${names(onWhite)}`);
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
+});
+
+// ─── the surfaces /builder migrated ONTO (card t_fd20447f) ──────────────────
+//
+// THE DEFECT this pins. The surface model is a list of class STRINGS, so a page
+// that migrates onto a token surface stops being seen by every rule in this file
+// unless the token joins the list in the same commit. `/builder` moved 86 raw
+// palette utilities onto the token layer: its cards are `--jf-bg-soft` now (was
+// slate-50), its skeleton/step fills are the two neutral fills (were slate-200 /
+// slate-300) and its banners are the status tints. Measured from globals.css and
+// the installed theme:
+//
+//   --jf-muted   on --jf-bg-soft         4.552:1  PASSES — so it must NOT be bad
+//   --jf-muted   on --jf-neutral-fill    3.922:1  under AA
+//   --jf-muted   on --jf-neutral-fill-strong 3.252:1  under AA
+//   --jf-muted-on-tint on --jf-neutral-fill-strong 4.024:1  under AA (the
+//                recorded "tint-safe is not fill-safe" pair)
+//   --jf-muted   on --jf-danger-bg       4.419:1  under AA
+//
+// A surface whose token PASSES is the control arm: if the model flagged every
+// migrated page the migration could never be completed.
+test("the surface model sees the token surfaces /builder migrated onto", () => {
+  const problems: string[] = [];
+  const names = (f: string[]) => f.join(" | ");
+  const card = (inner: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="rounded-md bg-[var(--jf-bg-soft)] px-3 py-2">',
+      inner,
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+
+  // (1) --jf-bg-soft is a SURFACE (seen) and --jf-muted PASSES on it (4.552:1):
+  //     the exact pair the migrated canvas card renders, and the reason the raw
+  //     `bg-slate-50` -> token rename did not need a token change at the site.
+  const onSoft = findingsIn("fixture.tsx", card('      <p className="text-[var(--jf-muted)]">Qty</p>'));
+  if (onSoft.length !== 0) {
+    problems.push(`the legal --jf-muted label on --jf-bg-soft (4.552:1) was reported: ${names(onSoft)}`);
+  }
+
+  // (2) ...and the surface IS seen: a token that fails there (text-slate-400)
+  //     must be attributed to it. Without this arm, (1) would pass on a model
+  //     that simply never saw `bg-[var(--jf-bg-soft)]`.
+  const seen = findingsIn("fixture.tsx", card('      <p className="text-slate-400">image URL</p>'));
+  if (!seen.some((f) => f.includes("bg-[var(--jf-bg-soft)]"))) {
+    problems.push(`bg-[var(--jf-bg-soft)] is not in the surface model: ${names(seen)}`);
+  }
+
+  // (3) The stronger neutral fill: --jf-muted is 3.252:1 there and the tint-safe
+  //     token 4.024:1, so BOTH must be refused. This is the step-badge shape.
+  for (const tok of ["text-[var(--jf-muted)]", "text-[var(--jf-muted-on-tint)]"]) {
+    const found = findingsIn(
+      "fixture.tsx",
+      [
+        "export function P() {",
+        "  return (",
+        '    <span className="rounded-md bg-[var(--jf-neutral-fill-strong)] px-2 py-0.5">',
+        `      <span className="${tok}">2</span>`,
+        "    </span>",
+        "  );",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    if (!found.some((f) => f.includes(tok) && f.includes("bg-[var(--jf-neutral-fill-strong)]"))) {
+      problems.push(`${tok} on bg-[var(--jf-neutral-fill-strong)] was not reported: ${names(found)}`);
+    }
+  }
+
+  // (4) The status tint is a surface too: --jf-muted is 4.419:1 on --jf-danger-bg
+  //     (the builder's own error banner background).
+  const onDanger = findingsIn("fixture.tsx", card('      <p className="text-[var(--jf-muted)]">note</p>')).length;
+  const onDangerTint = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <p className="bg-[var(--jf-danger-bg)] text-[var(--jf-muted)]">save failed</p>',
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (!onDangerTint.some((f) => f.includes("bg-[var(--jf-danger-bg)]"))) {
+    problems.push(
+      `--jf-muted on bg-[var(--jf-danger-bg)] (4.419:1) was not reported: ${names(onDangerTint)} ` +
+        `(control: ${onDanger} finding(s) on the passing --jf-bg-soft pair)`,
+    );
   }
 
   assert.deepEqual(problems, [], problems.join("\n"));

@@ -438,15 +438,40 @@ func (s *SaleStore) MarkCaptured(ctx context.Context, saleID string) error {
 	return err
 }
 
-// ListAwaitingCapture returns the account's authorized-but-uncaptured
-// skip_capture sales (the "Capture all pending" queue), oldest first so the
-// oldest CHIP authorizations — the ones closest to expiry — are surfaced first.
+// saleCaptureQueueStatuses is the status set the bulk-capture queue offers: the
+// states from which internal/lifecycle's sales machine declares a `capture`
+// edge. It is DATA here only because dbstore cannot import lifecycle (lifecycle
+// imports dbstore); the table is the authority, and
+// TestCaptureQueueOffersExactlyWhatTheTableAllows pins the two equal in both
+// directions so this list cannot fall behind the table again.
+//
+// It used to be the literal list ('pending','paid','authorized') — written
+// inline in the query and predating the table. That silently dropped the fourth
+// state the table captures from: a sale CONFIRMED before its authorization was
+// captured could be charged one at a time (POST /v1/rest/sales/{ref}/capture,
+// MCP capture_sale) and was never offered by "Capture all", so an authorized
+// hold a merchant believed the bulk action covered was left to expire.
+var saleCaptureQueueStatuses = [...]string{SalePending, SalePaid, SaleAuthorized, SaleConfirmed}
+
+// CaptureQueueStatuses returns a COPY of the states the "Capture all" queue
+// offers. A caller cannot edit the rule, and the lifecycle test can pin it
+// against SalesMachine.
+func CaptureQueueStatuses() []string {
+	out := make([]string, 0, len(saleCaptureQueueStatuses))
+	return append(out, saleCaptureQueueStatuses[:]...)
+}
+
+// ListAwaitingCapture returns the account's uncaptured skip_capture
+// authorizations (the "Capture all pending" queue): exactly the rows the
+// `capture` move accepts — the same rule the per-sale endpoint applies — oldest
+// first so the authorizations closest to expiry are surfaced first. The status
+// filter comes from saleCaptureQueueStatuses, never written inline.
 func (s *SaleStore) ListAwaitingCapture(ctx context.Context, accountID string) ([]*Sale, error) {
 	rows, err := s.pool.Query(ctx,
 		saleSelect+` WHERE account_id=$1 AND skip_capture=true
 		  AND captured_at IS NULL AND COALESCE(chip_purchase_id,'')<>''
-		  AND status IN ('pending','paid','authorized')
-		ORDER BY created_at ASC LIMIT 200`, accountID)
+		  AND status = ANY($2)
+		ORDER BY created_at ASC LIMIT 200`, accountID, CaptureQueueStatuses())
 	if err != nil {
 		return nil, err
 	}

@@ -199,7 +199,7 @@ func (s *Server) registerTools() {
 	}, s.refundSaleMCP)
 	addTool(s, &mcp.Tool{
 		Name:        "capture_all_pending_sales",
-		Description: "Capture ALL skip_capture authorizations still pending. One failure does not stop the others; respond per-ref.",
+		Description: "Capture ALL skip_capture authorizations awaiting capture, in every state the sales table captures from (pending, paid, authorized, confirmed). One failure does not stop the others; respond per-ref.",
 	}, s.captureAllPendingMCP)
 
 	// ── Parity: forms/products (dashboard coverage) ────────────────────────

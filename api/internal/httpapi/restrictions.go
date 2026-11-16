@@ -1,7 +1,11 @@
 // Form restrictions (issue #207): schedule (start/end datetime) + entry limit.
 // Gravity-Forms-style — a form can be scheduled to open/close and capped at a
-// number of entries. The public renderer shows a pending/expired/limit message
-// instead of the form; the submit handlers reject submissions past the limit.
+// number of entries. The public page shows a pending/expired/limit message
+// instead of the form, and the submit handlers refuse a submission for the same
+// window and the same limit through the same ONE derived predicate
+// (submitRestriction ← lifecycle.FormOrders), so a page and a POST cannot
+// disagree about whether this form is taking a response right now (card
+// t_305be5b1).
 // Card t_7d4c20c8 added a fourth, non-time state (a payment form with no
 // product to sell) because it needs exactly what these already render: a
 // standalone message and no submit control.
@@ -36,21 +40,29 @@ const (
 	restrictionNoProducts
 )
 
-// scheduleState returns pending/expired/open based on the form's schedule
-// window. A form with no start_at/end_at is always open.
+// submitRestriction answers the submit side's question — "may this POST store a
+// response right now" — with the SAME ONE derived predicate the public page
+// asked when it rendered (lifecycle.FormOrders). It returns the restriction
+// state to refuse with, and false when the submission may proceed.
 //
-// It is kept for the submit-side checks, which ask about the WINDOW alone; the
-// RENDER side no longer decides with it — serveForm asks lifecycle.FormOrders,
-// whose answer folds the window in with the trash, the entry limit and the
-// product rule, so the page and every read surface agree (card t_3d5a8d32).
-func scheduleState(f *dbstore.Form, now time.Time) restrictionState {
-	if f.StartAt != nil && now.Before(*f.StartAt) {
-		return restrictionPending
+// Card t_305be5b1: before this the submit path checked the entry limit and
+// NOTHING else, so a form whose window had closed (or had not opened yet) still
+// stored a submission through a direct POST while the page, the REST read and
+// the MCP read all refused it. The window is the arm this adds; the entry limit
+// keeps its answer, now from the same predicate instead of a second count.
+//
+// The two PRODUCT codes are deliberately NOT refused here. A payment form with
+// nothing sellable is refused by the order core's own cart validation, and this
+// gate must not take that rule over — the card that added the state
+// (t_7d4c20c8) is about the page, not about re-wording an empty-cart 400 into a
+// 409. "not published" and "trashed" are not here either: a draft answers 404
+// and a trashed row never resolves, both before this runs.
+func (h *PublicHandlers) submitRestriction(ctx context.Context, f *dbstore.Form) (restrictionState, bool) {
+	order := h.formOrder(ctx, f)
+	if lifecycle.FormOrderIsProductCode(order.Code) {
+		return restrictionOpen, false
 	}
-	if f.EndAt != nil && now.After(*f.EndAt) {
-		return restrictionExpired
-	}
-	return restrictionOpen
+	return restrictionStateForOrder(order.Code)
 }
 
 // formEntryCount returns how many orders (payment form) or submissions
@@ -114,31 +126,6 @@ func restrictionStateForOrder(code string) (restrictionState, bool) {
 	return restrictionOpen, false
 }
 
-// entryLimitReached reports whether the form's entry limit has been reached.
-// For payment forms the count is sales; for response forms it is submissions.
-func (h *PublicHandlers) entryLimitReached(ctx context.Context, f *dbstore.Form) (bool, error) {
-	if f.EntryLimit == nil || *f.EntryLimit <= 0 {
-		return false, nil
-	}
-	var count int64
-	var err error
-	if formMode(f) == dbstore.FormModeResponse {
-		if h.Submissions == nil {
-			return false, nil
-		}
-		count, err = h.Submissions.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
-	} else {
-		if h.Sales == nil {
-			return false, nil
-		}
-		count, err = h.Sales.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
-	}
-	if err != nil {
-		return false, err
-	}
-	return count >= int64(*f.EntryLimit), nil
-}
-
 // restrictionMessage resolves the buyer-facing message for a restriction
 // state. A per-form override wins; otherwise the language default is used.
 func (h *PublicHandlers) restrictionMessage(r *http.Request, f *dbstore.Form, st restrictionState) string {
@@ -197,6 +184,8 @@ h1{font-size:20px;margin:0 0 8px}.m{color:#6b7280;font-size:14px;line-height:1.6
 // before card t_3d5a8d32. It is GONE rather than kept alongside the new rule:
 // the render decision now comes from lifecycle.FormOrders (see serveForm), and a
 // second implementation is how the page and the reads drifted apart in the first
-// place. The submit-side checks keep their own helpers — a submission asks about
-// the window and the limit at the instant it is posted, which is a different
-// question from "what does this form's page show right now".
+// place. The submit side asks that same predicate too (submitRestriction), which
+// is why the last helper that judged the window on its own — scheduleState, whose
+// only caller was the deleted render check — is gone as well (card t_305be5b1).
+// There is no window rule in this package any more: there is one predicate, and
+// every reader asks it about the instant it cares about.

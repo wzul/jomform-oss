@@ -84,3 +84,23 @@ export function saleActions(
 export function enabledSaleActions(actions: readonly SaleAction[]): SaleAction[] {
   return actions.filter((a) => a.enabled);
 }
+
+/**
+ * capturable answers "may the bulk action charge this row?" from the SERVER's
+ * answer alone: the `capture` action is present AND enabled.
+ *
+ * It replaces a client-side status list (`skip_capture && status is
+ * pending/authorized, or authorized === true`) that silently dropped two states
+ * the per-sale endpoint charges — `confirmed` (a sale the merchant confirmed
+ * before its hold was captured) and `paid` (CHIP reports an authorised purchase
+ * as paid). Those rows were counted as nothing, so "Capture all" never sent them
+ * and the authorization expired uncharged. Reading available_events means the
+ * button's count, the prompt's total and the refs it sends are the same rule the
+ * API enforces.
+ *
+ * FAIL-CLOSED, like saleActions: no available_events means "I do not know", which
+ * is not capturable.
+ */
+export function capturable(events: readonly AvailableEvent[] | null | undefined): boolean {
+  return saleActions(events, ["capture"]).some((a) => a.enabled);
+}

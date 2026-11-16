@@ -3,13 +3,15 @@
 //
 // THE DEFECT (measured, then fixed on this branch)
 //   The product block's price and the `total` block's amount were both
-//   `text-[var(--jf-primary)]`, i.e. #5e6ad2. Both sit on Tailwind's slate-50
-//   (#f8fafc): the product block's card is `bg-slate-50` and the total row
-//   carries `bg-slate-50` itself. Measured on a production build in a real
-//   browser:
+//   `text-[var(--jf-primary)]`, i.e. #5e6ad2. Both sit on the canvas card's SOFT
+//   surface: Tailwind's slate-50 (#f8fafc) on the tree this card was filed
+//   against, and `--jf-bg-soft` (#f8f8f8) after card t_fd20447f migrated the
+//   builder page onto the token layer. Measured on a production build in a real
+//   browser, both sides:
 //
-//     --jf-primary #5e6ad2 on slate-50  #f8fafc = 4.492:1  <- 0.008 UNDER the floor
-//     --jf-primary #5e6ad2 on white     #ffffff = 4.700:1  <- passes
+//     --jf-primary #5e6ad2 on slate-50     #f8fafc = 4.492:1  <- 0.008 UNDER the floor
+//     --jf-primary #5e6ad2 on --jf-bg-soft #f8f8f8 = 4.425:1  <- under by more
+//     --jf-primary #5e6ad2 on white        #ffffff = 4.700:1  <- passes
 //
 //   That gap is the whole trap: the token was fine everywhere it had been
 //   checked, and the same class list reads as green on white. Axe reported it as
@@ -19,11 +21,13 @@
 //
 // THE FIX
 //   Both spans use the existing on-tint token `--jf-primary-on-tint` (#4338ca),
-//   which measures 7.554:1 on slate-50 and 7.903:1 on white — so it is safe
-//   unconditionally, and the token's own comment already says a site whose
-//   surface is a tint should use it. `--jf-primary` itself is NOT darkened:
-//   that was rejected as a decision because it shifts every other use of the
-//   token in the app.
+//   which measures 7.554:1 on slate-50, 7.442:1 on `--jf-bg-soft` and 7.903:1 on
+//   white — so it is safe unconditionally, and the token's own comment already
+//   says a site whose surface is a tint should use it. `--jf-primary` itself is
+//   NOT darkened: that was rejected as a decision because it shifts every other
+//   use of the token in the app. The token migration made the surface DARKER,
+//   i.e. it moved further from the base token's floor, which is why this guard
+//   is re-anchored rather than retired.
 //
 // WHY THIS IS A BROWSER MEASUREMENT AND NOT A CLASS-NAME ASSERTION
 //   A source grep for the class list would pass on a tree where the surface
@@ -76,6 +80,13 @@ const AA_FLOOR = 4.5;
 // states what it is guarding against, and so a re-measure of the pre-fix tree is
 // comparable to this number rather than to a memory of it.
 const PRE_FIX_RATIO = 4.492;
+// The same base token on the surface THIS tree paints: `--jf-bg-soft` (#f8f8f8,
+// the token `bg-slate-50` became in card t_fd20447f). The floor assertion below
+// compares against the real current number, not the historical one, so a future
+// surface move that lands between them cannot pass on the old figure.
+const BASE_ON_SURFACE = 4.425;
+// The surface the spans are painted on, as the canvas actually composites it.
+const CANVAS_CARD_SURFACE = "#f8f8f8";
 
 type Price = {
   text: string;
@@ -262,24 +273,27 @@ test("the canvas price spans clear AA on the surface they are painted on", async
 
   for (const p of prices) {
     // The surface is pinned, not the class list: the defect is that the span is
-    // painted on a slate-50 card. If the surface legitimately moves, the ratio
-    // assertion below is what must still hold — re-anchor this expectation to
-    // the new surface rather than deleting the guard.
+    // painted on the canvas card's soft surface. If the surface legitimately
+    // moves, the ratio assertion below is what must still hold — re-anchor this
+    // expectation to the new surface rather than deleting the guard.
     expect(
       p.bg,
-      `${p.text} is painted on ${p.bg}; this guard is anchored to the canvas card's slate-50 surface`,
-    ).toBe("#f8fafc");
+      `${p.text} is painted on ${p.bg}; this guard is anchored to the canvas card's ` +
+        `--jf-bg-soft surface (${CANVAS_CARD_SURFACE}; it was slate-50 #f8fafc before the ` +
+        `token migration, card t_fd20447f)`,
+    ).toBe(CANVAS_CARD_SURFACE);
     expect(
       p.ratio,
       `${p.text} measures ${p.ratio}:1 (${p.fg} on ${p.bg}) — under the 4.5:1 AA floor. ` +
-        `The base --jf-primary (#5e6ad2) measured ${PRE_FIX_RATIO}:1 here; use ` +
-        `--jf-primary-on-tint (#4338ca, 7.554:1 on this surface) instead of darkening the ` +
+        `The base --jf-primary (#5e6ad2) measures ${BASE_ON_SURFACE}:1 here ` +
+        `(${PRE_FIX_RATIO}:1 on slate-50 before the migration); use ` +
+        `--jf-primary-on-tint (#4338ca, 7.442:1 on this surface) instead of darkening the ` +
         `base token, which passes on white (4.700:1) and is used across the app.`,
     ).toBeGreaterThanOrEqual(AA_FLOOR);
     // The FLOOR is the one that must not be rounded, which is why the measured value is
     // no longer rounded at all: `>= 4.5` on a number that is the real ratio cannot be
     // satisfied by a colour in [4.4995, 4.5). The sliver is named rather than assumed —
     // these two colours sit in it and MUST fail here (card t_e0784043).
-    expect(p.ratio).toBeGreaterThan(PRE_FIX_RATIO);
+    expect(p.ratio).toBeGreaterThan(BASE_ON_SURFACE);
   }
 });

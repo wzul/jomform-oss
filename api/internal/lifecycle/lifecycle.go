@@ -334,6 +334,22 @@ func (m *Machine) Allows(state, event string) bool {
 	return ok
 }
 
+// StatesAllowing returns every state from which the table declares event,
+// sorted. It is the read side of Allows, and it exists for the surfaces that
+// answer "which records does this action cover". A bulk action's queue is
+// exactly the set of states with that edge — deriving it from the table means
+// the queue cannot be narrower than the action it performs.
+func (m *Machine) StatesAllowing(event string) []string {
+	out := make([]string, 0, len(m.States))
+	for state, st := range m.States {
+		if _, ok := st.Events[event]; ok {
+			out = append(out, state)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ─── The registry and the table as data ──────────────────────────────────────
 //
 // A surface that serves the table to a caller (the MCP resource, the MCP tool)

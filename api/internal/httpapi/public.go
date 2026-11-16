@@ -739,11 +739,18 @@ func (h *PublicHandlers) submitResolvedForm(w http.ResponseWriter, r *http.Reque
 		buyerErr(w, lang, http.StatusForbidden, errFormPasswordRequired)
 		return
 	}
-	// Issue #207: entry limit. Reject submissions once the form's entry count
-	// (sales for payment forms, submissions for response forms) reaches the
-	// configured limit.
-	if reached, rerr := h.entryLimitReached(r.Context(), form); rerr == nil && reached {
-		writeErr(w, http.StatusConflict, h.restrictionMessage(r, form, restrictionLimitReached))
+	// Issue #207 (schedule window + entry limit), card t_305be5b1: refuse a
+	// submission for the same reason the PAGE refused to render the form — the
+	// ONE derived predicate (lifecycle.FormOrders), asked at the instant this
+	// submission is posted. The window arm was missing entirely before this:
+	// a buyer whose page was open inside the window could POST after start_at
+	// had not opened yet or end_at had passed, and the row was stored anyway,
+	// while the page, the REST read and the MCP read all said "not accepting".
+	// Judging it here means the two questions ("what does the page show" and
+	// "may this POST store") cannot be answered by different code, which is
+	// what the render-side-only check allowed.
+	if st, refused := h.submitRestriction(r.Context(), form); refused {
+		writeErr(w, http.StatusConflict, h.restrictionMessage(r, form, st))
 		return
 	}
 

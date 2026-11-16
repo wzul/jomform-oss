@@ -1096,13 +1096,35 @@ export function descendantsAt(events: Event[], owner: Tag): Tag[] {
 // quotes a ratio (4.20:1) for a pairing that never renders at that site.
 
 /**
- * A SOLID indigo-50 tint class, with its state prefix split out: "" for the
- * resting state, "hover" / "focus" / "md:hover" … for a state-qualified one.
+ * A SOLID brand tint class, with its state prefix split out: "" for the resting
+ * state, "hover" / "focus" / "md:hover" … for a state-qualified one.
  *
- * Translucent tints (`bg-indigo-50/40`) and `bg-indigo-100` are deliberately NOT
- * matched: they composite to different surfaces and are tracked separately.
+ * TWO FORMS, ONE SURFACE. `bg-indigo-50` (#eef2ff) is the palette step the app
+ * painted its selected/hover chrome with; `bg-[var(--jf-primary-tint)]` is the
+ * token form of the same tint (a 13.3% brand wash) that every migrated page now
+ * uses. Both are matched, because the rule is about the SURFACE, not about how
+ * it was spelled — a page migrated onto the token form and a guard still looking
+ * only for the palette class is the silent-skip shape this module exists to
+ * refuse (card t_fd20447f: the /builder page moved its three indigo tints onto
+ * the token and would otherwise have stopped being seen).
+ *
+ * Translucent palette tints (`bg-indigo-50/40`) and `bg-indigo-100` are
+ * deliberately NOT matched: they composite to different surfaces and are tracked
+ * separately. The TOKEN tint is the exception and is matched because its alpha is
+ * part of the token's definition, not a call-site choice — it is the one
+ * translucent surface with a single, declared value.
  */
-export const SOLID_TINT_RE = /^((?:[a-z-]+:)*)bg-indigo-50$/;
+export const SOLID_TINT_RE = /^((?:[a-z-]+:)*)(bg-indigo-50|bg-\[var\(--jf-primary-tint\)\])$/;
+
+/** Every tint class in a class list, with the state it applies in. */
+export function tintClasses(variant: string): Array<{ state: string; cls: string }> {
+  const out: Array<{ state: string; cls: string }> = [];
+  for (const cls of variant.split(/\s+/)) {
+    const m = SOLID_TINT_RE.exec(cls);
+    if (m) out.push({ state: m[1], cls: m[2] });
+  }
+  return out;
+}
 
 /** The states ("", "hover", …) in which a class list paints a solid tint. */
 export function tintStates(variant: string): string[] {
@@ -1171,13 +1193,14 @@ export function tintedSurfaceFindings(rel: string, src: string): string[] {
   //     A state-qualified on-tint override clears it (baseTokensOnTint).
   for (const e of events) {
     for (const v of e.tag.variants) {
-      const states = tintStates(v);
-      if (states.length === 0) continue;
-      const toks = [...new Set(states.flatMap((s) => baseTokensOnTint(v, s)))];
+      const tints = tintClasses(v);
+      if (tints.length === 0) continue;
+      const toks = [...new Set(tints.flatMap((t) => baseTokensOnTint(v, t.state)))];
       if (toks.length === 0) continue;
+      const painted = [...new Set(tints.map((t) => t.cls))].join(" + ");
       const line = code.slice(0, e.tag.openIdx).split("\n").length;
       findings.push(
-        `${rel}:${line} — <${e.tag.name}> paints ${toks.join(" + ")} on bg-indigo-50`,
+        `${rel}:${line} — <${e.tag.name}> paints ${toks.join(" + ")} on ${painted}`,
       );
     }
   }
@@ -1206,9 +1229,16 @@ export function tintedSurfaceFindings(rel: string, src: string): string[] {
       (t) => t !== owner && t.variants.some((v) => tintStates(v).includes("")),
     );
     if (!tintedEl) continue;
+    const ancestorTint = [
+      ...new Set(
+        tintedEl.variants.flatMap((v) =>
+          tintClasses(v).filter((t) => t.state === "").map((t) => t.cls),
+        ),
+      ),
+    ].join(" + ");
     const line = code.slice(0, m.index).split("\n").length;
     findings.push(
-      `${rel}:${line} — ${m[0]} is inside <${tintedEl.name}> which paints bg-indigo-50`,
+      `${rel}:${line} — ${m[0]} is inside <${tintedEl.name}> which paints ${ancestorTint}`,
     );
   }
 

@@ -103,7 +103,7 @@ export const TOOL_GROUPS: McpToolGroup[] = [
       { name: "capture_sale", desc: "Capture skip_capture authorization (the buyer's card is charged now). amount_sen optional for partial." },
       { name: "release_sale", desc: "Release (void) skip_capture authorization — the buyer's card is NOT charged." },
       { name: "refund_sale", desc: "Refund a paid sale (paid/confirmed). amount_sen = partial refund amount; empty = full refund of the remaining balance. Must be > 0 and refunded_sen + amount_sen <= total_sen (a refund exceeding the balance is rejected before CHIP, issue #518). A partial refund records the amount and the sale stays paid/confirmed (refund_status=partial); only when the full balance is refunded does the status become refunded. Response: refunded_sen, outstanding_sen, refund_status, fully_refunded." },
-      { name: "capture_all_pending_sales", desc: "Capture ALL skip_capture authorizations still pending. One failure does not stop the others; respond per-ref." },
+      { name: "capture_all_pending_sales", desc: "Capture ALL skip_capture authorizations awaiting capture, in every state the sales table captures from (pending, paid, authorized, confirmed). One failure does not stop the others; respond per-ref." },
     ],
   },
   {

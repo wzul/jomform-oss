@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { DICT, LANGS } from "../components/i18nDict.ts";
-import { enabledSaleActions, saleActions, type AvailableEvent } from "./saleActions.ts";
+import { capturable, enabledSaleActions, saleActions, type AvailableEvent } from "./saleActions.ts";
 
 const paid: AvailableEvent[] = [
   // Not a person's action: a gateway callback. No label_key, so no button.
@@ -94,4 +94,55 @@ test("every label_key the Go lifecycle table can send exists in all five locales
       );
     }
   }
+});
+
+// ── "Capture all" counts what the API will charge (t_ee368b62) ─────────────
+//
+// The page used to decide this itself: skip_capture && !captured_at && (status
+// is pending/authorized || authorized === true). It therefore counted a
+// `confirmed` sale whose authorization was still uncaptured — and a `paid` one
+// with authorized=false — as NOTHING, so the button's count, its prompt total and
+// the refs it sent all omitted a hold the per-sale endpoint charges. The
+// authorization expired and the merchant was never charged. The rule now comes
+// from available_events, which is the same guard the API applies.
+test("capturable is the server's enabled capture action, not a status list", () => {
+  const serverSays = (enabled: boolean): AvailableEvent[] => [
+    { event: "pay", enabled: true },
+    {
+      event: "capture",
+      label_key: "bld.capture",
+      enabled,
+      ...(enabled ? {} : { reason: "not an authorization awaiting capture" }),
+    },
+    { event: "confirm", label_key: "sales.confirmSale", enabled: true },
+  ];
+
+  // The reported case: a sale CONFIRMED before its authorization was captured.
+  assert.equal(capturable(serverSays(true)), true);
+  // A guard refusal (already captured, or not an authorization at all).
+  assert.equal(capturable(serverSays(false)), false);
+  // Fail-closed: no answer means "I do not know".
+  assert.equal(capturable(undefined), false);
+  assert.equal(capturable(null), false);
+  assert.equal(capturable([]), false);
+  // A capture with no label_key is not a person's action (a gateway callback),
+  // so it cannot be what the button counts either.
+  assert.equal(capturable([{ event: "capture", enabled: true }]), false);
+});
+
+test("the sales page derives its bulk-capture rows from the server (t_ee368b62)", () => {
+  const page = readFileSync(
+    fileURLToPath(new URL("../app/sales/page.tsx", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    page,
+    /const isCapturePending = \(s: Sale\) => capturable\(s\.available_events\)/,
+    "isCapturePending no longer reads the server's available_events",
+  );
+  assert.doesNotMatch(
+    page,
+    /s\.status === "pending" \|\| s\.status === "authorized"/,
+    "the client-side status list is back: it drops a confirmed or paid hold from \"Capture all\"",
+  );
 });

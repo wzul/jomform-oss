@@ -49,6 +49,7 @@ const SECTIONS: Section[] = [
         ],
       },
       "**refunded**, **cancelled** and **failed** are terminal: the only move they accept repeats the event that produced them.",
+      "**Capture all pending** offers exactly the sales a capture accepts — including one you **confirmed** before its authorisation was captured — and charges only what qualifies.",
       "The dashboard does not guess: **available_events** on `GET /v1/rest/sales` lists the actions a sale accepts, each with `enabled` and a **reason** when refused.",
       {
         tip: "Ask first with `describe_lifecycle`: `aggregate: \"sales\"` returns the table, `id` returns a sale's `available_events`. Refusals carry `lifecycle.illegalTransition` or `lifecycle.transitionRefused`.",

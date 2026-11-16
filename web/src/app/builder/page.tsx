@@ -1414,7 +1414,7 @@ export default function Builder() {
           value={(b[key] as string) || ""}
           onChange={(e) => upd({ [key]: e.target.value } as Partial<Block>)}
           placeholder={ph}
-          className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
+          className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
         />
       </div>
     );
@@ -1433,7 +1433,7 @@ export default function Builder() {
             rows={2}
             value={b.value}
             onChange={(e) => upd({ value: e.target.value })}
-            className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
+            className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
           />
         </div>
 
@@ -1470,7 +1470,7 @@ export default function Builder() {
                 setIntroConverted(b.id);
                 setDirty(true);
               }}
-              className="mt-2 min-h-9 rounded-md border border-[var(--jf-warning-text)] bg-white px-3 text-xs font-medium text-[var(--jf-warning-text)] hover:bg-[var(--jf-warning-bg-hover)]"
+              className="mt-2 min-h-9 rounded-md border border-[var(--jf-warning-text)] bg-[var(--jf-surface)] px-3 text-xs font-medium text-[var(--jf-warning-text)] hover:bg-[var(--jf-warning-bg-hover)]"
             >
               {t("bld.textProseTreat")}
             </button>
@@ -1481,7 +1481,7 @@ export default function Builder() {
             is the polite half: the conversion itself is what the merchant just
             asked for, so it is announced without interrupting. */}
         {b.type === "section" && introConverted === b.id && (
-          <div role="status" className="rounded-md border border-[var(--jf-border)] bg-slate-50 p-2.5">
+          <div role="status" className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-2.5">
             <p className="text-xs leading-relaxed text-[var(--jf-text-secondary)]">{t("bld.textProseConverted")}</p>
             <button
               type="button"
@@ -1490,7 +1490,7 @@ export default function Builder() {
                 setIntroConverted(null);
                 setDirty(true);
               }}
-              className="mt-2 min-h-9 rounded-md border border-[var(--jf-border)] bg-white px-3 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-slate-100"
+              className="mt-2 min-h-9 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-[var(--jf-surface-2)]"
             >
               {t("bld.textProseUndo")}
             </button>
@@ -1537,7 +1537,7 @@ export default function Builder() {
                 min={0}
                 value={b.maxLength ?? ""}
                 onChange={(e) => upd({ maxLength: e.target.value === "" ? undefined : Number(e.target.value) })}
-                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
+                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
               />
             </div>
             {input("defaultValue", t("bld.defaultValue"), t("bld.defaultValuePh"))}
@@ -1568,7 +1568,7 @@ export default function Builder() {
               id={fid("dateFormat")}
               value={b.format || (b.type === "date" ? "date" : "time")}
               onChange={(e) => upd({ format: e.target.value })}
-              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
             >
               <option value="date">{t("bld.fmtDate")}</option>
               <option value="datetime">{t("bld.fmtDateTime")}</option>
@@ -1605,7 +1605,7 @@ export default function Builder() {
                       upd({ choices: ch });
                     }}
                     placeholder={t("bld.choiceLabel")}
-                    className="min-w-0 flex-1 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs outline-none focus:border-[var(--jf-accent)]/60"
+                    className="min-w-0 flex-1 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1.5 text-xs outline-none focus:border-[var(--jf-accent)]/60"
                   />
                   {(b.type === "option" || b.type === "shipping") && (
                     <input
@@ -1623,7 +1623,7 @@ export default function Builder() {
                       }}
                       placeholder={currencyLabel(currency)}
                       title={priceLabel}
-                      className="w-20 rounded-md border border-[var(--jf-border)] bg-white px-2 py-1.5 text-xs outline-none focus:border-[var(--jf-accent)]/60"
+                      className="w-20 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-1.5 text-xs outline-none focus:border-[var(--jf-accent)]/60"
                     />
                   )}
                   <button
@@ -1683,7 +1683,7 @@ export default function Builder() {
                   }
                   upd({ source: src, onNoMatch: b.onNoMatch || "reject" });
                 }}
-                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
               >
                 <option value="static">{t("bld.shipSourceStatic")}</option>
                 <option value="zones">{t("bld.shipSourceZones")}</option>
@@ -1701,7 +1701,7 @@ export default function Builder() {
                     id={fid("shipCourierProvider")}
                     value={b.courierProvider || ""}
                     onChange={(e) => upd({ courierProvider: e.target.value || undefined })}
-                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
                   >
                     <option value="">{t("bld.shipCourierNone")}</option>
                     <option value="lalamove">Lalamove</option>
@@ -1725,7 +1725,7 @@ export default function Builder() {
                       id={fid("shipZoneSet")}
                       value={b.zoneSetId || ""}
                       onChange={(e) => upd({ zoneSetId: e.target.value })}
-                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
                     >
                       <option value="">{t("bld.shipZoneSetNone")}</option>
                       {zoneSets.map((s) => (
@@ -1758,7 +1758,7 @@ export default function Builder() {
                       id={fid(id)}
                       value={value || ""}
                       onChange={(e) => upd({ [field]: e.target.value || undefined })}
-                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                      className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
                     >
                       <option value="">{t("bld.shipFieldNone")}</option>
                       {blocks
@@ -1784,7 +1784,7 @@ export default function Builder() {
                     id={fid("shipNoMatch")}
                     value={b.onNoMatch || "reject"}
                     onChange={(e) => upd({ onNoMatch: e.target.value })}
-                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
                   >
                     <option value="reject">{t("bld.shipNoMatchReject")}</option>
                     <option value="default">{t("bld.shipNoMatchDefault")}</option>
@@ -1801,7 +1801,7 @@ export default function Builder() {
                     min={0}
                     value={b.weightG || ""}
                     onChange={(e) => upd({ weightG: Number(e.target.value) > 0 ? Number(e.target.value) : undefined })}
-                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+                    className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
                   />
                 </div>
 
@@ -1852,7 +1852,7 @@ export default function Builder() {
                 if (next && (!b.value || b.value === prev?.name)) patch.value = next.name;
                 upd(patch);
               }}
-              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none"
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none"
             >
               <option value="">{t("bld.chooseProduct")}</option>
               {products.map((p) => (
@@ -1888,9 +1888,9 @@ export default function Builder() {
               value={b.src || ""}
               onChange={(e) => upd({ src: e.target.value })}
               placeholder="https://…"
-              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
+              className="mt-1 w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-sm outline-none focus:border-[var(--jf-accent)]/60"
             />
-            <label className="mt-2 inline-flex w-full cursor-pointer items-center justify-center rounded-md border border-[var(--jf-border)] py-2.5 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-slate-50 disabled:opacity-50">
+            <label className="mt-2 inline-flex w-full cursor-pointer items-center justify-center rounded-md border border-[var(--jf-border)] py-2.5 text-xs font-medium text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)] disabled:opacity-50">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif"
@@ -1935,13 +1935,14 @@ export default function Builder() {
 
         {/* conditional logic */}
         {fieldTypes.includes(b.type) && (blocks.length > 1 || condUnavailable) && (
-          <div className="rounded-md border border-slate-200 p-2">
+          <div className="rounded-md border border-[var(--jf-border)] p-2">
             {/* a11y (card t_524d186d): this group heading names every control in
                 the block. The rule picker had no accessible name at all (axe
                 `select-name`, critical); the operator select and the value input
-                only had one while `placeholder` supplied it. text-slate-500 was
-                4.47 on --jf-bg — just under the 4.5 line; slate-600 is 7.13. */}
-            <p id={`jf-cond-${b.id}`} className="text-xs font-medium text-slate-600">
+                only had one while `placeholder` supplied it. The pale muted step
+                was 4.47 on --jf-bg — just under the 4.5 line; --jf-text-secondary
+                is 9.688 there and 10.307 on a white card. */}
+            <p id={`jf-cond-${b.id}`} className="text-xs font-medium text-[var(--jf-text-secondary)]">
               {t("bld.condLogic")}
             </p>
             {/* Card t_a81a9165: the picker's value is the STORED id, so a stored
@@ -1963,7 +1964,7 @@ export default function Builder() {
                     : null,
                 })
               }
-              className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-[var(--jf-border)] px-2 py-1 text-xs"
             >
               <option value="">{t("bld.alwaysShow")}</option>
               {condUnavailable && (
@@ -1993,7 +1994,7 @@ export default function Builder() {
                   onChange={(e) =>
                     upd({ condition: { ...b.condition!, op: e.target.value } })
                   }
-                  className="w-28 rounded border border-slate-200 px-1 py-1 text-xs"
+                  className="w-28 rounded border border-[var(--jf-border)] px-1 py-1 text-xs"
                 >
                   <option value="equals">equals</option>
                   <option value="not_equals">not equals</option>
@@ -2009,7 +2010,7 @@ export default function Builder() {
                     upd({ condition: { ...b.condition!, value: e.target.value } })
                   }
                   placeholder="value"
-                  className="min-w-0 flex-1 rounded border border-slate-200 px-2 py-1 text-xs"
+                  className="min-w-0 flex-1 rounded border border-[var(--jf-border)] px-2 py-1 text-xs"
                 />
               </div>
             )}
@@ -2183,7 +2184,7 @@ export default function Builder() {
             <a
               href={`/form-settings?form=${currentId}`}
               title={t("fs.subtitle")}
-              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-slate-50"
+              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
             >
               {t("fs.title")} →
             </a>
@@ -2195,7 +2196,7 @@ export default function Builder() {
             <a
               href={pubUrl}
               target="_blank"
-              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-slate-50"
+              className="shrink-0 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
             >
               {t("bld.view")}
             </a>
@@ -2207,7 +2208,7 @@ export default function Builder() {
               onClick={() => void saveAsTemplate()}
               disabled={saving}
               title={t("bld.saveAsTemplate")}
-              className="hidden shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-slate-50 disabled:opacity-50 md:inline-flex"
+              className="hidden shrink-0 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 py-1.5 text-xs text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)] disabled:opacity-50 md:inline-flex"
             >
               {t("bld.saveAsTemplate")}
             </button>
@@ -2247,7 +2248,7 @@ export default function Builder() {
         <div
           role="alert"
           data-testid="builder-not-accepting-orders"
-          className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 md:flex-row md:items-center md:px-4"
+          className="flex flex-col gap-2 border-b border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)] px-3 py-2.5 text-xs text-[var(--jf-warning-text)] md:flex-row md:items-center md:px-4"
         >
           <span className="min-w-0">
             {t("bld.noProductSelectedWarn")}
@@ -2304,15 +2305,15 @@ export default function Builder() {
           role={publishNotice.kind === "live" ? "status" : "alert"}
           className={`flex flex-col gap-2 border-b px-3 py-2.5 md:px-4 ${
             publishNotice.kind === "live"
-              ? "border-emerald-200 bg-emerald-50"
+              ? "border-[var(--jf-success-border)] bg-[var(--jf-success-bg)]"
               : publishNotice.kind === "needsAck"
-                ? "border-amber-200 bg-amber-50"
-                : "border-red-200 bg-red-50"
+                ? "border-[var(--jf-warning-border)] bg-[var(--jf-warning-bg)]"
+                : "border-[var(--jf-danger-border)] bg-[var(--jf-danger-bg)]"
           }`}
         >
           {publishNotice.kind === "live" ? (
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <span className="shrink-0 text-sm font-medium text-emerald-800">{t("bld.liveTitle")}</span>
+              <span className="shrink-0 text-sm font-medium text-[var(--jf-success-text)]">{t("bld.liveTitle")}</span>
               {liveLink(publishNotice.url) ? (
                 <>
                   <a
@@ -2334,18 +2335,18 @@ export default function Builder() {
                     href={liveLink(publishNotice.url) as string}
                     target="_blank"
                     rel="noreferrer"
-                    className="min-w-0 truncate font-mono text-xs text-emerald-800 underline"
+                    className="min-w-0 truncate font-mono text-xs text-[var(--jf-success-text)] underline"
                   >
                     {publishNotice.url}
                   </a>
                 </>
               ) : (
-                <span className="text-xs text-emerald-900">{t("bld.liveNoUrl")}</span>
+                <span className="text-xs text-[var(--jf-success-text)]">{t("bld.liveNoUrl")}</span>
               )}
               <button
                 type="button"
                 onClick={() => setPublishNotice(null)}
-                className="ml-auto shrink-0 text-xs text-emerald-800 underline"
+                className="ml-auto shrink-0 text-xs text-[var(--jf-success-text)] underline"
               >
                 {t("bld.dismiss")}
               </button>
@@ -2410,7 +2411,7 @@ export default function Builder() {
               "anyone who opens this link" beside it contradicts itself — which
               the render proof caught. */}
           {publishNotice.kind === "live" && Boolean(publishNotice.url) && (
-            <p className="text-xs text-emerald-800">{t("bld.liveHint")}</p>
+            <p className="text-xs text-[var(--jf-success-text)]">{t("bld.liveHint")}</p>
           )}
         </div>
       )}
@@ -2420,7 +2421,7 @@ export default function Builder() {
           #652: TWO tabs, not three — "Settings" is gone; editing a block is a
           tap on the block itself, so a tab for it would be a second, emptier
           route to the same panel. */}
-      <nav className="flex border-b border-[var(--jf-border)] bg-white md:hidden">
+      <nav className="flex border-b border-[var(--jf-border)] bg-[var(--jf-surface)] md:hidden">
         {(["add", "canvas"] as MobileTab[]).map((tab) => (
           <button
             key={tab}
@@ -2451,7 +2452,7 @@ export default function Builder() {
               template mode (controls.aiGenerate): it only drafts blocks into
               the canvas, which is exactly what a template is made of. */}
           {controls.aiGenerate && (
-          <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-white p-3">
+          <div className="mb-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] p-3">
             <p className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
               <span>✨</span>
               {t("bld.aiTitle")}
@@ -2467,12 +2468,12 @@ export default function Builder() {
               placeholder={t("bld.aiPromptPh")}
               aria-label={t("bld.aiPromptLabel")}
               rows={3}
-              className="w-full rounded-md border border-[var(--jf-border)] bg-white px-2.5 py-2 text-xs outline-none focus:border-[var(--jf-accent)]/60"
+              className="w-full rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 text-xs outline-none focus:border-[var(--jf-accent)]/60"
             />
             <button
               onClick={() => void aiGenerate()}
               disabled={aiGenerating || !aiPrompt.trim()}
-              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-2 text-xs font-medium text-white hover:bg-[var(--jf-primary-strong)] disabled:opacity-50"
+              className="mt-2 w-full rounded-md bg-[var(--jf-primary)] py-2 text-xs font-medium text-[var(--jf-on-color)] hover:bg-[var(--jf-primary-strong)] disabled:opacity-50"
             >
               {aiGenerating ? t("bld.aiGenerating") : t("bld.aiGenerate")}
             </button>
@@ -2500,7 +2501,7 @@ export default function Builder() {
                       onDragEnd={endDrag}
                       onClick={() => addBlock(p.type)}
                       title={typeHint(p.type)}
-                      className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-white px-2.5 py-2 transition-colors hover:border-[var(--jf-accent)]/40 hover:bg-indigo-50 active:cursor-grabbing ${
+                      className={`cursor-grab select-none rounded-lg border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2.5 py-2 transition-colors hover:border-[var(--jf-accent)]/40 hover:bg-[var(--jf-primary-tint)] active:cursor-grabbing ${
                         dragging ? "opacity-60" : ""
                       }`}
                     >
@@ -2528,8 +2529,8 @@ export default function Builder() {
                 onDrop={(e) => canvasDrop(e, 0)}
                 className={`rounded-xl border-2 border-dashed px-6 py-16 text-center text-sm transition-colors ${
                   dropAt === 0
-                    ? "border-[var(--jf-accent)] bg-indigo-50/50 text-[var(--jf-primary-on-tint)]"
-                    : "border-slate-300 text-[var(--jf-muted-on-tint)]"
+                    ? "border-[var(--jf-accent)] bg-[var(--jf-primary-tint)] text-[var(--jf-primary-on-tint)]"
+                    : "border-[var(--jf-border-strong)] text-[var(--jf-muted-on-tint)]"
                 }`}
               >
                 {t("bld.dragHere")}
@@ -2569,7 +2570,7 @@ export default function Builder() {
                   onDrop={(e) => canvasDrop(e, i)}
                   className={`relative -my-0.5 rounded transition-colors ${
                     dropAt === i && dragging
-                      ? "h-8 border-2 border-dashed border-[var(--jf-accent)] bg-indigo-50/60"
+                      ? "h-8 border-2 border-dashed border-[var(--jf-accent)] bg-[var(--jf-primary-tint)]"
                       : "h-2"
                   }`}
                 />
@@ -2581,10 +2582,10 @@ export default function Builder() {
                   onDragOver={(e) => canvasDragOver(e, i + 1)}
                   onDrop={(e) => canvasDrop(e, i + 1)}
                   onClick={() => openBlockPanel(b.id)}
-                  className={`scroll-mt-24 cursor-grab rounded-lg border bg-white p-3 transition-colors active:cursor-grabbing ${
+                  className={`scroll-mt-24 cursor-grab rounded-lg border bg-[var(--jf-surface)] p-3 transition-colors active:cursor-grabbing ${
                     selected === b.id
                       ? "border-[var(--jf-accent)]/60 shadow-[0_0_0_1px_rgba(113,112,255,0.4)]"
-                      : "border-[var(--jf-border)] hover:border-slate-300"
+                      : "border-[var(--jf-border)] hover:border-[var(--jf-border-strong)]"
                   }`}
                 >
                   <div className="mb-1.5 flex items-center justify-between text-xs uppercase tracking-wider text-[var(--jf-muted-on-tint)]">
@@ -2619,7 +2620,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, -1)}
                         title={t("bld.moveUp")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-[var(--jf-surface-2)] disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
                       >
                         ↑
                       </button>
@@ -2630,7 +2631,7 @@ export default function Builder() {
                         }}
                         disabled={!canMove(blocks, i, 1)}
                         title={t("bld.moveDown")}
-                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
+                        className="flex h-8 w-8 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-[var(--jf-surface-2)] disabled:opacity-30 disabled:hover:text-[var(--jf-muted-on-tint)] md:h-auto md:w-auto md:px-1 md:text-xs"
                       >
                         ↓
                       </button>
@@ -2647,12 +2648,12 @@ export default function Builder() {
                           aria-haspopup="true"
                           aria-expanded={menuOpen === b.id}
                           title={t("bld.blockMenu")}
-                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-slate-100 aria-expanded:bg-slate-100 md:h-auto md:w-auto md:px-1 md:text-xs"
+                          className="flex h-11 w-11 items-center justify-center rounded-md text-base text-[var(--jf-muted-on-tint)] hover:text-[var(--jf-text-secondary)] active:bg-[var(--jf-surface-2)] aria-expanded:bg-[var(--jf-surface-2)] md:h-auto md:w-auto md:px-1 md:text-xs"
                         >
                           ⋯
                         </button>
                         {menuOpen === b.id && (
-                          <div className="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-[var(--jf-border)] bg-white py-1 shadow-lg">
+                          <div className="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] py-1 shadow-lg">
                             <button
                               type="button"
                               onClick={(e) => {
@@ -2660,7 +2661,7 @@ export default function Builder() {
                                 setMenuOpen(null);
                                 duplicateBlock(b.id);
                               }}
-                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-[var(--jf-text-secondary)] hover:bg-slate-50"
+                              className="flex min-h-11 w-full items-center px-3 text-left text-sm normal-case tracking-normal text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
                             >
                               {t("bld.duplicate")}
                             </button>
@@ -2691,13 +2692,13 @@ export default function Builder() {
                 onDrop={(e) => canvasDrop(e, blocks.length)}
                 className={`-mt-1 rounded transition-colors ${
                   dropAt === blocks.length && dragging
-                    ? "h-10 border-2 border-dashed border-[var(--jf-accent)] bg-indigo-50/60"
+                    ? "h-10 border-2 border-dashed border-[var(--jf-accent)] bg-[var(--jf-primary-tint)]"
                     : "h-4"
                 }`}
               />
             )}
           </div>
-          {loadErr && <p className="mt-4 text-center text-xs text-red-700">{loadErr}</p>}
+          {loadErr && <p className="mt-4 text-center text-xs text-[var(--jf-danger-text)]">{loadErr}</p>}
           {/* Issue #457: save-as-template feedback. */}
           {tplMsg && <p className="mt-2 text-center text-xs text-[var(--jf-muted)]">{tplMsg}</p>}
         </section>
@@ -2727,7 +2728,7 @@ export default function Builder() {
               <button
                 type="button"
                 onClick={closeBlockPanel}
-                className="min-h-11 shrink-0 rounded-md border border-[var(--jf-border)] bg-white px-3 text-sm font-medium text-[var(--jf-text-secondary)] hover:bg-slate-50"
+                className="min-h-11 shrink-0 rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-3 text-sm font-medium text-[var(--jf-text-secondary)] hover:bg-[var(--jf-bg-soft)]"
               >
                 ← {t("bld.canvas")}
               </button>
@@ -2746,7 +2747,7 @@ export default function Builder() {
             rel="noreferrer"
             title={t("bld.builderHelp")}
             aria-label={t("bld.builderHelp")}
-            className="mb-3 ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-[var(--jf-border)] text-xs text-[var(--jf-muted)] hover:bg-slate-50 md:mb-2"
+            className="mb-3 ml-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-[var(--jf-border)] text-xs text-[var(--jf-muted)] hover:bg-[var(--jf-bg-soft)] md:mb-2"
           >
             ?
           </a>
@@ -2860,7 +2861,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       return (
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Text"}</p>
-          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-2 text-xs text-[var(--jf-muted-on-tint)]">
             {block.placeholder || ""}
           </div>
         </div>
@@ -2879,24 +2880,24 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         // The URL is set in the block's own settings (the panel on mobile), so
         // the placeholder is now a flat caption naming the setting, not a
         // control-shaped box.
-        <div className="flex h-24 flex-col items-center justify-center gap-1 rounded-md bg-slate-100 text-xs text-[var(--jf-muted-on-tint)]">
+        <div className="flex h-24 flex-col items-center justify-center gap-1 rounded-md bg-[var(--jf-surface-2)] text-xs text-[var(--jf-muted-on-tint)]">
           <span aria-hidden className="text-base">🖼</span>
           <span>{t("bld.imageUrl")}</span>
         </div>
       );
     case "product":
       // t_5f315891: the canvas price spans must NOT use the base --jf-primary.
-      // This block's card is `bg-slate-50` (#f8fafc), and #5e6ad2 on it measures
-      // 4.492:1 — 0.008 under the 4.5:1 AA floor. The token was only ever
+      // This block's card is the --jf-bg-soft surface (#f8f8f8), and #5e6ad2 on
+      // it measures 4.425:1 — under the 4.5:1 AA floor. The token was only ever
       // checked against white, where it passes at 4.700:1, which is exactly why
-      // the defect hid: slate-50 is marginally darker than the surface it was
-      // measured on. The on-tint token measures 7.554:1 on slate-50 and 7.903:1
-      // on white, so it is safe unconditionally. Do NOT darken --jf-primary
-      // itself: that shifts every other use of the token (4.700:1 on white)
-      // across the whole app. Guarded, measured in a real browser, by
+      // the defect hid: the canvas card is marginally darker than the surface it
+      // was measured on. The on-tint token measures 7.442:1 on --jf-bg-soft and
+      // 7.903:1 on white, so it is safe unconditionally. Do NOT darken
+      // --jf-primary itself: that shifts every other use of the token (4.700:1
+      // on white) across the whole app. Guarded, measured in a real browser, by
       // web/e2e/builder-canvas-price-contrast.spec.ts.
       return (
-        <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+        <div className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="flex min-w-0 items-center gap-2">
               {p?.images?.[0] ? (
@@ -2915,7 +2916,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
           {block.quantity !== false && (
             <div className="mt-2 flex items-center gap-2 text-xs text-[var(--jf-muted)]">
               <span>Qty</span>
-              <span className="rounded-md border border-[var(--jf-border)] bg-white px-2 py-0.5">1</span>
+              <span className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-surface)] px-2 py-0.5">1</span>
             </div>
           )}
         </div>
@@ -2924,7 +2925,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       return (
         <div className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
           <span>{block.value || "Quantity"}</span>
-          <span className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 py-0.5 text-xs">
+          <span className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-2 py-0.5 text-xs">
             {block.defaultValue || "1"}
           </span>
         </div>
@@ -2932,7 +2933,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
     case "option":
     case "shipping":
       return (
-        <div className="rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+        <div className="rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2">
           <p className="text-sm text-[var(--jf-text-secondary)]">{block.value || (block.type === "option" ? "Option" : "Shipping")}</p>
           <div className="mt-1 space-y-0.5">
             {(block.choices || []).map((c, i) => (
@@ -2945,10 +2946,10 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       );
     case "total":
       // t_5f315891: same defect and same fix as the product block above — this
-      // row carries `bg-slate-50` itself, so #5e6ad2 measured 4.492:1 here
-      // before the change.
+      // row carries the --jf-bg-soft surface itself, so the base token measures
+      // 4.425:1 here.
       return (
-        <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-slate-50 px-3 py-2">
+        <div className="flex items-center justify-between rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2">
           <span className="text-sm">{block.value || "Total"}</span>
           <span className="text-sm font-medium text-[var(--jf-primary-on-tint)]">{formatPrice(0, currency)}</span>
         </div>
@@ -2961,13 +2962,13 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       // grey fill, no border, and marked non-interactive for assistive tech.
       return (
         <div className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
-          <span aria-hidden className="inline-block h-4 w-4 rounded bg-slate-300" /> {block.value}
+          <span aria-hidden className="inline-block h-4 w-4 rounded bg-[var(--jf-neutral-fill-strong)]" /> {block.value}
         </div>
       );
     case "consent":
       return (
         <div className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
-          <span aria-hidden className="inline-block h-4 w-4 rounded bg-slate-300" /> {block.value || "Consent"}
+          <span aria-hidden className="inline-block h-4 w-4 rounded bg-[var(--jf-neutral-fill-strong)]" /> {block.value || "Consent"}
         </div>
       );
     case "select":
@@ -2975,9 +2976,9 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-700"> *</span>}
+            {block.required && <span className="text-[var(--jf-danger-text)]"> *</span>}
           </p>
-          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-2 text-xs text-[var(--jf-muted-on-tint)]">
             {(block.choices || []).map((c) => c.label).filter(Boolean).join(", ") || "Select…"}
           </div>
         </div>
@@ -2988,14 +2989,14 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-700"> *</span>}
+            {block.required && <span className="text-[var(--jf-danger-text)]"> *</span>}
           </p>
           <div className="space-y-1">
             {(block.choices || []).map((c, i) => (
               <div key={i} className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                 {/* #652: flat grey dot — the bordered ring looked like a tappable
                     radio button in a preview that has no controls at all. */}
-                <span aria-hidden className="inline-block h-4 w-4 rounded-full bg-slate-300" /> {c.label}
+                <span aria-hidden className="inline-block h-4 w-4 rounded-full bg-[var(--jf-neutral-fill-strong)]" /> {c.label}
               </div>
             ))}
           </div>
@@ -3011,7 +3012,7 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
       return (
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">{block.value || "Captcha"}</p>
-          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-slate-50 px-2 text-xs text-[var(--jf-muted-on-tint)]">
+          <div className="flex h-8 items-center rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-2 text-xs text-[var(--jf-muted-on-tint)]">
             🛡 Captcha
           </div>
         </div>
@@ -3021,9 +3022,9 @@ function BlockPreview({ block, products }: { block: Block; products: Product[] }
         <div>
           <p className="mb-1 text-xs text-[var(--jf-muted)]">
             {block.value || "Field"}
-            {block.required && <span className="text-red-700"> *</span>}
+            {block.required && <span className="text-[var(--jf-danger-text)]"> *</span>}
           </p>
-          <div className="h-8 rounded-md border border-[var(--jf-border)] bg-slate-50" />
+          <div className="h-8 rounded-md border border-[var(--jf-border)] bg-[var(--jf-bg-soft)]" />
         </div>
       );
   }

@@ -424,21 +424,36 @@ test("CONTROL: a SUCCESSFUL sound-setting save on /sales renders no failure bann
 //   always a success), so a red failure arm cannot be an artefact of "the banner
 //   is always red".
 
-/** A capture-PENDING sale: `skip_capture` with no `captured_at` (issue #12). */
+/**
+ * A capture-PENDING sale: an uncaptured `skip_capture` authorization that still
+ * carries the CHIP purchase it was created for (issue #12).
+ *
+ * THE PURCHASE ID IS LOAD-BEARING (t_b8a4fec7). `awaitingCapture`
+ * (api/internal/lifecycle/sales.go) refuses both authorization moves on a row
+ * whose `chip_purchase_id` is empty, and `dbstore.ListAwaitingCapture` keeps
+ * such a row out of the queue as well — so a fixture without one is an
+ * authorization the SERVER would never let a capture charge. The page counts
+ * what the server offers: `isCapturePending` is `capturable(available_events)`
+ * — the `capture` entry present AND enabled — so on a row the API refuses, the
+ * header renders no "Capture all pending" button at all and the drive below
+ * waits for a button that cannot exist (the #1754 e2e-core red). This fixture
+ * is therefore the row the table and the capture queue both call capturable.
+ */
 const CAPTURE_PENDING_SALE = {
   ...SALE,
   ref_code: "SALE-TONE-CAP",
   status: "authorized",
   skip_capture: true,
-  // `authorized` has no refund edge at all, and the two authorization moves are
-  // refused for THIS fixture (it carries no chip_purchase_id, which is what the
-  // capture/release guard checks). Left to inherit PAID_EVENTS the row would
-  // claim a Refund the server would never offer on an authorization, so it says
-  // what the table says; the row's action cell then stays as empty as before.
+  chip_purchase_id: "pur_e2e_tone_cap",
+  // `authorized` has no refund edge at all (the table declares refund only from
+  // paid/confirmed), while BOTH authorization moves are legal for this row —
+  // skip_capture, a purchase id, no captured_at — so they are offered enabled.
+  // Left to inherit PAID_EVENTS the row would claim a Refund the server would
+  // never offer on an authorization, so it says what the table says.
   available_events: [
-    { event: "capture", label_key: "bld.capture", enabled: false, reason: "not an authorization awaiting capture" },
+    { event: "capture", label_key: "bld.capture", enabled: true },
     { event: "confirm", label_key: "sales.confirmSale", enabled: true },
-    { event: "release", label_key: "bld.release", enabled: false, reason: "not an authorization awaiting capture" },
+    { event: "release", label_key: "bld.release", enabled: true },
   ] as StubEvent[],
 };
 

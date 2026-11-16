@@ -349,8 +349,8 @@ func refusesTheShape(fn string) bool { return shapeScanHits(fn) != "" }
 // exclusions and now simply outside the predicate:
 //
 //   - `<Store>.Count*` is a scalar about ONE form the caller already holds
-//     (httpapi/restrictions.go entryLimitReached compares a form's entry count
-//     against its cap), not a table choice for a list;
+//     (httpapi/restrictions.go formEntryCount counts that form's entries for the
+//     entry-limit arm), not a table choice for a list;
 //   - a submissions read with a literal form id and NO mode derivation is the
 //     per-form route, correct by design (#604). It answers "read this form's
 //     entries", not "which table is this list".
@@ -378,8 +378,8 @@ var (
 	// function builds itself.
 	//
 	// `<Store>.Count*` is deliberately absent: a Count is a scalar about ONE form
-	// the caller already holds (httpapi/restrictions.go entryLimitReached compares
-	// a form's entry count against its cap), not a table choice for a list.
+	// the caller already holds (httpapi/restrictions.go formEntryCount counts that
+	// form's entries for the entry-limit arm), not a table choice for a list.
 	recordRowRead = regexp.MustCompile(`(?i)\.(List|Merged|Page|ByID)\w*\s*\([^\n]*(?:\n[ 	]+[^\n]*){0,8}?\b(Sale|Submission)Filter\s*\{` +
 		`|(?i)\b(Sales|Submissions)\.(List|Merged|Page|ByID)\w*` +
 		`|(?i)\bFROM\s+(sales|submissions)\b` +
@@ -578,16 +578,11 @@ func (h *RESTHandlers) qaRead(ctx context.Context, f *dbstore.Form, accs []strin
 	}
 
 	allows := []struct{ name, src string }{
-		{"the entry-limit counter (Count of a form already in hand)", `func (h *PublicHandlers) entryLimitReached(ctx context.Context, f *dbstore.Form) (bool, error) {
-	if f.EntryLimit == nil {
-		return false, nil
-	}
+		{"the entry-limit counter (Count of a form already in hand)", `func (h *PublicHandlers) entryCountForForm(ctx context.Context, f *dbstore.Form) (int64, error) {
 	if formMode(f) == dbstore.FormModeResponse {
-		count, err := h.Submissions.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
-		return count > 0, err
+		return h.Submissions.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
 	}
-	count, err := h.Sales.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
-	return count > 0, err
+	return h.Sales.CountByAccountsForm(ctx, []string{f.AccountID}, f.ID)
 }`},
 		{"the per-form submissions route (#604, no mode derivation)", `func (h *RESTHandlers) perForm(ctx context.Context, formID string, accs []string) {
 	subs, _, err := h.Submissions.ListFilteredPage(ctx, accs, dbstore.SubmissionFilter{FormID: formID}, 1, 20)

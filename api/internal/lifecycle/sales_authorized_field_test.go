@@ -11,8 +11,10 @@ package lifecycle
 //
 // A card may not fix the duplication (it touches a column the dashboard and the
 // REST payload read); it may only prove what today's behaviour IS. That is what
-// this file does. The reproduction of the real divergence, against the database,
-// is in sales_queue_divergence_test.go.
+// this file does. The queue-vs-table divergence it was written against is now
+// closed: the bulk-capture queue's status set is dbstore.CaptureQueueStatuses,
+// pinned to SalesMachine.StatesAllowing(SaleEventCapture) in
+// sales_capture_queue_test.go.
 
 import (
 	"errors"
