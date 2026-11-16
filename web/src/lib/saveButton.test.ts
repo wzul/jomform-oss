@@ -272,9 +272,10 @@ test("a THROWN/network failure on the landing save must reach the page (card t_9
   );
   assert.match(
     settings,
-    /\{lpUrlErr && \(\s*<p className="max-w-xl rounded-md bg-red-50 px-2 py-1\.5 text-xs font-medium text-red-700">/,
+    /\{lpUrlErr && \(\s*<p className="max-w-xl rounded-md bg-\[var\(--jf-danger-bg\)\] px-2 py-1\.5 text-xs font-medium text-\[var\(--jf-danger-text\)\]">/,
     "the `lpUrlErr` element is no longer the red banner at the landing fields — the failure would " +
-      "have nowhere visible to land",
+      "have nowhere visible to land (the banner is the recorded token pair `--jf-danger-bg` / " +
+      "`--jf-danger-text` since card t_1436a4aa moved /settings onto the token layer)",
   );
   // The sentence must be a dictionary key with every locale, or `t()` renders the raw key.
   const dict = readFileSync(`${SRC}components/i18nDict.ts`, "utf8");

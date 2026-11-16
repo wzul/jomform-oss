@@ -55,7 +55,7 @@ const SECTIONS: Section[] = [
         tip: "Ask first with `describe_lifecycle`: `aggregate: \"sales\"` returns the table, `id` returns a sale's `available_events`. Refusals carry `lifecycle.illegalTransition` or `lifecycle.transitionRefused`.",
       },
       {
-        warn: "`status: \"authorized\"` is not the `authorized` boolean. The boolean marks a captured hold; no write path sets the status. **The status wins** — it decides every action.",
+        warn: "`status: \"authorized\"` is not the `authorized` field. That field is **derived from `captured_at`** — the stored copy is gone; no write path sets the status. **The status wins.**",
       },
     ],
   },

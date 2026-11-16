@@ -20,10 +20,15 @@ package lifecycle
 // rows, including the two controls that stop it from passing by the queue being
 // broken the other way (a captured row, an ordinary non-skip_capture sale).
 //
-// These are also the two frozen facts from the card that built this table, kept
-// where they were: `authorized` BOOLEAN is an annotation of captured_at (its only
-// writer, dbstore.MarkCaptured, stamps the boolean, the timestamp and status=paid
-// in one statement), and status — not the boolean — is what every reader keys on.
+// This file also carries the DERIVATION guard. The card that built this table
+// froze a second fact here: `authorized` BOOLEAN was an annotation of
+// captured_at (its only writer, dbstore.MarkCaptured, stamped the boolean, the
+// timestamp and status=paid in one statement), and status — not the boolean —
+// is what every reader keys on. Card t_7f50c3fc then removed the duplicate:
+// migration 000091 drops the column, the shared SELECT reports
+// `(captured_at IS NOT NULL) AS authorized`, and
+// TestSalesAuthorizedColumnIsGoneAndDerivedFromCapturedAt fails if either half
+// regresses. Status is still the authority.
 //
 // Integration tests: need real Postgres (JOMFORM_TEST_DATABASE_URL); skipped
 // without it. They use testdb.Open, whose per-process scratch schema means no
@@ -70,11 +75,12 @@ func salesFixture(t *testing.T, ctx context.Context, p *pgxpool.Pool) string {
 // saleSeed is one row to insert, in the shape a real sale has. The zero value is
 // the shape the capture queue is FOR: skip_capture on, uncaptured, a CHIP
 // purchase attached. The two negative fields turn on the ways a sale can look
-// capturable and not be.
+// capturable and not be. There is no `authorized` field to seed: the column is
+// gone (migration 000091) and the value is derived from captured_at, so a seed
+// that wants a captured row says Captured.
 type saleSeed struct {
-	Status     string
-	Authorized bool
-	Captured   bool
+	Status   string
+	Captured bool
 	// NotSkipCapture is an ordinary CHIP sale: charged at once, never a hold.
 	NotSkipCapture bool
 	// NoPurchase is a skip_capture sale with no CHIP purchase yet — there is no
@@ -82,9 +88,9 @@ type saleSeed struct {
 	NoPurchase bool
 }
 
-// seedSale inserts one sale and returns its id. The `authorized` boolean is
-// passed explicitly (not derived) so the disagreeing shapes can be produced on
-// purpose.
+// seedSale inserts one sale and returns its id. captured=false leaves captured_at
+// NULL, and since the `authorized` column is gone (migration 000091) that
+// timestamp is the only thing the derived `authorized` value comes from.
 func seedSale(t *testing.T, ctx context.Context, p *pgxpool.Pool, accountID string, seed saleSeed) string {
 	t.Helper()
 	var id string
@@ -100,24 +106,23 @@ func seedSale(t *testing.T, ctx context.Context, p *pgxpool.Pool, accountID stri
 	}
 	err := p.QueryRow(ctx,
 		fmt.Sprintf(`INSERT INTO sales (account_id, ref_code, client, items, subtotal_sen, total_sen,
-		     status, skip_capture, authorized, captured_at, chip_purchase_id)
+		     status, skip_capture, captured_at, chip_purchase_id)
 		   VALUES ($1, 'REF-' || md5(random()::text), '{}'::jsonb, '[]'::jsonb, 1000, 1000,
-		     $2, $3, $4, %s, %s)
+		     $2, $3, %s, %s)
 		   RETURNING id`, capturedAtSQL, purchaseSQL),
-		accountID, seed.Status, !seed.NotSkipCapture, seed.Authorized).Scan(&id)
+		accountID, seed.Status, !seed.NotSkipCapture).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed a %s sale (%+v): %v", seed.Status, seed, err)
 	}
 	return id
 }
 
-// TestMarkCapturedStampsTheBooleanAndTheTimestampTogether pins the only write
-// path that ever sets `authorized`: it writes status = paid, authorized = true
-// and captured_at in ONE statement, so the boolean cannot exist without the
-// timestamp. That is why the boolean is an annotation of the past and not a
-// state — and why status='authorized' with authorized=false is a shape the code
-// can still meet (legacy rows) but never produce.
-func TestMarkCapturedStampsTheBooleanAndTheTimestampTogether(t *testing.T) {
+// TestMarkCapturedStampsTheTimestampThatIsTheBoolean pins the only capture
+// write: it sets status = paid and stamps captured_at in ONE statement, and the
+// sale reads back `authorized = true` because that field is derived from the
+// timestamp. The column that used to hold the flag is gone (migration 000091),
+// so there is no second place for it to drift.
+func TestMarkCapturedStampsTheTimestampThatIsTheBoolean(t *testing.T) {
 	ctx := context.Background()
 	p := testdb.Open(t)
 	accountID := salesFixture(t, ctx, p)
@@ -144,10 +149,10 @@ func TestMarkCapturedStampsTheBooleanAndTheTimestampTogether(t *testing.T) {
 		t.Fatalf("re-read captured sale: %v", err)
 	}
 	if !after.Authorized {
-		t.Error("MarkCaptured did not set authorized=true")
+		t.Error("a captured sale does not read authorized=true — the derivation from captured_at is broken")
 	}
 	if after.CapturedAt == nil {
-		t.Error("MarkCaptured did not stamp captured_at — the boolean would then exist without it")
+		t.Error("MarkCaptured did not stamp captured_at")
 	}
 	if after.Status != dbstore.SalePaid {
 		t.Errorf("MarkCaptured status = %q, want %q (the table's capture target)", after.Status, dbstore.SalePaid)
@@ -228,8 +233,9 @@ func TestBulkCaptureQueueOffersEveryCapturableState(t *testing.T) {
 	store := dbstore.NewSaleStore(p)
 
 	// The capturable shapes: each state the table captures from, uncaptured, with
-	// a hold attached. `authorized=false` for the legacy status='authorized' row
-	// as well, so the queue is proved to key on status and not on the boolean.
+	// a hold attached. The legacy status='authorized' row is seeded with no
+	// captured_at too, so (now that `authorized` is derived) it reads false and
+	// the queue is proved to key on status, not on that field.
 	wanted := map[string]string{}
 	for _, state := range SalesMachine.StatesAllowing(SaleEventCapture) {
 		wanted[state] = seedSale(t, ctx, p, accountID, saleSeed{Status: state})
@@ -240,7 +246,7 @@ func TestBulkCaptureQueueOffersEveryCapturableState(t *testing.T) {
 	}
 
 	// The controls: capturable-looking and not capturable.
-	capturedID := seedSale(t, ctx, p, accountID, saleSeed{Status: dbstore.SaleConfirmed, Captured: true, Authorized: true})
+	capturedID := seedSale(t, ctx, p, accountID, saleSeed{Status: dbstore.SaleConfirmed, Captured: true})
 	ordinaryID := seedSale(t, ctx, p, accountID, saleSeed{Status: dbstore.SaleConfirmed, NotSkipCapture: true})
 	noPurchaseID := seedSale(t, ctx, p, accountID, saleSeed{Status: dbstore.SaleConfirmed, NoPurchase: true})
 	terminal := map[string]string{}
@@ -314,5 +320,67 @@ func TestBulkCaptureQueueOffersEveryCapturableState(t *testing.T) {
 	}
 	if len(after) != len(queued)-1 {
 		t.Errorf("queue holds %d rows after capturing one, want %d", len(after), len(queued)-1)
+	}
+}
+
+// TestSalesAuthorizedColumnIsGoneAndDerivedFromCapturedAt is the guard for the
+// FIX (card t_7f50c3fc): the duplicated column is dropped (migration 000091) and
+// the API reports `authorized` as `captured_at IS NOT NULL`, so a reader can
+// never see the two disagree and no writer can reintroduce the drift.
+//
+// It bites in three independent ways:
+//   - if the column is added back to the schema, the information_schema count
+//     is non-zero;
+//   - if the select stops deriving the field, the seeded shapes disagree with
+//     their own captured_at;
+//   - if the column comes back, a raw UPDATE ... SET authorized succeeds.
+func TestSalesAuthorizedColumnIsGoneAndDerivedFromCapturedAt(t *testing.T) {
+	ctx := context.Background()
+	p := testdb.Open(t)
+	accountID := salesFixture(t, ctx, p)
+	store := dbstore.NewSaleStore(p)
+
+	// 1. The schema has ONE place for the fact: captured_at.
+	var cols int
+	if err := p.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.columns
+		 WHERE table_schema = current_schema() AND table_name = 'sales' AND column_name = 'authorized'`,
+	).Scan(&cols); err != nil {
+		t.Fatalf("read information_schema for sales.authorized: %v", err)
+	}
+	if cols != 0 {
+		t.Fatalf("sales.authorized still exists (%d column): the duplicated flag is back, so it can drift from captured_at again", cols)
+	}
+
+	// 2. Every shape reads back a boolean that EQUALS its own timestamp. There is
+	// no seed that can make them disagree any more — that is the point.
+	cases := []struct {
+		name     string
+		status   string
+		captured bool
+	}{
+		{"pending uncaptured authorization", dbstore.SalePending, false},
+		{"legacy status=authorized, nothing captured", dbstore.SaleAuthorized, false},
+		{"captured paid authorization", dbstore.SalePaid, true},
+	}
+	for _, tc := range cases {
+		id := seedSale(t, ctx, p, accountID, saleSeed{Status: tc.status, Captured: tc.captured})
+		sale, err := store.ByID(ctx, id)
+		if err != nil {
+			t.Fatalf("%s: read sale: %v", tc.name, err)
+		}
+		if got, want := sale.Authorized, sale.CapturedAt != nil; got != want {
+			t.Errorf("%s: authorized=%v but captured_at is set=%v — the field is not derived from the timestamp", tc.name, got, want)
+		}
+		if sale.Authorized != tc.captured {
+			t.Errorf("%s: authorized=%v, want %v (the seed's captured_at state)", tc.name, sale.Authorized, tc.captured)
+		}
+	}
+
+	// 3. No write path can set the old flag: there is no column to update. This
+	// is what makes the drift unrepeatable rather than merely unused.
+	id := seedSale(t, ctx, p, accountID, saleSeed{Status: dbstore.SalePending})
+	if _, err := p.Exec(ctx, `UPDATE sales SET authorized=true WHERE id=$1`, id); err == nil {
+		t.Fatal("UPDATE sales SET authorized=true succeeded — the duplicated column is back and a writer can drift it again")
 	}
 }

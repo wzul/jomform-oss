@@ -50,45 +50,46 @@ import (
 //
 // ─── The duplicated "authorized" state, and which representation wins ────────
 //
-// `sales` records the authorized/uncaptured state in TWO places. This table
-// resolves the duplication rather than pretending it is not there:
+// `sales` used to record the authorized/uncaptured state in TWO places. This
+// table resolved the duplication in writing (status wins); card t_7f50c3fc then
+// removed the second copy:
 //
 //	status = 'authorized'   admitted by the CHECK in 000002_skip_capture.up.sql.
 //	                        No write path produces it: a skip_capture sale sits
 //	                        in 'pending' (or reads 'paid') until captured. A
 //	                        LEGACY row can carry it, so the edges a merchant may
 //	                        take from it are declared above — capture, confirm,
-//	                        release — and nothing else.
-//	authorized BOOLEAN      written by exactly one statement, dbstore's
-//	                        MarkCaptured, ALWAYS together with
-//	                        captured_at = now() and status = 'paid'. It therefore
-//	                        means "the hold was captured", which is what
-//	                        captured_at already says: it is an ANNOTATION of the
+//	                        release — and nothing else. STATUS IS STILL THE
+//	                        AUTHORITY.
+//	authorized (the field)  DERIVED by dbstore.saleSelect as
+//	                        `(captured_at IS NOT NULL) AS authorized`, so a
+//	                        reader can never see it disagree with the timestamp.
+//	                        The `sales.authorized` COLUMN it used to mirror was
+//	                        dropped in migration 000091: its only writer
+//	                        (dbstore's MarkCaptured) always stamped captured_at
+//	                        in the same statement, so it was an ANNOTATION of the
 //	                        past, never a state a machine can be in.
 //
 // THE RESOLUTION: status wins. Apply and Available read the state through
 // dbstore.Sale.LifecycleState(), which returns Status and nothing else, and the
 // capture/release guard reads skip_capture, chip_purchase_id and captured_at —
-// never the boolean. So a row where the two disagree — a legacy
-// status='authorized' with authorized=false, or a hand-edited authorized=true on
-// an uncaptured sale — is answered strictly by its status, and the boolean can
-// neither open nor close an edge.
+// never the derived boolean. So a legacy status='authorized' row with nothing
+// captured is answered strictly by its status, and the boolean can neither open
+// nor close an edge.
 //
-// That also means the two fields are NOT required to agree, because they do not
-// mean the same thing: an uncaptured authorization has status pending/paid with
-// authorized=false; a captured one has status paid with authorized=true. The
-// invariant that holds today is narrower and is pinned by tests:
+// It still does not mean status = 'authorized': an uncaptured authorization has
+// status pending/paid with authorized=false; a captured one has status paid with
+// authorized=true. Now that the field is derived, the only invariant needed is
+// the derivation itself:
 //
-//	authorized=true ⟹ captured_at IS NOT NULL   (MarkCaptured writes both)
+//	authorized ⟺ captured_at IS NOT NULL
 //	status='authorized' ⟹ nothing about `authorized`
 //
-// Frozen as-is, not fixed, by TestSaleAuthorizedFieldNeverDecidesAState and
-// TestSaleCaptureLegalityComesFromTheGuardNotTheBoolean (this package) and by
-// TestMarkCapturedStampsTheBooleanAndTheTimestampTogether and
-// TestAwaitingCaptureQueueIsNarrowerThanTheTable (the reproduction, also this
-// package, against the real database). Reconciling the two representations —
-// deriving the boolean or dropping the column — is its own change: it touches a
-// column the dashboard and the REST payload read, and this card is additive.
+// Pinned by TestSaleAuthorizedFieldNeverDecidesAState and
+// TestSaleCaptureLegalityComesFromTheGuardNotTheBoolean (this package),
+// TestMarkCapturedStampsTheTimestampThatIsTheBoolean and
+// TestSalesAuthorizedColumnIsGoneAndDerivedFromCapturedAt (the real-database
+// guards: the column must not come back, and the derivation must hold).
 var SalesMachine = &Machine{
 	Name: "sales",
 	States: map[string]State{

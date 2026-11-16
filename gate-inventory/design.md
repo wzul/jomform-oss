@@ -24,27 +24,33 @@ missing reduced-motion baseline); the meta-test owns the rules that need the tok
 data, the measured contrast pairs, and the shrink-only allowlist whose totals it
 prints. `gate-inventory/web.md` lists the whole meta-test.
 
-## What NEITHER gate owns: raw Tailwind palette colour utilities (card `t_a1af018f`)
+## Raw Tailwind palette colour utilities — owned by the META-TEST now, not here (cards `t_a1af018f`, `t_2fb8ae1b`)
 
-`bg-indigo-600` is the same defect as `bg-[#4f46e5]` per `docs/DESIGN-SYSTEM.md` rule 3,
-and **nothing fails it**. Both scanners look for literals — `#rrggbb`, `bg-[#…]`,
-`text-[<n>px]` — and a palette utility is neither, so it passes here and passes
-`designTokens.test.ts`. Measured on this tree (127 shipped `.tsx`): **1,261** palette
-utilities plus **188** `bg-white`/`text-white` across 58 files, against **1,957**
-`--jf-*` colour utilities. The six worst files carry **601** of the 1,449:
-`app/settings/page.tsx` 195, `app/form-settings/page.tsx` 121, `app/profile/page.tsx` 100,
-`app/sales/page.tsx` 89, `app/builder/page.tsx` 86, `app/login/page.tsx` 10.
+`bg-indigo-600` is the same defect as `bg-[#4f46e5]` per `docs/DESIGN-SYSTEM.md` rule 3.
+For a while **nothing failed it**: both scanners look for literals — `#rrggbb`,
+`bg-[#…]`, `text-[<n>px]` — and a palette utility is neither, so it passed here and
+passed `designTokens.test.ts`. Measured on the tree card `t_a1af018f` landed on
+(127 shipped `.tsx`): **1,261** palette utilities plus **188** `bg-white`/`text-white`
+across 58 files, against **1,957** `--jf-*` colour utilities. The six worst files carried
+**601** of the 1,449: `app/settings/page.tsx` 195, `app/form-settings/page.tsx` 121,
+`app/profile/page.tsx` 100, `app/sales/page.tsx` 89, `app/builder/page.tsx` 86,
+`app/login/page.tsx` 10.
 
-WHY A RULE HERE WOULD BE THE WRONG FIRST STEP. Those class names are the SUBJECT of
-twelve source guards (`mutedText` resolves an element's background by matching
+WHY THE RULE DID NOT LAND HERE, AND WHY IT DID NOT LAND FIRST. Those class names are the
+SUBJECT of twelve source guards (`mutedText` resolves an element's background by matching
 `bg-white`/`bg-slate-50`/`bg-slate-100`; `tintedSurface` matches `bg-indigo-50`;
 `dangerText`, `emeraldText`, `ctaContrast`, `statusBadgeArms`, `indigo100Tint`,
 `ghostButtonInk`, `actionFailureTone`, `toastTone`, `sidebarNav`, `tailwindScanScope`).
 A page migrated off those names without its guard's model moving in the same commit does
 not trip the guard — it makes the guard stop SEEING the element, which is the silent-skip
-shape each of them refuses. So the migration is a token-layer change (border steps for
-the four status families, a success text step, a neutral fill step) followed by a page and
-its guards in one diff; a repo-wide "no palette utility" rule seeded with 58 files would
-land that policy before any of it exists, and would red every branch in flight that touches
-a page. `docs/DESIGN-SYSTEM.md` records the measured gap and the order.
+shape each of them refuses. So the order was: token layer, then one card per page moving
+the page AND its guards together, then the rule. A repo-wide "no palette utility" rule
+seeded with 58 files on day one would have landed that policy before any of it existed
+and red every branch in flight that touched a page.
+
+The rule is `scanPalette` — rule 4 of `web/src/lib/designTokens.test.ts`, so it runs
+inside `test:unit` and is the `web` gate's, not this one's (see
+[`web.md`](./web.md) for what it reports and its seeded counts). This gate stays a
+scanner over source that needs no token data, which is the split that keeps the two
+implementations from drifting.
 

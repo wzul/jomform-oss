@@ -28,6 +28,19 @@ scanner can express:
   `--jf-space-11`, so `min-h-[44px]` is `min-h-jf-11`. The step set is read from
   `designTokenScale.ts`, so adding a step widens the rule in the same commit, and a
   length no step names (`w-[720px]`) is outside it by construction;
+- **a raw Tailwind palette colour utility** — `bg-indigo-600`, `text-slate-500`,
+  `border-emerald-200`, `bg-white/95` (`scanPalette`, card `t_2fb8ae1b`, landed once the
+  six worst pages had consumed the vocabulary). It reports the seven colour prefixes
+  Tailwind spells `<prefix>-<family>-<step>` (`bg`, `text`, `border`, `ring`, `divide`,
+  `fill`, `stroke`, with an optional `/<alpha>`) plus `bg-white` / `text-white` /
+  `bg-black`; it does NOT report `bg-[var(--jf-…)]` (the replacement — a control plants
+  both on one line and requires the finding for only the first), and it honours
+  `design-tokens-exempt:` exactly as the hex rule does. Same shrink-only allowlist,
+  seeded at **793 findings in 47 files** on the tree that landed it (re-measured there:
+  `components/FormModeControl.tsx` fell 8 → 1 when card `t_cff48545` tokenised its last
+  seven palette utilities, so the seed followed the tree down rather than shipping at 800;
+  the six migrated pages carry 1 between them, against 601 of the 1,449 before), printed as
+  `design-tokens: raw palette: N finding(s) in M file(s), K allowlisted (seeded S)`;
 - **the shrink-only allowlist** (`web/src/lib/designTokenAllowlist.ts`): a per-file
   COUNT seeded from the tree it was measured on. Unlisted findings fail, a count above
   the seed fails, and an entry whose file is now clean fails until it is deleted. The

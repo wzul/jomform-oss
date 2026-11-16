@@ -47,6 +47,12 @@ import { extBadge, selectedNeedsBadge, type SelectedMedia } from "../../lib/medi
 // newest-first window, so scanning it left an older logo — or one whose host
 // changed — with no mime, i.e. the broken <img> again.
 import { mediaLookupPath, mediaRowFromLookup } from "../../lib/mediaLookup";
+// t_4e92c847: the menu's best sellers are a LIST (#485 `best_seller_ids`) with
+// the legacy single `best_seller` as fallback. The tab read/wrote only the
+// legacy field, so an MCP-configured list rendered as "No best-seller selected"
+// and a Save replaced the stored menu without the ids. lib/formMenu.ts owns the
+// read/write shape so a node test pins it (web/src/lib/formMenu.test.ts).
+import { menuDraftFromWire, menuSaveBody } from "../../lib/formMenu";
 
 type FormDetail = {
   id: string;
@@ -766,7 +772,11 @@ function FormSettingsInner() {
   // preview can resolve stored IDs to names without leaking account products.
   const [menuEnabled, setMenuEnabled] = useState(false);
   const [menuCategories, setMenuCategories] = useState<{ name: string; product_ids: string[] }[]>([]);
-  const [menuBestSeller, setMenuBestSeller] = useState("");
+  // Card t_4e92c847: a LIST of best sellers (#485), not the single legacy id.
+  // The menu config stores `best_seller_ids` when set and falls back to
+  // `best_seller`; holding the list here is what lets an MCP-configured menu
+  // render its products and round-trip them on Save.
+  const [menuBestSellers, setMenuBestSellers] = useState<string[]>([]);
   const [menuOrderFormSlug, setMenuOrderFormSlug] = useState("");
   const [menuProducts, setMenuProducts] = useState<PickerProduct[]>([]);
   // The workspace's published forms, so the menu's optional "order form"
@@ -1026,16 +1036,15 @@ function FormSettingsInner() {
       // Issue #497: the form's restaurant-menu config (a per-form setting).
       const mr = await fetch(`/api/rest/forms/${formId}/menu${workspaceQuery()}`);
       if (mr.ok) {
-        const md = (await mr.json()) as {
-          enabled?: boolean;
-          categories?: { name: string; product_ids: string[] }[];
-          best_seller?: string;
-          order_form_slug?: string;
-        };
-        setMenuEnabled(!!md.enabled);
-        setMenuCategories(Array.isArray(md.categories) ? md.categories : []);
-        setMenuBestSeller(md.best_seller || "");
-        setMenuOrderFormSlug(md.order_form_slug || "");
+        // Card t_4e92c847: hydrate the menu through lib/formMenu so the LIST
+        // shape (#485 `best_seller_ids`) is read — with the legacy single
+        // `best_seller` as the fallback, the same precedence the public menu
+        // renders with (dbstore.MenuPage.BestSellerProductIDs).
+        const draft = menuDraftFromWire(await mr.json());
+        setMenuEnabled(draft.enabled);
+        setMenuCategories(draft.categories);
+        setMenuBestSellers(draft.bestSellerIDs);
+        setMenuOrderFormSlug(draft.orderFormSlug);
       }
       // Issue #497: the menu's products are the ones THIS form references via
       // its product blocks — resolved to names/thumbnails/prices from the
@@ -1242,12 +1251,19 @@ function FormSettingsInner() {
       const r = await fetch(`/api/rest/forms/${formId}/menu${workspaceQuery()}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: menuEnabled,
-          categories: menuCategories,
-          best_seller: menuBestSeller,
-          order_form_slug: menuOrderFormSlug,
-        }),
+        // Card t_4e92c847: the best sellers travel as the LIST and `best_seller`
+        // is never sent. The handler decodes an absent key to "" and
+        // dbstore.WithMenu REPLACES the stored menu object, so sending
+        // `best_seller:""` is exactly how this Save used to drop the ids an
+        // MCP/REST client had configured (#485).
+        body: JSON.stringify(
+          menuSaveBody({
+            enabled: menuEnabled,
+            categories: menuCategories,
+            bestSellerIDs: menuBestSellers,
+            orderFormSlug: menuOrderFormSlug,
+          }),
+        ),
       });
       if (r.ok) showMsgOk(t("fs.menuSaved"));
       else showMsgFail(t("prof.failed"));
@@ -2398,58 +2414,72 @@ function FormSettingsInner() {
                             <>
                               <div>
                                 <label className={labelCls}>{t("set.menuBestSeller")}</label>
+                                {/* Card t_4e92c847: the best sellers are a LIST
+                                    (#485) — every saved product is a chip, so a
+                                    menu configured through MCP/REST renders its
+                                    products instead of "No best-seller
+                                    selected", and removing one keeps the rest. */}
                                 <div className="mt-1 flex max-w-xl flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-border)] p-2">
-                                  {menuBestSeller && menuProductByID(menuBestSeller) ? (
-                                    <>
-                                      <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--jf-surface-2)]">
-                                        {menuProductByID(menuBestSeller)?.images?.[0] ? (
-                                          /* eslint-disable-next-line @next/next/no-img-element */
-                                          <img
-                                            src={menuProductByID(menuBestSeller)!.images![0]}
-                                            alt=""
-                                            className="h-full w-full object-cover"
-                                          />
-                                        ) : (
-                                          <span className="text-jf-3xs text-[var(--jf-muted-on-tint)]">—</span>
-                                        )}
-                                      </span>
-                                      <span className="min-w-0 flex-1 truncate text-sm">
-                                        {menuProductByID(menuBestSeller)!.name}
-                                      </span>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setMenuPickerCatIndex(-1);
-                                          setMenuPickerOpen(true);
-                                        }}
-                                        className="jf-btn-ghost"
+                                  {menuBestSellers.length === 0 && (
+                                    <span className="flex-1 truncate text-sm text-[var(--jf-muted)]">
+                                      {t("set.menuBestSellerNone")}
+                                    </span>
+                                  )}
+                                  {menuBestSellers.map((id) => {
+                                    const p = menuProductByID(id);
+                                    return (
+                                      <span
+                                        key={id}
+                                        className={`inline-flex items-center gap-1.5 rounded-full border py-0.5 pl-0.5 pr-2 text-xs ${
+                                          p
+                                            ? "border-[var(--jf-border)] bg-[var(--jf-surface)]"
+                                            : "border-[var(--jf-warning-border-strong)] bg-[var(--jf-warning-bg)]"
+                                        }`}
                                       >
-                                        {t("set.menuChangeBestSeller")}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setMenuBestSeller("")}
-                                        className="jf-btn-ghost text-[var(--jf-danger-text)]"
-                                      >
-                                        {t("set.menuClearBestSeller")}
-                                      </button>
-                                    </>
+                                        <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--jf-surface-2)]">
+                                          {p?.images?.[0] ? (
+                                            /* eslint-disable-next-line @next/next/no-img-element */
+                                            <img src={p.images[0]} alt="" className="h-full w-full object-cover" />
+                                          ) : (
+                                            <span className="text-jf-4xs text-[var(--jf-muted-on-tint)]">—</span>
+                                          )}
+                                        </span>
+                                        <span className="max-w-[12rem] truncate">
+                                          {p ? p.name : t("set.menuUnknownProduct")}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          aria-label={`${t("set.menuClearBestSeller")}: ${p ? p.name : id}`}
+                                          onClick={() => setMenuBestSellers((arr) => arr.filter((x) => x !== id))}
+                                          className="text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
+                                        >
+                                          ✕
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+                                  {menuBestSellers.length === 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMenuPickerCatIndex(-1);
+                                        setMenuPickerOpen(true);
+                                      }}
+                                      className="jf-btn-primary px-2.5 py-1 text-jf-2xs"
+                                    >
+                                      {t("set.menuChooseBestSeller")}
+                                    </button>
                                   ) : (
-                                    <>
-                                      <span className="flex-1 truncate text-sm text-[var(--jf-muted)]">
-                                        {menuBestSeller ? t("set.menuUnknownProduct") : t("set.menuBestSellerNone")}
-                                      </span>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setMenuPickerCatIndex(-1);
-                                          setMenuPickerOpen(true);
-                                        }}
-                                        className="jf-btn-primary px-2.5 py-1 text-jf-2xs"
-                                      >
-                                        {t("set.menuChooseBestSeller")}
-                                      </button>
-                                    </>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMenuPickerCatIndex(-1);
+                                        setMenuPickerOpen(true);
+                                      }}
+                                      className="jf-btn-ghost"
+                                    >
+                                      {t("set.menuChangeBestSeller")}
+                                    </button>
                                   )}
                                 </div>
                               </div>
@@ -3904,20 +3934,14 @@ function FormSettingsInner() {
         current={fsLogo}
       />
       {/* Issue #497: product picker for a menu category (multi-select) or the
-          best-seller (single-select), scoped to the products THIS form
-          references. Returns product IDs only, so the stored menu JSON shape is
-          unchanged. */}
+          best sellers (#485 list — also multi-select, card t_4e92c847), scoped
+          to the products THIS form references. Returns product IDs only, so the
+          stored menu JSON shape is unchanged. */}
       <ProductPicker
         open={menuPickerOpen}
         onClose={() => setMenuPickerOpen(false)}
-        multi={menuPickerCatIndex >= 0}
-        selected={
-          menuPickerCatIndex >= 0
-            ? menuCategories[menuPickerCatIndex]?.product_ids || []
-            : menuBestSeller
-              ? [menuBestSeller]
-              : []
-        }
+        multi
+        selected={menuPickerCatIndex >= 0 ? menuCategories[menuPickerCatIndex]?.product_ids || [] : menuBestSellers}
         title={
           menuPickerCatIndex >= 0 ? t("set.menuPickerTitleCategory") : t("set.menuPickerTitleBestSeller")
         }
@@ -3928,7 +3952,9 @@ function FormSettingsInner() {
               arr.map((x, j) => (j === menuPickerCatIndex ? { ...x, product_ids: ids } : x))
             );
           } else {
-            setMenuBestSeller(ids[0] || "");
+            // The whole list comes back — adding or removing a best seller is a
+            // picker edit, never a collapse back to one product.
+            setMenuBestSellers(ids);
           }
           setMenuPickerOpen(false);
         }}

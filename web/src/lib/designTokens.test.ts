@@ -32,7 +32,12 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ARBITRARY_PX_ALLOWLIST, DESIGN_TOKEN_ALLOWLIST, type CountAllowlist } from "./designTokenAllowlist.ts";
+import {
+  ARBITRARY_PX_ALLOWLIST,
+  DESIGN_TOKEN_ALLOWLIST,
+  PALETTE_UTILITY_ALLOWLIST,
+  type CountAllowlist,
+} from "./designTokenAllowlist.ts";
 import { BARREL_FAMILY, PRIMITIVE_STATES, STATES } from "./designStates.ts";
 import {
   DARK_CONTRASTS,
@@ -289,6 +294,102 @@ export function scanScalePx(
   return findings;
 }
 
+// ─── rule 4: a raw Tailwind palette colour utility ────────────────────────────
+
+/**
+ * The Tailwind palette families this rule covers. Named here, not inline in the
+ * regex, so the message below can name the vocabulary a call site has to leave.
+ */
+const PALETTE_FAMILIES = [
+  "slate",
+  "gray",
+  "zinc",
+  "neutral",
+  "stone",
+  "red",
+  "orange",
+  "amber",
+  "yellow",
+  "lime",
+  "green",
+  "emerald",
+  "teal",
+  "cyan",
+  "sky",
+  "blue",
+  "indigo",
+  "violet",
+  "purple",
+  "fuchsia",
+  "pink",
+  "rose",
+] as const;
+
+/**
+ * A raw palette colour utility: `<prefix>-<family>-<step>` where the prefix is one
+ * of the seven this rule owns, the family is a Tailwind palette name and the step
+ * is 2–3 digits (`red-50` … `red-950`, with an optional `/<alpha>`), plus the three
+ * neutral words the ladder still spells without a step (`bg-white`, `text-white`,
+ * `bg-black`).
+ *
+ * TWO THINGS IT MUST NOT DO, both asserted in the controls below:
+ *
+ *   - it must NOT match `bg-[var(--jf-surface-2)]`. The token form is the
+ *     REPLACEMENT for this rule; a regex that fought its own fix would make the
+ *     migration impossible. The prefix is followed by `-<family>-`, and `-[` cannot
+ *     be a family, so the token form is outside the pattern by construction rather
+ *     than by a second negative lookahead;
+ *   - it must NOT match a length or a token utility that merely starts with the same
+ *     prefix (`border-2`, `ring-offset-2`, `text-jf-read-sm`, `bg-gradient-to-r`):
+ *     none of those continue with a palette family, so none match.
+ *
+ * The lookbehind keeps a VARIANT working (`hover:bg-slate-50`, `md:border-red-200`,
+ * `data-[state=open]:bg-white`) — the variant prefix is a `:`, not a word character —
+ * while refusing to match inside a longer identifier.
+ */
+const PALETTE_UTILITY = new RegExp(
+  [
+    `(?<![\\w-])(?:bg|text|border|ring|divide|fill|stroke)-(?:${PALETTE_FAMILIES.join("|")})-\\d{2,3}(?:\\/\\d+)?(?![\\w-])`,
+    `(?<![\\w-])(?:bg|text)-white(?:\\/\\d+)?(?![\\w-])`,
+    `(?<![\\w-])bg-black(?:\\/\\d+)?(?![\\w-])`,
+  ].join("|"),
+  "g",
+);
+
+/**
+ * Rule 4 over a set of files: a raw Tailwind palette colour utility.
+ *
+ * Same contract as `scanHex`: comments are prose (a rationale that QUOTES a fix
+ * must not fail the build), `design-tokens-exempt:` is honoured exactly as the hex
+ * and px rules honour it (the persisted colour-field defaults are DATA, not
+ * styling), and allowlisting is a per-file COUNT applied afterwards by
+ * `checkShrinkOnly` — the scanner answers "what is here", the allowlist answers
+ * "how much of it is already paid for".
+ */
+export function scanPalette(
+  files: readonly SourceFile[],
+  { skip = [] }: { skip?: readonly string[] } = {},
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const file of files) {
+    if (skip.some((p) => file.path.startsWith(p))) continue;
+    const { covered, errors } = exemptions(file.text);
+    for (const e of errors) findings.push({ path: file.path, line: 0, what: `broken exemption: ${e}` });
+    stripComments(file.text).forEach((line, i) => {
+      const n = i + 1;
+      if (covered.has(n)) return;
+      for (const m of line.matchAll(PALETTE_UTILITY)) {
+        findings.push({
+          path: file.path,
+          line: n,
+          what: `raw palette utility ${m[0]} — use the token (bg-[var(--jf-…)])`,
+        });
+      }
+    });
+  }
+  return findings;
+}
+
 // ─── the shrink-only allowlist ───────────────────────────────────────────────
 
 export type ShrinkReport = {
@@ -483,6 +584,32 @@ test("no .tsx carries an arbitrary [Npx] that a scale step already names (allowl
   assert.ok(STEP_PX.has(16), "the space scale no longer contains 16px");
 });
 
+test("no .tsx carries a raw Tailwind palette colour utility (allowlist seeded, shrink-only, count printed)", () => {
+  const findings = scanPalette(shippedTsx());
+  const report = checkShrinkOnly(findings, PALETTE_UTILITY_ALLOWLIST, "design-tokens: raw palette");
+  // PRINTED like the other two totals: the seed is only a baseline if the gate's
+  // own output shows what is still paid for, file by file.
+  console.log(report.total);
+  for (const line of report.lines) console.log(`  ${line}`);
+  // The error text names file:LINE and the CLASS, not just a count: "app/x.tsx: 2
+  // finding(s)" tells a reader which file, never which of 793 lines to open.
+  const counts = new Map<string, number>();
+  for (const finding of findings) counts.set(finding.path, (counts.get(finding.path) ?? 0) + 1);
+  const detail = findings
+    .filter((f) => (counts.get(f.path) ?? 0) > (PALETTE_UTILITY_ALLOWLIST[f.path] ?? 0))
+    .map((f) => `  ${f.path}:${f.line}  ${f.what}`);
+  assert.deepEqual(
+    report.errors,
+    [],
+    `raw Tailwind palette colour utilities in shipped .tsx:\n${report.errors.join("\n")}\n` +
+      (detail.length > 0 ? `${detail.join("\n")}\n` : "") +
+      "A palette utility is the same defect as a hex literal (docs/DESIGN-SYSTEM.md rule 3): it is a colour " +
+      "nobody measured, on a surface nobody recorded. Use the token form bg-[var(--jf-…)] / text-[var(--jf-…)], " +
+      "or move the call site onto a primitive; for a value that IS data (a persisted colour-field default) use " +
+      "`design-tokens-exempt: <reason>`.",
+  );
+});
+
 test("the primitive layer itself is literal-free (it is excluded from the general scan, not from this rule)", () => {
   const ui = filesUnder(UI_DIR, (n) => n.endsWith(".tsx"));
   assert.ok(ui.length >= 15, `walked only ${ui.length} primitive files under components/ui — the walk is not reading the layer`);
@@ -583,6 +710,95 @@ test("control: scanScalePx names a planted [44px] and leaves a length no scale s
   const found = scanScalePx(planted).map((f) => `${f.path}:${f.what}`);
   assert.equal(found.length, 1, `expected only the 44px literal, got ${JSON.stringify(found)}`);
   assert.match(found[0], /44px/);
+});
+
+test("control: scanPalette names a planted bg-slate-50 and leaves the TOKEN form beside it alone", () => {
+  const planted: SourceFile[] = [
+    {
+      path: "app/planted.tsx",
+      text: [
+        "export function A() {",
+        '  return <div className="bg-slate-50 p-3 bg-[var(--jf-surface-2)]">x</div>;',
+        "}",
+      ].join("\n"),
+    },
+  ];
+  const found = scanPalette(planted);
+  // Exactly ONE finding: the rule must not fight its own replacement. A regex that
+  // also reported `bg-[var(--jf-surface-2)]` would make the migration impossible.
+  assert.equal(found.length, 1, `expected only the palette utility, got ${JSON.stringify(found)}`);
+  assert.equal(found[0].path, "app/planted.tsx");
+  assert.equal(found[0].line, 2);
+  assert.match(found[0].what, /bg-slate-50/);
+});
+
+test("control: scanPalette reads variants, alpha steps and the three neutral words — and leaves utility look-alikes alone", () => {
+  const planted: SourceFile[] = [
+    {
+      path: "app/variants.tsx",
+      text: [
+        'const a = "hover:bg-slate-50 md:text-red-600 border-emerald-200 ring-slate-200 divide-slate-100";',
+        'const b = "fill-amber-400 stroke-sky-700 bg-white/60 text-white bg-black";',
+        // Look-alikes that are NOT palette colours: a length, an offset, a scale
+        // token, a gradient direction, a token utility in the replacement form.
+        'const c = "border-2 ring-offset-2 text-jf-read-sm bg-gradient-to-r bg-[var(--jf-danger-bg)]";',
+      ].join("\n"),
+    },
+  ];
+  const found = scanPalette(planted).map((f) => f.what.replace(/^raw palette utility /, "").split(" ")[0]);
+  assert.deepEqual(
+    found,
+    [
+      "bg-slate-50",
+      "text-red-600",
+      "border-emerald-200",
+      "ring-slate-200",
+      "divide-slate-100",
+      "fill-amber-400",
+      "stroke-sky-700",
+      "bg-white/60",
+      "text-white",
+      "bg-black",
+    ],
+    "the palette vocabulary the rule covers (and nothing else)",
+  );
+});
+
+test("control: scanPalette honours a justified exemption exactly as the hex rule does", () => {
+  const files: SourceFile[] = [
+    // The persisted colour-field default is DATA, not styling — the same directive
+    // that justifies a hex literal has to justify the palette spelling of one.
+    {
+      path: "components/ColourField.tsx",
+      text: [
+        '// design-tokens-exempt: persisted colour-field default, data not styling',
+        'const DEFAULT = "bg-slate-50";',
+        "// design-tokens-exempt-end",
+      ].join("\n"),
+    },
+    // A rationale comment that QUOTES the old class is prose, not a finding.
+    { path: "app/prose.tsx", text: "// the fix was bg-slate-50 -> bg-[var(--jf-surface-2)]\nexport const a = 1;" },
+  ];
+  assert.deepEqual(scanPalette(files), []);
+});
+
+test("control: the palette allowlist shrinks both ways and its total names both numbers", () => {
+  const findings = (paths: string[]) => paths.map((p) => ({ path: p, line: 1, what: "planted" }));
+
+  const shrunk = checkShrinkOnly(findings(["app/a.tsx"]), { "app/a.tsx": 2 }, "design-tokens: raw palette");
+  assert.deepEqual(shrunk.errors, [], "a count BELOW the seed is the point of the list and must pass");
+  assert.match(
+    shrunk.total,
+    /^design-tokens: raw palette: 1 finding\(s\) in 1 file\(s\), 1 allowlisted \(seeded 2\)$/,
+    "the printed total must name the live count AND the seed, or the shrink is invisible in the gate's output",
+  );
+
+  const grown = checkShrinkOnly(findings(["app/a.tsx", "app/a.tsx"]), { "app/a.tsx": 1 }, "design-tokens: raw palette");
+  assert.ok(grown.errors.some((e) => /only SHRINK/.test(e)), `a grown count must fail: ${JSON.stringify(grown.errors)}`);
+
+  const clean = checkShrinkOnly(findings([]), { "app/a.tsx": 1 }, "design-tokens: raw palette");
+  assert.equal(clean.errors.length, 1, `an entry that outlived its drift must fail: ${JSON.stringify(clean.errors)}`);
+  assert.match(clean.errors[0], /delete the entry/);
 });
 
 test("control: the shrink-only checker fails a grown count, an unlisted file, and a stale entry — and passes a shrink", () => {

@@ -50,7 +50,10 @@ type Sale = {
   buyer: string;
   created_at: string;
   skip_capture?: boolean;
-  authorized?: boolean;
+  // The API still emits `authorized`, but it is DERIVED from captured_at
+  // (captured_at IS NOT NULL) — the sales column it used to mirror was dropped.
+  // The page reads the timestamp only, so there is one fact and no type here to
+  // tempt a second reader into treating it as state.
   captured_at?: string;
   email_status?: string;
   form_id?: string;
@@ -1598,7 +1601,7 @@ function SalesPageInner() {
                 {isCapturePending(detail) && (
                   <span className="ml-2 text-xs text-[var(--jf-warning-text)]">{t("sales.unauthorized")}</span>
                 )}
-                {detail.authorized && detail.captured_at && (
+                {detail.captured_at && (
                   <span className="ml-2 text-xs text-[var(--jf-success-text)]">{t("sales.authorized")}</span>
                 )}
               </div>

@@ -1,0 +1,20 @@
+-- Drop the duplicated `authorized` flag on sales (card t_7f50c3fc).
+--
+-- WHY. `sales.authorized` recorded "this authorization was captured" a second
+-- time, next to `sales.captured_at`. Its ONLY writer was
+-- dbstore.SaleStore.MarkCaptured, which always stamped the timestamp, set the
+-- status to paid and set the flag in ONE statement — so the column was never
+-- able to hold anything but `captured_at IS NOT NULL`, and no reader needed it
+-- to decide anything (the lifecycle machine reads status, and the capture guard
+-- reads skip_capture / chip_purchase_id / captured_at).
+--
+-- It also did not mean `status = 'authorized'`: that value is admitted by the
+-- CHECK in migration 000002 and produced by NO write path, and a legacy row can
+-- carry it with nothing captured. Keeping the column invited the opposite
+-- reading, and two copies of one fact can disagree once a second writer appears.
+--
+-- WHAT CHANGES. The column is gone; the API keeps the `authorized` field on a
+-- sale row by deriving it from `captured_at IS NOT NULL` in the shared SELECT
+-- (dbstore.saleSelect), so the wire shape is unchanged and every reader sees the
+-- same answer as the timestamp. No transition becomes legal or illegal.
+ALTER TABLE sales DROP COLUMN IF EXISTS authorized;

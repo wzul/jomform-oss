@@ -236,8 +236,9 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
     token: "text-[var(--jf-muted)]",
     // 4.54:1 on #f7f8f8, 4.83:1 white, 4.55:1 --jf-bg-soft, but 4.41:1 slate-100,
     // 3.92:1 --jf-neutral-fill, 3.25:1 --jf-neutral-fill-strong, 4.32:1
-    // --jf-surface-2, 4.44:1 --jf-info-bg (the informational chip's tint, card
-    // t_57059864) and 4.42:1 on --jf-danger-bg.
+    // --jf-surface-2, 4.43:1 --jf-code-bg (the inline-code backdrop /settings
+    // moved its ten chips onto, card t_1436a4aa), 4.44:1 --jf-info-bg (the
+    // informational chip's tint, card t_57059864) and 4.42:1 on --jf-danger-bg.
     bad: [
       "bg-slate-100",
       "bg-slate-200",
@@ -247,9 +248,10 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
       "bg-[var(--jf-neutral-fill-strong)]",
       "bg-[var(--jf-danger-bg)]",
       "bg-[var(--jf-info-bg)]",
+      "bg-[var(--jf-code-bg)]",
       "bg-[var(--jf-primary-tint-strong)]",
     ],
-    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100, 4.32:1 on --jf-surface-2, 4.44:1 on --jf-info-bg, 3.92:1 on --jf-primary-tint-strong and 3.25:1 on --jf-neutral-fill-strong",
+    note: "--jf-muted is 4.54:1 on the page background and 4.83:1 on white, but 4.41:1 on slate-100, 4.32:1 on --jf-surface-2, 4.43:1 on --jf-code-bg, 4.44:1 on --jf-info-bg, 3.92:1 on --jf-primary-tint-strong and 3.25:1 on --jf-neutral-fill-strong",
   },
   "text-[var(--jf-muted-on-tint)]": {
     token: "text-[var(--jf-muted-on-tint)]",
@@ -276,6 +278,7 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
       "bg-indigo-50",
       "bg-[var(--jf-neutral-fill)]",
       "bg-[var(--jf-neutral-fill-strong)]",
+      "bg-[var(--jf-code-bg)]",
     ],
     note: "text-slate-400 (#90a1b9) is 2.63:1 on white — too light for any surface here",
   },
@@ -327,9 +330,15 @@ const TEXT_TOKENS: Record<string, { token: string; bad: string[]; note: string }
  * them. `bg-white/10` on the MCP code block is one of those and is measured in
  * the browser instead. `--jf-primary-tint` (#5e6ad222) is the same case and is
  * owned by `tintedSurface.test.ts`, which judges the BASE text tokens on it.
+ *
+ * `bg-[var(--jf-code-bg)]` (#f4f5f7) is the inline-code and code-block backdrop
+ * `/settings` moved its ten `bg-slate-100` code chips onto (card t_1436a4aa). It
+ * is listed because a muted label can be INHERITED into a `<code>` chip — the
+ * shape rule (b2) judges — and `--jf-muted` is 4.43:1 there, UNDER AA, while
+ * `--jf-muted-on-tint` (5.48) and `--jf-text-secondary` (9.45) clear it.
  */
 const LIGHT_SURFACE_RE =
-  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg|bg-soft|neutral-fill-strong|neutral-fill|danger-bg|warning-bg|success-bg|info-bg|primary-tint-strong)\)\]|jf-card|jf-input)$/;
+  /^((?:[a-z-]+:)*)(bg-(?:white|slate-50|slate-100|slate-200|indigo-50)|bg-\[var\(--jf-(?:surface-2|surface|bg|bg-soft|neutral-fill-strong|neutral-fill|danger-bg|warning-bg|success-bg|info-bg|primary-tint-strong|code-bg)\)\]|jf-card|jf-input)$/;
 
 /**
  * Canonical surface name for the class that declares it.
@@ -1407,6 +1416,36 @@ test("the surface model sees the token surfaces /builder migrated onto", () => {
   );
   if (onInfoLegal.length !== 0) {
     problems.push(`the legal --jf-muted-on-tint label on --jf-info-bg (5.50:1) was reported: ${names(onInfoLegal)}`);
+  }
+
+  // (6) The INLINE-CODE backdrop (card t_1436a4aa): /settings' ten `bg-slate-100`
+  //     code chips are `bg-[var(--jf-code-bg)]` now, and --jf-muted measures
+  //     4.43:1 on it — UNDER AA. The shape is rule (b2)'s inherited one: a muted
+  //     label on a paragraph, and an inline `<code>` child that repaints the
+  //     backdrop under a fragment of it. The tint-safe token clears it (5.48:1).
+  const codeChip = (cls: string) =>
+    [
+      "export function P() {",
+      "  return (",
+      `    <p className="${cls}">`,
+      '      Deliver <code className="rounded bg-[var(--jf-code-bg)] px-1">sale.paid</code> events.',
+      "    </p>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+  const mutedInCode = findingsIn("fixture.tsx", codeChip("text-xs text-[var(--jf-muted)]"));
+  if (!mutedInCode.some((f) => f.includes("bg-[var(--jf-code-bg)]"))) {
+    problems.push(
+      `--jf-muted inherited into a bg-[var(--jf-code-bg)] chip (4.43:1) was not reported: ${names(mutedInCode)}`,
+    );
+  }
+  const tintSafeInCode = findingsIn("fixture.tsx", codeChip("text-xs text-[var(--jf-muted-on-tint)]"));
+  if (tintSafeInCode.length !== 0) {
+    problems.push(
+      `the legal --jf-muted-on-tint label over a bg-[var(--jf-code-bg)] chip (5.48:1) was reported: ` +
+        `${names(tintSafeInCode)}`,
+    );
   }
 
   assert.deepEqual(problems, [], problems.join("\n"));

@@ -67,12 +67,20 @@ An arbitrary length is the same defect when a scale step already names it: 44px 
 `--jf-space-11`, so `min-h-[44px]` is `min-h-jf-11` — the same pixels, via the token.
 A length NO step names (`w-[720px]`, a decorative blur) is fine and stays.
 
+A raw Tailwind palette colour — `bg-indigo-600`, `text-slate-500`, `bg-white/95` — is the
+same defect too, and since card `t_2fb8ae1b` the unit suite enforces it: rule 4
+(`scanPalette`) in `web/src/lib/designTokens.test.ts` reports every
+`<prefix>-<family>-<step>` for the seven colour utilities Tailwind spells that way, plus
+`bg-white` / `text-white` / `bg-black`. It does not report the token form
+`bg-[var(--jf-…)]` — that is the replacement — and it honours `design-tokens-exempt:`
+exactly as the hex rule does.
+
 ## What enforces this
 
 | where | what it catches |
 |---|---|
 | `scripts/design-guard.py` (the `design` preflight gate, with a per-run planted-control proof) | a raw hex, `text-[Npx]`, `transition-all`, a raw `duration-<n>ms`, a missing reduced-motion block |
-| `web/src/lib/designTokens.test.ts` (runs inside `test:unit`, so `npm run build` fails) | a raw colour, a `--jf-*` declared outside `globals.css`, an arbitrary `[Npx]` a scale step names, a colour token with no measured pair, a primitive missing from `/design`, an unmeasured ratio |
+| `web/src/lib/designTokens.test.ts` (runs inside `test:unit`, so `npm run build` fails) | a raw colour, a raw Tailwind palette colour utility (`bg-indigo-600`, `bg-white`), a `--jf-*` declared outside `globals.css`, an arbitrary `[Npx]` a scale step names, a colour token with no measured pair, a primitive missing from `/design`, an unmeasured ratio |
 | `/design` (`web/src/app/design/page.tsx`, `robots: noindex`) | the manifest — every token with its ratio, every primitive in every state |
 
 **Two exceptions, both narrow and both printed:**
@@ -88,50 +96,61 @@ A length NO step names (`w-[720px]`, a decorative blur) is fine and stays.
 Both lists are debt, never a parking space. A new deviation is fixed or justified on
 the line, in the same commit.
 
-## The half of rule 3 that nothing enforces yet
+## Rule 3's palette half — enforced since card `t_2fb8ae1b`, and the 793 that are left
 
-Rule 3 says a raw Tailwind colour is the same defect as a hex. **No gate catches that
-half.** Both gates scan for LITERALS — a `#rrggbb`, a `bg-[#fff]`, a `text-[<n>px]` — and
-`bg-indigo-600` is not a literal, so it passes both. That is not a theory: measured on
-this tree (127 shipped `.tsx`, `scripts/design-guard.py` PASS, `designTokens.test.ts`
-printing `raw colour: 0 finding(s)`):
+Rule 3 says a raw Tailwind colour is the same defect as a hex. Until card `t_2fb8ae1b`
+that was the one half **no gate caught**: both scanners looked for LITERALS — a
+`#rrggbb`, a `bg-[#fff]`, a `text-[<n>px]` — and `bg-indigo-600` is not a literal, so it
+passed both. The gap is now closed, and it had to close in this ORDER: a repo-wide rule
+seeded before the vocabulary had consumers would have red every branch in flight that
+touched a page, with a policy nothing could satisfy yet. So the six worst pages moved
+first — one card per page, each moving the page AND the source guards that read its
+palette class names in the same commit — and the rule landed on top of them.
+
+**What enforces it.** `scanPalette`, rule 4 of `web/src/lib/designTokens.test.ts`, i.e.
+inside `test:unit`, i.e. the `web` gate. It reports `<prefix>-<family>-<step>` for the
+seven colour utilities Tailwind spells that way (`bg-`, `text-`, `border-`, `ring-`,
+`divide-`, `fill-`, `stroke-`), with an optional `/<alpha>`, plus `bg-white` /
+`text-white` / `bg-black`. It does NOT report `bg-[var(--jf-…)]` — the replacement — and
+it honours `design-tokens-exempt:` exactly as the hex rule does. Both are control tests:
+one plants `bg-slate-50` beside `bg-[var(--jf-surface-2)]` and requires the finding for
+the first and none for the second; another plants a justified exemption and requires no
+finding at all.
+
+Measured on the tree the rule landed on (127 shipped `.tsx`; the suite prints the two
+allowlist totals on every run):
 
 | what | measured |
 |---|---|
 | raw hex in CODE (comments stripped, exemptions honoured) | **0** |
 | arbitrary colour utilities (`bg-[#…]`) | **0** |
-| `[<n>px]` that a scale step already names | **7** in 4 files — allowlisted in `ARBITRARY_PX_ALLOWLIST` |
-| raw Tailwind palette colour utilities | **1,261** in 58 files |
-| `bg-white` / `text-white` | **188** |
-| `--jf-*` colour utilities (the token form) | **1,957** |
+| `[<n>px]` that a scale step already names | **7** in 4 files — `ARBITRARY_PX_ALLOWLIST` |
+| raw Tailwind palette colour utilities | **793** in 47 files — `PALETTE_UTILITY_ALLOWLIST`, shrink-only |
+| of which the six migrated pages | **1** — `app/builder/page.tsx`, `bg-white/95` on the sticky header's translucent backdrop; the six files carried 601 of the 1,449 before the migration |
+| `--jf-*` colour utilities (the token form) | **2,223** in shipped `.tsx` — colour-prefixed `[var(--jf-…)]` occurrences, counted on the tree this rule landed on |
 
-The concentration is real and it is where you would guess: `app/settings/page.tsx` 195
-(palette + white/black), `app/form-settings/page.tsx` 121, `app/profile/page.tsx` 100,
-`app/sales/page.tsx` 89, `app/builder/page.tsx` 86, `app/login/page.tsx` 10 — **601 of the
-1,449, in six of the 58 files.** Every one of them is a colour decision a token already
-covers or should.
+The palette seed moved once, between the rule being written and it landing: card
+`t_cff48545` tokenised the last seven palette utilities in `components/FormModeControl.tsx`
+just before this rule merged, so that entry was re-measured 8 → 1 and the total 800 → 793
+on the landing tree. The seed is the count that tree carries — a higher one would leave
+slack in which a file could regress without the gate noticing, and a bumped one would hide
+exactly the drift the rule exists to catch.
 
-**Why this is not a find-and-replace, and must not be done as one.** The palette class
-NAMES are load-bearing for twelve source guards, which read them as their subject:
-`mutedText` (its surface table resolves an element's background by matching
-`bg-white` / `bg-slate-50` / `bg-slate-100`), `tintedSurface` (`bg-indigo-50`), `dangerText`
-(`bg-red-50`, `text-red-700`), `emeraldText` (`bg-emerald-50`, `text-emerald-700`),
-`ctaContrast` (`bg-white` / `text-white`), `statusBadgeArms` (`bg-amber-50`, `bg-blue-50`,
-`text-amber-700`), `indigo100Tint` (`bg-indigo-100` must keep a large-scale text step),
-`ghostButtonInk`, `actionFailureTone`, `toastTone`, `sidebarNav`, `tailwindScanScope`.
-Rewriting a page's palette classes without rewriting those models does not make the guards
-stricter or looser — it makes them stop SEEING the element, which is the silent-skip shape
-they were each written to refuse. So a migration lands as one card per family or per page,
-moving the page AND the guard's model in the same commit, with the measured pair for the
-replacement quoted in the PR.
+The migration moved the mass; the rule now holds the remainder. The concentration is
+`app/admin/page.tsx` 114, `app/products/page.tsx` 60, `components/WorkspaceTab.tsx` 55,
+`app/mcp/mcp-client.tsx` 46, `app/chat/page.tsx` 31, `app/forms/page.tsx` 31,
+`app/products/ProductEditor.tsx` 31, `app/media/page.tsx` 28 — 47 files in all. That is
+a seeded debt, not a licence: the allowlist is keyed by file with the COUNT it was seeded
+with, so a file may get better and never worse, and a file that reaches zero FAILS until
+its entry is deleted. The suite prints
+`design-tokens: raw palette: N finding(s) in M file(s), K allowlisted (seeded S)` on
+every run, so the shrink is visible without reading a diff.
 
-**What a family needs before it can be migrated.** The neutral ladder is already there
-(`--jf-surface` / `--jf-surface-2` / `--jf-bg-soft` / `--jf-border` / `--jf-border-strong`)
-and so are the four status families' `bg` + `text` + `marker` steps. Missing: a **border**
-step per status family (`red-200`, `amber-200`, `emerald-200`, `blue-200`, `indigo-200`),
-a **text** step for success (`emerald-700`, which is 5.36:1 on white and has no token), and
-a neutral **fill** step for `slate-200` / `slate-300` (step badges, skeletons). Each of those
-is a `globals.css` value plus a light and dark measured pair — the same shape as every token
-above, and the reason the migration is a token-layer change first and a class-list change
-second.
-
+**How to pay a file down.** Replace the class with the token that already means it —
+`bg-slate-100` → `bg-[var(--jf-code-bg)]`, `text-slate-500` → `text-[var(--jf-muted)]`,
+`bg-red-50` → `bg-[var(--jf-danger-bg)]` — and measure it against the surface it LANDS on
+(`--jf-muted` is 4.42:1 on the failure tint, which is why `--jf-muted-on-tint` exists).
+If the class is the SUBJECT of a source guard, that guard's model moves in the SAME
+commit: a page migrated off the names a guard matches does not trip the guard, it makes
+the guard stop SEEING the element — the silent-skip shape each of them refuses. The six
+page cards each did exactly that, and the guards they moved are named in their PRs.

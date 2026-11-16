@@ -124,11 +124,24 @@ async function toastState(page: Page) {
   })()`) as Promise<{ present: boolean; text: string; bg: string; tone: string }>;
 }
 
-/** The page-level banner pair (the `msg`/`err` banners above the tab content). */
+/**
+ * The page-level banner pair (the `msg`/`err` banners above the tab content).
+ *
+ * The classifier reads the TOKEN pair the page paints, not a palette spelling.
+ * `/settings` moved `bg-emerald-50 text-emerald-700` / `bg-red-50 text-red-700`
+ * onto the recorded tokens
+ * `bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]` /
+ * `bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)]` — the same pixels — and
+ * a classifier pinned to the old spelling then saw BOTH buckets empty and red-ed
+ * the gate on a correct page. `src/lib/toastTone.test.ts` already reads the token
+ * form; this is its rendered-page twin. Bucketing by the fill token (not by the
+ * ink, and not by a hard-coded hex) keeps the guard measuring what the page
+ * claims: a banner painted with the success fill is a success banner.
+ */
 async function banners(page: Page) {
   return page.evaluate(`(() => ({
-    green: [...document.querySelectorAll("p")].filter((p) => /bg-emerald-50/.test(p.className)).map((p) => p.textContent.trim()),
-    red:   [...document.querySelectorAll("p")].filter((p) => /bg-red-50/.test(p.className) && !p.closest('[data-testid="save-toast"]')).map((p) => p.textContent.trim()),
+    green: [...document.querySelectorAll("p")].filter((p) => /bg-\\[var\\(--jf-success-bg\\)\\]/.test(p.className)).map((p) => p.textContent.trim()),
+    red:   [...document.querySelectorAll("p")].filter((p) => /bg-\\[var\\(--jf-danger-bg\\)\\]/.test(p.className) && !p.closest('[data-testid="save-toast"]')).map((p) => p.textContent.trim()),
   }))()`) as Promise<{ green: string[]; red: string[] }>;
 }
 

@@ -150,43 +150,48 @@ export function LegalTab({ workspaceId, workspaceSlug }: { workspaceId: string; 
       {msg && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{msg}</p>}
       {err && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
 
-      {/* Business details shared by the prompt template */}
+      {/* Business details shared by the prompt template.
+          Every label is ASSOCIATED with its field (id + htmlFor): a sibling
+          `<label>` with no `for` names nothing, and axe reports `label`
+          (critical) on each input. Reproduced on the base tree while measuring
+          /settings' Legal tab for card t_1436a4aa, which requires a clean scan;
+          the fields themselves and their labels are unchanged. */}
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalBusinessName")}</label>
-          <input value={biz.business_name} onChange={(e) => setBizField("business_name", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-business-name">{t("set.legalBusinessName")}</label>
+          <input id="legal-business-name" value={biz.business_name} onChange={(e) => setBizField("business_name", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalRegNo")}</label>
-          <input value={biz.registration_no} onChange={(e) => setBizField("registration_no", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-reg-no">{t("set.legalRegNo")}</label>
+          <input id="legal-reg-no" value={biz.registration_no} onChange={(e) => setBizField("registration_no", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalContact")}</label>
-          <input value={biz.contact} onChange={(e) => setBizField("contact", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-contact">{t("set.legalContact")}</label>
+          <input id="legal-contact" value={biz.contact} onChange={(e) => setBizField("contact", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalAddress")}</label>
-          <input value={biz.address} onChange={(e) => setBizField("address", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-address">{t("set.legalAddress")}</label>
+          <input id="legal-address" value={biz.address} onChange={(e) => setBizField("address", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalWebsite")}</label>
-          <input value={biz.website} onChange={(e) => setBizField("website", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-website">{t("set.legalWebsite")}</label>
+          <input id="legal-website" value={biz.website} onChange={(e) => setBizField("website", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalEffectiveDate")}</label>
-          <input value={biz.effective_date} onChange={(e) => setBizField("effective_date", e.target.value)} className="jf-input mt-1" placeholder="2026-09-01" />
+          <label className="text-xs text-slate-500" htmlFor="legal-effective-date">{t("set.legalEffectiveDate")}</label>
+          <input id="legal-effective-date" value={biz.effective_date} onChange={(e) => setBizField("effective_date", e.target.value)} className="jf-input mt-1" placeholder="2026-09-01" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalDataCollected")}</label>
-          <input value={biz.data_collected} onChange={(e) => setBizField("data_collected", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-data-collected">{t("set.legalDataCollected")}</label>
+          <input id="legal-data-collected" value={biz.data_collected} onChange={(e) => setBizField("data_collected", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalPaymentTerms")}</label>
-          <input value={biz.payment_terms} onChange={(e) => setBizField("payment_terms", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-payment-terms">{t("set.legalPaymentTerms")}</label>
+          <input id="legal-payment-terms" value={biz.payment_terms} onChange={(e) => setBizField("payment_terms", e.target.value)} className="jf-input mt-1" />
         </div>
         <div>
-          <label className="text-xs text-slate-500">{t("set.legalRefundTerms")}</label>
-          <input value={biz.refund_terms} onChange={(e) => setBizField("refund_terms", e.target.value)} className="jf-input mt-1" />
+          <label className="text-xs text-slate-500" htmlFor="legal-refund-terms">{t("set.legalRefundTerms")}</label>
+          <input id="legal-refund-terms" value={biz.refund_terms} onChange={(e) => setBizField("refund_terms", e.target.value)} className="jf-input mt-1" />
         </div>
       </div>
 

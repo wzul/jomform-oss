@@ -266,10 +266,20 @@ test("every failure writer on /settings hands the toast the failure tone", () =>
   }
   // And the inline banner must branch the same way, because `setMsg("")` clears
   // it too — the banner is half of what the timer used to erase.
+  //
+  // THE TOKEN FORM (card t_1436a4aa). `/settings` painted this banner as
+  // `bg-emerald-50 text-emerald-700` / `bg-red-50 text-red-700` and now paints the
+  // recorded token pair — `--jf-success-bg` / `--jf-success-text` and
+  // `--jf-danger-bg` / `--jf-danger-text` (the same #ecfdf5 / #fef2f2 pixels,
+  // 5.09:1 and 5.96:1 on their own tint). A guard keyed on the palette spelling
+  // alone would stop seeing the banner the moment the page entered the token
+  // layer and read clean for a reason it did not decide, so it matches the token
+  // form the page paints now, and the in-file bite proof below pins that the
+  // palette banner it replaced does NOT satisfy this rule.
   assert.match(
     settings,
-    /msgOk \? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"/,
-    "the inline `msg` banner no longer branches its chrome on `msgOk` — a failure would read as a success there",
+    /msgOk \? "bg-\[var\(--jf-success-bg\)\] text-\[var\(--jf-success-text\)\]" : "bg-\[var\(--jf-danger-bg\)\] text-\[var\(--jf-danger-text\)\]"/,
+    "the inline `msg` banner no longer branches its token chrome on `msgOk` — a failure would read as a success there",
   );
   // The CHIP unverified save is a failure-class message and must use the failure tone.
   assert.match(
@@ -318,6 +328,15 @@ test("the guard would fail on the code it replaced (in-file bite proof)", () => 
     preFixCall,
     /showMsgOk : showMsgFail/,
     "the pre-fix tracking call was read as choosing a tone — the guard is not looking at the real shape",
+  );
+  // 3b. The banner's PRE-TOKEN spelling (t_1436a4aa): the palette pair `/settings`
+  //     painted before the migration must NOT satisfy the token-form rule, or a
+  //     revert to the raw palette would read as a clean banner.
+  const preTokenBanner = 'msgOk ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"';
+  assert.doesNotMatch(
+    preTokenBanner,
+    /bg-\[var\(--jf-success-bg\)\] text-\[var\(--jf-success-text\)\]" : "bg-\[var\(--jf-danger-bg\)\] text-\[var\(--jf-danger-text\)\]/,
+    "the pre-token palette banner was read as the token pair — the banner rule no longer decides the chrome",
   );
   // 4. The pre-fix TWO-LIVE-REGION shape (t_c4bff404): the positioner wrapper's
   //    explicit aria-live PLUS the toast's role="status". The count guard must see

@@ -487,8 +487,19 @@ function declaresTextColour(t: Tag): boolean {
  * leave the family without anyone deciding it was safe. It also has an EMPTY
  * bad set (8.36:1 on white), so it never flags a site on its own — the arm
  * below pins the entry rather than a verdict.
+ *
+ * `--jf-info` IS IN THE TABLE BECAUSE THE SKY STEP LEFT THE PAGE (card
+ * t_1436a4aa). `/settings`' Cloudflare docs link was the app's own `text-sky-700`
+ * on a `bg-slate-50` panel, and this page may not keep a raw palette utility —
+ * `--jf-info` (`#1d4ed8`) is the TOKEN for the informational-link role the guard
+ * names first in its header (`--jf-warning-bg` has `--jf-warning-text`, the
+ * danger tint has `--jf-danger-text`, and the informational accent had no text
+ * step of its own). Measured: 6.70:1 on the surface, 6.31:1 on `--jf-bg-soft`,
+ * 5.44:1 on `--jf-neutral-fill` — an EMPTY bad set, so it flags nothing by
+ * itself; entering the table is what makes the token form JUDGED rather than
+ * skipped, which is the whole point of this list.
  */
-const CSS_TEXT_TOKENS = ["jf-danger", "jf-danger-text", "jf-danger-text-strong"] as const;
+const CSS_TEXT_TOKENS = ["jf-danger", "jf-danger-text", "jf-danger-text-strong", "jf-info"] as const;
 
 /** One `--jf-*` text token, resolved from `globals.css` — never from a memory of its value. */
 function cssTextTokenRgb(name: string): RGB {
@@ -1258,6 +1269,47 @@ test("the token form of the red family is judged, not skipped", () => {
       `a hover that reaches for the MARKER token (3.30:1 on the danger tint) was not reported: ` +
         `${badHover.join(" | ") || "(no findings)"}`,
     );
+  }
+
+  // (E) THE INFORMATIONAL LINK'S TOKEN FORM (card t_1436a4aa). `/settings`'
+  //     Cloudflare docs link was the app's `text-sky-700` on a bg-slate-50 panel
+  //     and is `text-[var(--jf-info)]` now. The entry must exist (or the SKY half
+  //     of this family stops deciding a converted link), come out with an EMPTY
+  //     bad set (it clears every surface this guard compares), and the converted
+  //     site itself must not be reported.
+  const info = TEXT_TOKENS["text-[var(--jf-info)]"];
+  if (!info) {
+    problems.push(
+      "text-[var(--jf-info)] is not in TEXT_TOKENS — the informational-link token form is invisible to this rule",
+    );
+  } else {
+    if (!/#1d4ed8/.test(info.note) || !/6\.30:1 on --jf-bg/.test(info.note)) {
+      problems.push(`the --jf-info entry does not name the value it measures: ${info.note}`);
+    }
+    if (info.bad.length !== 0) {
+      problems.push(
+        `--jf-info came out forbidden on ${JSON.stringify(info.bad)} — it clears 4.5:1 on every surface ` +
+          `this guard compares, so a converted informational link would be refused for no measured reason`,
+      );
+    }
+  }
+  const infoLink = findingsIn(
+    "fixture.tsx",
+    [
+      "export function P() {",
+      "  return (",
+      '    <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">',
+      '      <p className="text-xs text-[var(--jf-muted-on-tint)]">',
+      '        <a className="text-[var(--jf-info)] underline" href="/docs/domains">Read the setup guide</a>',
+      "      </p>",
+      "    </div>",
+      "  );",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  if (infoLink.length !== 0) {
+    problems.push(`the converted informational link (6.31:1 on --jf-bg-soft) was reported: ${infoLink.join(" | ")}`);
   }
 
   assert.deepEqual(problems, [], problems.join("\n"));

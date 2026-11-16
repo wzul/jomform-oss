@@ -862,3 +862,54 @@ test("/form-settings keeps its five selected-state tints after the token migrati
   // …and the file is still clean under the rule itself.
   assert.deepEqual(tintedSurfaceFindings(rel, src), []);
 });
+
+// ─── the LAST page keeps its brand tints too (card t_1436a4aa) ───────────────
+//
+// `/settings` carried FIVE raw `bg-indigo-50` sites: the domains tab's `domainMsg`
+// banner, and the four outline TLS / cert buttons whose hover painted the tint
+// (`hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]`). All five are
+// `--jf-primary-tint` now, and TWO sites already painted the token before this
+// card (the selected payment-method chip and the storefront preview's dashed
+// box), so the page holds SEVEN tint sites in total.
+//
+// Counted per SITE for the reason above: the repo-wide floor counts files, so a
+// page that lost four of its five tints would still pass it — and the hover
+// spelling is exactly the one a class rename would drop silently, because the
+// resting class list of those four buttons stays clean.
+test("/settings keeps its seven brand tints after the token migration", () => {
+  const rel = "app/settings/page.tsx";
+  const src = readFileSync(`${SRC}${rel}`, "utf8");
+  const code = codeOnly(src);
+  const TINT =
+    /(?:^|[\s"'`])(?:(?:[a-z-]+:)*)(?:bg-indigo-50|bg-\[var\(--jf-primary-tint\)\])(?![^"'\s`])/g;
+  const sites = [...code.matchAll(TINT)].map((m) => m.index!);
+  assert.equal(
+    sites.length,
+    7,
+    `the page paints ${sites.length} brand tints, not 7 (5 migrated + 2 already on the token) — the ` +
+      `migration moved a surface this guard was written to see, or added one; re-anchor the count ` +
+      `deliberately rather than letting it drift`,
+  );
+
+  // Every tint sits in the same class list as an AA-safe ink: `--jf-primary-on-tint`
+  // (6.68:1 on the tint) or `--jf-text-secondary` (8.71:1). Walk back to the
+  // opening quote of the literal the class sits in, so the assertion is about the
+  // ELEMENT's class list and not about the file.
+  const offPair: string[] = [];
+  for (const idx of sites) {
+    const start = code.lastIndexOf('"', idx);
+    const end = code.indexOf('"', idx);
+    const list = start >= 0 && end > idx ? code.slice(start + 1, end) : "";
+    const safe =
+      list.includes("text-[var(--jf-primary-on-tint)]") || list.includes("text-[var(--jf-text-secondary)]");
+    if (!safe) offPair.push(list);
+  }
+  assert.deepEqual(
+    offPair,
+    [],
+    `these tinted class lists lost their AA-safe text pair: ${offPair.join(" | ")}`,
+  );
+
+  // …and the page is still clean under the rule itself.
+  assert.deepEqual(tintedSurfaceFindings(rel, src), []);
+});

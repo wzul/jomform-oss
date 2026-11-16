@@ -256,7 +256,7 @@ function StripEdgeArrow({
       onClick={onClick}
       aria-label={label}
       data-testid={testId}
-      className={`jf-tabstrip-arrow absolute inset-y-0 z-10 flex w-7 items-center justify-center border-b border-slate-200 bg-white text-[var(--jf-muted)] hover:text-slate-900 ${
+      className={`jf-tabstrip-arrow absolute inset-y-0 z-10 flex w-7 items-center justify-center border-b border-[var(--jf-border)] bg-[var(--jf-surface)] text-[var(--jf-muted)] hover:text-[var(--jf-text)] ${
         side === "start" ? "start-0" : "end-0"
       }`}
     >
@@ -1517,7 +1517,7 @@ export default function Settings() {
     return (
       <>
         {lines.map((l) => (
-          <p key={l.key} className="text-xs font-medium text-amber-800">
+          <p key={l.key} className="text-xs font-medium text-[var(--jf-warning-text)]">
             {l.key === "set.sfLegalLinkNotServed"
               ? t("set.sfLegalLinkNotServed", l.vars)
               : t("set.sfLegalLinkNoContent", l.vars)}
@@ -1858,7 +1858,7 @@ export default function Settings() {
         {/* Issue #163: read_only members get a read-only notice instead of the
             write tabs. */}
         {isReadOnly && (
-          <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+          <p className="mt-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] px-3 py-2 text-sm text-[var(--jf-muted)]">
             {t("mem.readOnlyNote")}
           </p>
         )}
@@ -1914,7 +1914,7 @@ export default function Settings() {
               ref={tabStripRef}
               role="tablist"
               data-edge={stripEdge}
-              className="jf-tabstrip flex gap-1 overflow-x-auto border-b border-slate-200"
+              className="jf-tabstrip flex gap-1 overflow-x-auto border-b border-[var(--jf-border)]"
               onKeyDown={tablistKeyDown}
             >
               {visibleTabs.map((id) => (
@@ -1929,8 +1929,8 @@ export default function Settings() {
                   role="tab"
                   className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 ${
                     activeTab === id
-                      ? "border-slate-900 text-slate-900"
-                      : "border-transparent text-[var(--jf-muted)] hover:text-slate-800"
+                      ? "border-[var(--jf-text)] text-[var(--jf-text)]"
+                      : "border-transparent text-[var(--jf-muted)] hover:text-[var(--jf-text)]"
                   }`}
                 >
                   <span className="sm:hidden">{t(`set.tab.${id}` as const)}</span>
@@ -1961,7 +1961,7 @@ export default function Settings() {
         {cfNotice && (
           <p
             className={`mt-4 rounded-lg px-3 py-2 text-sm ${
-              cfNoticeOk ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+              cfNoticeOk ? "bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]" : "bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)]"
             }`}
           >
             {cfNotice}
@@ -1970,13 +1970,13 @@ export default function Settings() {
         {msg && (
           <p
             className={`mt-4 rounded-lg px-3 py-2 text-sm ${
-              msgOk ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+              msgOk ? "bg-[var(--jf-success-bg)] text-[var(--jf-success-text)]" : "bg-[var(--jf-danger-bg)] text-[var(--jf-danger-text)]"
             }`}
           >
             {msg}
           </p>
         )}
-        {err && <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
+        {err && <p className="mt-4 rounded-lg bg-[var(--jf-danger-bg)] px-3 py-2 text-sm text-[var(--jf-danger-text)]">{err}</p>}
 
         {/* Card t_69d2dd19 (requirement 6 of t_1a17d22d): a workspace whose rows
             still price by the legacy percentage must be TOLD, on whatever tab it
@@ -1985,7 +1985,7 @@ export default function Settings() {
         {feeLegacyRows.length > 0 && activeTab !== "fees" && (
           <p
             data-testid="fees-legacy-notice"
-            className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+            className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--jf-warning-border-strong)] bg-[var(--jf-warning-bg)] px-3 py-2 text-sm text-[var(--jf-warning-text)]"
           >
             <span>{t("set.feesLegacyNotice")}</span>
             <button type="button" onClick={() => setTab("fees")} className="font-semibold underline">
@@ -2252,7 +2252,7 @@ export default function Settings() {
                           className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-[var(--jf-border)] bg-[var(--jf-surface)] peer-checked:border-[var(--jf-primary)] peer-checked:bg-[var(--jf-primary)] peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--jf-primary)]"
                         >
                           {checked && (
-                            <span className="text-jf-4xs font-bold leading-none text-white">✓</span>
+                            <span className="text-jf-4xs font-bold leading-none text-[var(--jf-on-color)]">✓</span>
                           )}
                         </span>
                         <span>{m.label}</span>
@@ -2307,7 +2307,7 @@ export default function Settings() {
               <p className="mt-2 max-w-xl text-sm text-[var(--jf-muted)]">
                 {t("set.domainsHelp")}
               </p>
-              {domainMsg && <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-700">{domainMsg}</p>}
+              {domainMsg && <p className="mt-3 rounded-lg bg-[var(--jf-primary-tint)] px-3 py-2 text-sm text-[var(--jf-primary-on-tint)]">{domainMsg}</p>}
               <form onSubmit={setDomainClaim} className="mt-4 flex flex-wrap gap-2">
                 {/* `min-w-56` (224px) is a hard `min-width`, and this input is a
                     `flex-1` child (`flex: 1 1 0%`), whose `min-width` is a floor
@@ -2331,7 +2331,7 @@ export default function Settings() {
               </form>
               {/* Issue #322: when Cloudflare is linked, offer one-click auto-CNAME. */}
               {cfLinked && (
-                <p className="mt-2 text-xs text-emerald-700">{t("set.autoCnameHint")}</p>
+                <p className="mt-2 text-xs text-[var(--jf-success-text)]">{t("set.autoCnameHint")}</p>
               )}
               <ul className="mt-4 space-y-2">
                 {domains.map((d: { id: string; domain: string; verified: boolean; auto_cname?: string; tls_mode?: string; tls_status?: string; tls_error?: string; tls_email?: string }) => (
@@ -2340,37 +2340,37 @@ export default function Settings() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{d.domain}</p>
                         {d.verified ? (
-                          <p className="text-jf-2xs text-emerald-700">{t("set.verified")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-success-text)]">{t("set.verified")}</p>
                         ) : (
-                          <p className="flex items-center gap-1.5 text-jf-2xs text-amber-600">
+                          <p className="flex items-center gap-1.5 text-jf-2xs text-[var(--jf-warning-text)]">
                             {polling[d.id] && (
-                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--jf-warning)] border-t-transparent" />
                             )}
                             {polling[d.id] ? t("set.checkingDns") : t("set.pendingDns", { target: cnameTargetHost })}
                           </p>
                         )}
                         {/* Issue #322: per-domain auto-CNAME status. */}
                         {d.auto_cname === "created" && (
-                          <p className="text-jf-2xs text-emerald-700">{t("set.autoCnameStatusCreated")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-success-text)]">{t("set.autoCnameStatusCreated")}</p>
                         )}
                         {d.auto_cname === "failed" && (
-                          <p className="text-jf-2xs text-red-600">{t("set.autoCnameStatusFailed")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-danger-text)]">{t("set.autoCnameStatusFailed")}</p>
                         )}
                         {/* Issue #397: per-domain TLS status. */}
                         {d.verified && d.tls_status === "active" && (
-                          <p className="text-jf-2xs text-emerald-700">{t("set.tlsStatusActive")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-success-text)]">{t("set.tlsStatusActive")}</p>
                         )}
                         {d.verified && d.tls_status === "pending" && (
-                          <p className="text-jf-2xs text-amber-600">{t("set.tlsStatusPending")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-warning-text)]">{t("set.tlsStatusPending")}</p>
                         )}
                         {d.verified && d.tls_status === "error" && (
-                          <p className="text-jf-2xs text-red-600">
+                          <p className="text-jf-2xs text-[var(--jf-danger-text)]">
                             {t("set.tlsStatusError")}
                             {d.tls_error ? ` — ${d.tls_error}` : ""}
                           </p>
                         )}
                         {d.verified && d.tls_status === "custom" && (
-                          <p className="text-jf-2xs text-indigo-600">{t("set.tlsStatusCustom")}</p>
+                          <p className="text-jf-2xs text-[var(--jf-primary-strong)]">{t("set.tlsStatusCustom")}</p>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
@@ -2378,7 +2378,7 @@ export default function Settings() {
                           <button
                             onClick={() => startPolling(d)}
                             disabled={!!polling[d.id]}
-                            className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-on-color)] transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {polling[d.id] ? t("set.checkingDns") : t("set.verifyCta")}
                           </button>
@@ -2388,7 +2388,7 @@ export default function Settings() {
                           <button
                             onClick={() => autoCreateCname(d)}
                             disabled={!!autoCnameBusy[d.id]}
-                            className="rounded-md border border-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md border border-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-primary-strong)] transition-colors hover:bg-[var(--jf-primary-tint)] hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {autoCnameBusy[d.id] ? t("set.autoCnameBusy") : t("set.autoCnameCta")}
                           </button>
@@ -2403,25 +2403,25 @@ export default function Settings() {
                             setDomains((prev) => prev.filter((x) => x.id !== d.id));
                             await refreshDomains();
                           }}
-                          className="text-xs text-slate-500 hover:text-red-700"
+                          className="text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]"
                         >{t("set.remove")}</button>
                       </div>
                     </div>
                     {!d.verified && (
-                      <div className="mt-2 rounded-md bg-slate-50 px-3 py-2">
-                        <p className="text-jf-2xs font-medium text-slate-500">{t("set.cnameRow")}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-slate-700">
-                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">CNAME</span>
-                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{d.domain}</span>
+                      <div className="mt-2 rounded-md bg-[var(--jf-bg-soft)] px-3 py-2">
+                        <p className="text-jf-2xs font-medium text-[var(--jf-muted)]">{t("set.cnameRow")}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-xs text-[var(--jf-text-secondary)]">
+                          <span className="rounded bg-[var(--jf-surface)] px-1.5 py-0.5 ring-1 ring-[var(--jf-border)]">CNAME</span>
+                          <span className="rounded bg-[var(--jf-surface)] px-1.5 py-0.5 ring-1 ring-[var(--jf-border)]">{d.domain}</span>
                           <span className="text-[var(--jf-muted-on-tint)]">→</span>
-                          <span className="rounded bg-white px-1.5 py-0.5 ring-1 ring-slate-200">{cnameTargetHost}</span>
+                          <span className="rounded bg-[var(--jf-surface)] px-1.5 py-0.5 ring-1 ring-[var(--jf-border)]">{cnameTargetHost}</span>
                           <button
                             type="button"
                             onClick={() => {
                               navigator.clipboard?.writeText(`CNAME ${d.domain} → ${cnameTargetHost}`);
                               setDomainMsg(t("set.copy"));
                             }}
-                            className="ml-1 text-jf-2xs text-[var(--jf-primary)] hover:underline"
+                            className="ml-1 text-jf-2xs text-[var(--jf-primary-strong)] hover:underline"
                           >
                             {t("set.copy")}
                           </button>
@@ -2437,7 +2437,7 @@ export default function Settings() {
                           href={`https://${d.domain}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-xs font-semibold text-emerald-700 hover:underline"
+                          className="text-xs font-semibold text-[var(--jf-success-text)] hover:underline"
                         >
                           {t("set.liveLink", { domain: d.domain })}
                         </a>
@@ -2445,17 +2445,17 @@ export default function Settings() {
                     )}
                     {/* Issue #397: per-domain TLS mode selector + bring-your-own-cert. */}
                     {d.verified && (
-                      <div className="mt-3 rounded-md bg-slate-50 px-3 py-2">
+                      <div className="mt-3 rounded-md bg-[var(--jf-bg-soft)] px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-jf-2xs font-medium text-slate-500">{t("set.tlsModeLabel")}</span>
+                          <span className="text-jf-2xs font-medium text-[var(--jf-muted)]">{t("set.tlsModeLabel")}</span>
                           <button
                             type="button"
                             onClick={() => setDomainTlsMode(d, "auto")}
                             disabled={!!tlsBusy[d.id] || d.tls_mode === "auto"}
                             className={`rounded-md px-2.5 py-1 text-jf-2xs font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "auto"
-                                ? "bg-[var(--jf-primary)] text-white"
-                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
+                                ? "bg-[var(--jf-primary)] text-[var(--jf-on-color)]"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary-strong)] hover:bg-[var(--jf-primary-tint)] hover:text-[var(--jf-primary-on-tint)]"
                             }`}
                           >
                             {t("set.tlsModeAutoLabel")}
@@ -2466,8 +2466,8 @@ export default function Settings() {
                             disabled={!!tlsBusy[d.id] || d.tls_mode === "custom"}
                             className={`rounded-md px-2.5 py-1 text-jf-2xs font-semibold transition-colors disabled:cursor-not-allowed ${
                               d.tls_mode === "custom"
-                                ? "bg-[var(--jf-primary)] text-white"
-                                : "border border-[var(--jf-primary)] text-[var(--jf-primary)] hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)]"
+                                ? "bg-[var(--jf-primary)] text-[var(--jf-on-color)]"
+                                : "border border-[var(--jf-primary)] text-[var(--jf-primary-strong)] hover:bg-[var(--jf-primary-tint)] hover:text-[var(--jf-primary-on-tint)]"
                             }`}
                           >
                             {t("set.tlsModeCustomLabel")}
@@ -2476,7 +2476,7 @@ export default function Settings() {
                             <button
                               type="button"
                               onClick={() => setCertOpen((prev) => ({ ...prev, [d.id]: !prev[d.id] }))}
-                              className="text-jf-2xs font-semibold text-[var(--jf-primary)] hover:underline"
+                              className="text-jf-2xs font-semibold text-[var(--jf-primary-strong)] hover:underline"
                             >
                               {certOpen[d.id] ? t("set.tlsCertClose") : t("set.tlsCertUpload")}
                             </button>
@@ -2484,7 +2484,7 @@ export default function Settings() {
                         </div>
                         {/* Issue #398: per-domain ACME contact email (defaults to the account email). */}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <label className="text-jf-2xs font-medium text-slate-500">{t("set.tlsEmailLabel")}</label>
+                          <label className="text-jf-2xs font-medium text-[var(--jf-muted)]">{t("set.tlsEmailLabel")}</label>
                           <input
                             value={tlsEmailInput[d.id] ?? d.tls_email ?? ""}
                             onChange={(e) => setTlsEmailInput((prev) => ({ ...prev, [d.id]: e.target.value }))}
@@ -2495,7 +2495,7 @@ export default function Settings() {
                             type="button"
                             onClick={() => setDomainTlsEmail(d)}
                             disabled={!!tlsBusy[d.id]}
-                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-semibold text-[var(--jf-primary)] transition-colors hover:bg-indigo-50 hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md border border-[var(--jf-primary)] px-2.5 py-1 text-jf-2xs font-semibold text-[var(--jf-primary-strong)] transition-colors hover:bg-[var(--jf-primary-tint)] hover:text-[var(--jf-primary-on-tint)] disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {tlsBusy[d.id] ? t("set.tlsEmailSaving") : t("set.tlsEmailSave")}
                           </button>
@@ -2524,7 +2524,7 @@ export default function Settings() {
                               type="button"
                               onClick={() => uploadCustomCert(d)}
                               disabled={!!tlsBusy[d.id]}
-                              className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="rounded-md bg-[var(--jf-primary)] px-3 py-1.5 text-xs font-semibold text-[var(--jf-on-color)] transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {tlsBusy[d.id] ? t("set.tlsCertSaving") : t("set.tlsCertSave")}
                             </button>
@@ -2542,7 +2542,7 @@ export default function Settings() {
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold">{t("set.cfTitle")}</h2>
                 {cfLinked && (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <span className="rounded-full border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] px-3 py-1 text-xs font-semibold text-[var(--jf-success-text)]">
                     {t("set.cfConnected")}
                   </span>
                 )}
@@ -2578,7 +2578,7 @@ export default function Settings() {
                       await fetch(`/api/cf/disconnect${workspaceQuery()}`, { method: "POST" });
                       setCfLinked(false);
                     }}
-                    className="jf-btn-ghost text-slate-600"
+                    className="jf-btn-ghost text-[var(--jf-text-secondary)]"
                   >
                     {t("set.cfDisconnect")}
                   </button>
@@ -2586,28 +2586,28 @@ export default function Settings() {
                 {cfStatusLoaded && !cfLinked && (
                   <button
                     onClick={() => { setCfManualOpen(!cfManualOpen); setCfManualErr(""); }}
-                    className="jf-btn-ghost text-slate-600"
+                    className="jf-btn-ghost text-[var(--jf-text-secondary)]"
                   >
                     {t("set.cfManualToggle")}
                   </button>
                 )}
               </div>
               {!cfLinked && cfManualOpen && (
-                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs text-slate-500">
+                <div className="mt-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">
+                  <p className="text-xs text-[var(--jf-muted)]">
                     {t("set.cfManualHelp")}{" "}
                     <a
                       href="https://dash.cloudflare.com/profile/api-tokens"
                       target="_blank"
                       rel="noreferrer"
-                      className="text-sky-700 underline"
+                      className="text-[var(--jf-info)] underline"
                     >
                       {t("set.cfApiTokensLink")}
                     </a>
                   </p>
                   <div className="mt-3 flex gap-2">
                     {(["apitoken", "globalkey"] as const).map((k) => (
-                      <label key={k} className="flex items-center gap-1 text-sm text-slate-700">
+                      <label key={k} className="flex items-center gap-1 text-sm text-[var(--jf-text-secondary)]">
                         <input
                           type="radio"
                           name="cfKind"
@@ -2642,7 +2642,7 @@ export default function Settings() {
                     />
                   </div>
                   {cfManualErr && (
-                    <p className="mt-2 text-xs text-red-600">{t("set.cfManualErr")}{cfManualErr}</p>
+                    <p className="mt-2 text-xs text-[var(--jf-danger-text)]">{t("set.cfManualErr")}{cfManualErr}</p>
                   )}
                   <button
                     disabled={cfManualBusy}
@@ -2695,7 +2695,7 @@ export default function Settings() {
           >
             <h2 className="text-lg font-semibold">{t("set.trackingTitle")}</h2>
             <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
-              {t("set.trackingHelp")} <code className="rounded bg-slate-100 px-1">&lt;script src=&quot;https://…&quot;&gt;</code>, <code className="rounded bg-slate-100 px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
+              {t("set.trackingHelp")} <code className="rounded bg-[var(--jf-code-bg)] px-1">&lt;script src=&quot;https://…&quot;&gt;</code>, <code className="rounded bg-[var(--jf-code-bg)] px-1">&lt;meta&gt;</code>, comments. Event handlers & cookie writes stripped.
             </p>
             <textarea value={trackingHead} onChange={(e) => setTrackingHead(e.target.value)} rows={4}
               className="jf-input mt-3 max-w-xl font-mono text-xs"
@@ -2728,11 +2728,11 @@ export default function Settings() {
             </p>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-xs text-slate-500">{t("set.companyTin")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.companyTin")}</label>
                 <input value={tin} onChange={(e) => setTin(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. C1234567890" />
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.msicCode")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.msicCode")}</label>
                 <input value={msic} onChange={(e) => setMsic(e.target.value)} className="jf-input mt-1 max-w-xl" placeholder="e.g. 62010" />
               </div>
             </div>
@@ -2764,7 +2764,7 @@ export default function Settings() {
               <h2 className="text-lg font-semibold">{t("set.feesTitle")}</h2>
               <span
                 data-testid="fee-model-pill"
-                className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700"
+                className="rounded-full border border-[var(--jf-success-border)] bg-[var(--jf-success-bg)] px-2.5 py-0.5 text-xs font-semibold text-[var(--jf-success-text)]"
               >
                 {t("set.feesApplies")}
               </span>
@@ -2778,7 +2778,7 @@ export default function Settings() {
                   <div
                     key={row.method}
                     data-testid={`fee-rate-${row.method}`}
-                    className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    className="flex flex-col gap-2 rounded-lg border border-[var(--jf-border)] p-3 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <label className="flex items-start gap-2">
                       <input
@@ -2796,7 +2796,7 @@ export default function Settings() {
                         className="mt-1"
                       />
                       <span>
-                        <span className="block text-sm font-medium text-slate-800">{name}</span>
+                        <span className="block text-sm font-medium text-[var(--jf-text)]">{name}</span>
                         <span className="block text-xs text-[var(--jf-muted)]">{feeMethodDesc[row.method]}</span>
                       </span>
                     </label>
@@ -2825,7 +2825,7 @@ export default function Settings() {
                 SETTINGS consequence and the RECEIPT line separately: the receipt
                 carries the amount and never the method (Wan's rule). */}
             <div
-              className="mt-4 max-w-2xl rounded-lg border border-dashed border-slate-300 bg-[var(--jf-primary-tint)] px-3 py-2 text-xs text-slate-700"
+              className="mt-4 max-w-2xl rounded-lg border border-dashed border-[var(--jf-border-strong)] bg-[var(--jf-primary-tint)] px-3 py-2 text-xs text-[var(--jf-text-secondary)]"
               data-testid="fee-example"
             >
               <p>
@@ -2839,7 +2839,7 @@ export default function Settings() {
                   ? t("set.feesPreviewLines", { item: formatPrice(10000, currency), fee: formatPrice(feePreviewSen, currency) })
                   : t("set.feesPreviewNoFee", { item: formatPrice(10000, currency) })}
               </p>
-              <p className="mt-1.5 border-t border-dashed border-slate-300 pt-1.5">
+              <p className="mt-1.5 border-t border-dashed border-[var(--jf-border-strong)] pt-1.5">
                 {t("set.feesReceiptLine", {
                   line:
                     feePreviewSen > 0
@@ -2862,17 +2862,17 @@ export default function Settings() {
                 the one Save below — a stray click cannot re-price a buyer. */}
             {feeLegacyRows.length > 0 && (
               <div
-                className="mt-5 max-w-2xl rounded-lg border border-amber-300 bg-amber-50 p-3"
+                className="mt-5 max-w-2xl rounded-lg border border-[var(--jf-warning-border-strong)] bg-[var(--jf-warning-bg)] p-3"
                 data-testid="fees-legacy"
               >
-                <p className="text-jf-2xs font-bold uppercase tracking-wide text-amber-700">{t("set.feesLegacyTitle")}</p>
+                <p className="text-jf-2xs font-bold uppercase tracking-wide text-[var(--jf-warning-text)]">{t("set.feesLegacyTitle")}</p>
                 {feeLegacyRows.map((row) => {
                   const name = FEE_METHOD_NAMES[row.method] || row.method;
                   return (
                     <div
                       key={row.method}
                       data-testid={`fee-legacy-${row.method}`}
-                      className="mt-2 border-t border-amber-200 pt-2 text-xs text-amber-900"
+                      className="mt-2 border-t border-[var(--jf-warning-border)] pt-2 text-xs text-[var(--jf-warning-text)]"
                     >
                       <p>
                         {t("set.feesLegacyBody", {
@@ -2881,7 +2881,7 @@ export default function Settings() {
                         })}
                       </p>
                       <div className="mt-2 flex flex-wrap items-end gap-2">
-                        <label className="text-jf-2xs text-amber-800">
+                        <label className="text-jf-2xs text-[var(--jf-warning-text)]">
                           {t("set.feesFixed")}
                           <input
                             type="number"
@@ -2900,7 +2900,7 @@ export default function Settings() {
                             className="jf-input mt-0.5 block w-24"
                           />
                         </label>
-                        <label className="text-jf-2xs text-amber-800">
+                        <label className="text-jf-2xs text-[var(--jf-warning-text)]">
                           {t("set.feesPercent")}
                           <input
                             type="number"
@@ -2926,7 +2926,7 @@ export default function Settings() {
                             className="jf-input mt-0.5 block w-24"
                           />
                         </label>
-                        <label className="text-jf-2xs text-amber-800">
+                        <label className="text-jf-2xs text-[var(--jf-warning-text)]">
                           {t("set.feesLegacyAmount", { cur: currencyLabel(currency) })}
                           <input
                             type="text"
@@ -2953,7 +2953,7 @@ export default function Settings() {
               </div>
             )}
 
-            <label className="mt-4 flex max-w-2xl items-start gap-2 text-sm text-slate-800">
+            <label className="mt-4 flex max-w-2xl items-start gap-2 text-sm text-[var(--jf-text)]">
               <input
                 type="checkbox"
                 data-testid="fee-ack"
@@ -3035,9 +3035,9 @@ export default function Settings() {
           >
               <h2 className="text-lg font-semibold">{t("set.webhooksTitle")}</h2>
               <p className="mt-1 max-w-xl text-sm text-[var(--jf-muted-on-tint)]">
-                {t("set.eventsLabel")} <code className="rounded bg-slate-100 px-1">sale.paid</code>,{" "}
-                <code className="rounded bg-slate-100 px-1">sale.failed</code>,{" "}
-                <code className="rounded bg-slate-100 px-1">subscription.charged</code>. {t("set.hmacSigned")}
+                {t("set.eventsLabel")} <code className="rounded bg-[var(--jf-code-bg)] px-1">sale.paid</code>,{" "}
+                <code className="rounded bg-[var(--jf-code-bg)] px-1">sale.failed</code>,{" "}
+                <code className="rounded bg-[var(--jf-code-bg)] px-1">subscription.charged</code>. {t("set.hmacSigned")}
               </p>
               <form onSubmit={addWebhook} className="mt-3">
                 <div className="flex flex-wrap gap-2">
@@ -3056,10 +3056,10 @@ export default function Settings() {
                 </div>
                 {/* Issue #128: event selection checkboxes (default all). */}
                 <div className="mt-2">
-                  <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                  <p className="text-xs text-[var(--jf-muted)]">{t("webhook.eventsTitle")}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-3">
                     {WEBHOOK_EVENTS.map((ev) => (
-                      <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                      <label key={ev} className="flex items-center gap-1 text-sm text-[var(--jf-text-secondary)]">
                         <input
                           type="checkbox"
                           checked={whEvents.includes(ev)}
@@ -3098,9 +3098,9 @@ export default function Settings() {
                             <span className="flex items-center gap-1.5 text-jf-2xs font-medium"
                               title={t("wh.lastAttempt") + ": " + formatDateTime(last.created_at || "", user?.timezone)}>
                               <span className={`inline-block h-2 w-2 rounded-full ${
-                                status === "success" ? "bg-emerald-500"
-                                : status === "pending" ? "bg-amber-400"
-                                : "bg-red-500"
+                                status === "success" ? "bg-[var(--jf-success)]"
+                                : status === "pending" ? "bg-[var(--jf-warning)]"
+                                : "bg-[var(--jf-danger)]"
                               }`} />
                               {status === "success" && t("wh.success")}
                               {status === "pending" && t("wh.pending")}
@@ -3109,25 +3109,25 @@ export default function Settings() {
                             </span>
                           )}
                           <button onClick={() => openEdit(wh)}
-                            className="shrink-0 text-xs text-slate-500 hover:text-slate-800">{t("set.webhookEdit")}</button>
+                            className="shrink-0 text-xs text-[var(--jf-muted)] hover:text-[var(--jf-text)]">{t("set.webhookEdit")}</button>
                           <button onClick={() => {
                             const next = open ? null : wh.id;
                             setOpenWh(next);
                             if (next) fetchDeliveries(wh.id);
-                          }} className="shrink-0 text-xs text-slate-500 hover:text-slate-800">
+                          }} className="shrink-0 text-xs text-[var(--jf-muted)] hover:text-[var(--jf-text)]">
                             {open ? t("wh.hideHistory") : t("wh.showHistory")}
                           </button>
                           {/* Card t_818349ab: `load()` here re-applied the
                               pre-delete bundle, so the removed hook survived
                               until a page reload. */}
                           <button onClick={async () => { await fetch(`/api/rest/webhooks/${wh.id}${workspaceQuery()}`, { method: "DELETE" }); reload(); }}
-                            className="shrink-0 text-xs text-slate-500 hover:text-red-700">✕</button>
+                            className="shrink-0 text-xs text-[var(--jf-muted)] hover:text-[var(--jf-danger-text)]">✕</button>
                         </div>
                       </div>
                       {/* Issue #130: expandable delivery history for this webhook. */}
                       {open && (
                         <div className="border-t border-[var(--jf-border)] px-4 py-3">
-                          <h4 className="mb-2 text-xs font-semibold text-slate-700">{t("wh.history")}</h4>
+                          <h3 className="mb-2 text-xs font-semibold text-[var(--jf-text-secondary)]">{t("wh.history")}</h3>
                           {(!deliv || deliv.length === 0) ? (
                             <p className="text-xs text-[var(--jf-muted)]">{t("wh.noDeliveries")}</p>
                           ) : (
@@ -3145,21 +3145,21 @@ export default function Settings() {
                                 </thead>
                                 <tbody>
                                   {deliv.map((d) => (
-                                    <tr key={d.id} className={`border-t border-[var(--jf-border)] ${!d.success ? "bg-red-50/60" : ""}`}>
-                                      <td className="py-1.5 pr-3 text-slate-500 whitespace-nowrap">
+                                    <tr key={d.id} className={`border-t border-[var(--jf-border)] ${!d.success ? "bg-[var(--jf-danger-bg)]" : ""}`}>
+                                      <td className="py-1.5 pr-3 text-[var(--jf-muted-on-tint)] whitespace-nowrap">
                                         {d.created_at ? formatDateTime(d.created_at, user?.timezone) : "—"}
                                       </td>
-                                      <td className="py-1.5 pr-3 font-mono text-slate-700">{d.event}</td>
-                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-emerald-700" : "text-red-700"}`}>
+                                      <td className="py-1.5 pr-3 font-mono text-[var(--jf-text-secondary)]">{d.event}</td>
+                                      <td className={`py-1.5 pr-3 font-medium ${d.success ? "text-[var(--jf-success-text)]" : "text-[var(--jf-danger-text)]"}`}>
                                         {d.success ? t("wh.success") : t("wh.failed")}
                                       </td>
-                                      <td className="py-1.5 pr-3 font-mono text-slate-500">{d.status_code ?? "—"}</td>
-                                      <td className="py-1.5 pr-3 font-mono text-red-700">{d.error || "—"}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-[var(--jf-muted-on-tint)]">{d.status_code ?? "—"}</td>
+                                      <td className="py-1.5 pr-3 font-mono text-[var(--jf-danger-text)]">{d.error || "—"}</td>
                                       {/* Issue #197: manual retry of a failed delivery (or dead-lettered retry). */}
                                       <td className="py-1.5">
                                         {!d.success && (
                                           <button onClick={() => retryDelivery(wh.id, d)}
-                                            className="shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-800">
+                                            className="shrink-0 text-xs font-medium text-[var(--jf-primary-strong)] hover:text-[var(--jf-primary-on-tint)]">
                                             {t("wh.retry")}
                                           </button>
                                         )}
@@ -3179,8 +3179,8 @@ export default function Settings() {
               </ul>
               {/* Issue #128: inline edit drawer for an existing webhook. */}
               {editId !== null && (
-                <form onSubmit={saveWebhook} className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-sm font-semibold text-slate-700">{t("set.webhookEditTitle")}</h3>
+                <form onSubmit={saveWebhook} data-testid="webhook-edit-drawer" className="mt-4 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">
+                  <h3 className="text-sm font-semibold text-[var(--jf-text-secondary)]">{t("set.webhookEditTitle")}</h3>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {/* The third instance of the `min-w-56`-on-a-`flex-1`-child
                         defect (MembersTab.tsx:158). It is worse here: the drawer
@@ -3194,10 +3194,10 @@ export default function Settings() {
                       placeholder={t("set.secretKeep")} className="jf-input w-48" />
                   </div>
                   <div className="mt-2">
-                    <p className="text-xs text-slate-500">{t("webhook.eventsTitle")}</p>
+                    <p className="text-xs text-[var(--jf-muted)]">{t("webhook.eventsTitle")}</p>
                     <div className="mt-1 flex flex-wrap items-center gap-3">
                       {WEBHOOK_EVENTS.map((ev) => (
-                        <label key={ev} className="flex items-center gap-1 text-sm text-slate-700">
+                        <label key={ev} className="flex items-center gap-1 text-sm text-[var(--jf-text-secondary)]">
                           <input
                             type="checkbox"
                             checked={editEvents.includes(ev)}
@@ -3218,7 +3218,7 @@ export default function Settings() {
                   </div>
                   <div className="mt-3 flex gap-2">
                     <button className="jf-btn-primary">{t("set.whSave")}</button>
-                    <button type="button" onClick={closeEdit} className="jf-btn-ghost text-slate-600">{t("set.whCancel")}</button>
+                    <button type="button" onClick={closeEdit} className="jf-btn-ghost text-[var(--jf-text-secondary)]">{t("set.whCancel")}</button>
                   </div>
                 </form>
               )}
@@ -3244,7 +3244,7 @@ export default function Settings() {
             </p>
             <div className="mt-4 space-y-3">
               <div>
-                <label className="text-xs text-slate-500">
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="set-emel-subject">
                   {t("set.emelSubject")}{" "}
                   {/* The per-field rule is invisible until the merchant is told the
                       subject and body are judged separately (AGENTS.md
@@ -3254,7 +3254,7 @@ export default function Settings() {
                     href="/docs/customize#language"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                    className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                     title={t("set.emelLanguageRule")}
                     aria-label={t("set.emelLanguageRule")}
                   >
@@ -3262,6 +3262,7 @@ export default function Settings() {
                   </a>
                 </label>
                 <input
+                  id="set-emel-subject"
                   value={emelSubject}
                   onChange={(e) => setEmelSubject(e.target.value)}
                   className="jf-input mt-1 max-w-xl"
@@ -3269,13 +3270,13 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">
-                  {t("set.emelBody")} <span className="text-[var(--jf-muted-on-tint)]">{t("set.emelPlaceholders")} <code className="rounded bg-slate-100 px-1">{"{{ref_code}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{amount}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{items}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{form_url}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-slate-100 px-1">{"{{date}}"}</code></span>{" "}
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="set-emel-body">
+                  {t("set.emelBody")} <span className="text-[var(--jf-muted-on-tint)]">{t("set.emelPlaceholders")} <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{ref_code}}"}</code> <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{amount}}"}</code> <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{items}}"}</code> <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{form_url}}"}</code> <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{buyer_name}}"}</code> <code className="rounded bg-[var(--jf-code-bg)] px-1">{"{{date}}"}</code></span>{" "}
                   <a
                     href="/docs/customize#language"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[var(--jf-muted)] underline hover:text-slate-600"
+                    className="text-[var(--jf-muted)] underline hover:text-[var(--jf-text-secondary)]"
                     title={t("set.emelLanguageRule")}
                     aria-label={t("set.emelLanguageRule")}
                   >
@@ -3283,6 +3284,7 @@ export default function Settings() {
                   </a>
                 </label>
                 <textarea
+                  id="set-emel-body"
                   value={emelBody}
                   onChange={(e) => setEmelBody(e.target.value)}
                   rows={8}
@@ -3290,22 +3292,22 @@ export default function Settings() {
                 />
               </div>
               <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                   <input type="checkbox" checked={emelReceiptEnabled} onChange={(e) => setEmelReceiptEnabled(e.target.checked)} />
                   {t("set.emelReceiptEnabled")}
                 </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                   <input type="checkbox" checked={emelNotifyMerchant} onChange={(e) => setEmelNotifyMerchant(e.target.checked)} />
                   {t("set.emelNotifyMerchant")}
                 </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700">
+                <label className="flex items-center gap-2 text-sm text-[var(--jf-text-secondary)]">
                   <input type="checkbox" checked={emelHtml} onChange={(e) => setEmelHtml(e.target.checked)} />
                   {t("set.emelHtml")}
                 </label>
               </div>
               {emelNotifyMerchant && (
                 <div>
-                  <label className="text-xs text-slate-500">{t("set.emelMerchantEmail")}</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("set.emelMerchantEmail")}</label>
                   <input
                     value={emelMerchantEmail}
                     onChange={(e) => setEmelMerchantEmail(e.target.value)}
@@ -3317,15 +3319,15 @@ export default function Settings() {
               )}
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <button onClick={saveEmailSettings} className="jf-btn-primary">{t("set.emelSave")}</button>
-                <button type="button" onClick={() => setEmelPreview(!emelPreview)} className="jf-btn-ghost text-slate-600">
+                <button type="button" onClick={() => setEmelPreview(!emelPreview)} className="jf-btn-ghost text-[var(--jf-text-secondary)]">
                   {t("set.emelPreview")}
                 </button>
               </div>
               {emelPreview && (
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="mt-3 rounded-lg border border-[var(--jf-border)] bg-[var(--jf-bg-soft)] p-4">
                   <p className="text-xs text-[var(--jf-muted-on-tint)]">{t("set.emelPreviewHint")}</p>
                   <p className="mt-2 text-sm font-medium">{renderPreview(emelSubject)}</p>
-                  <pre className="mt-2 whitespace-pre-wrap rounded bg-white p-3 text-xs text-slate-700">{renderPreview(emelBody)}</pre>
+                  <pre className="mt-2 whitespace-pre-wrap rounded bg-[var(--jf-surface)] p-3 text-xs text-[var(--jf-text-secondary)]">{renderPreview(emelBody)}</pre>
                 </div>
               )}
             </div>
@@ -3345,7 +3347,7 @@ export default function Settings() {
             </p>
             <div className="mt-4 space-y-3">
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfBusinessName")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.sfBusinessName")}</label>
                 <input
                   value={sfBusinessName}
                   onChange={(e) => setSfBusinessName(e.target.value)}
@@ -3354,7 +3356,7 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfCompanyReg")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.sfCompanyReg")}</label>
                 <input
                   value={sfCompanyReg}
                   onChange={(e) => setSfCompanyReg(e.target.value)}
@@ -3363,7 +3365,7 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfContactPhone")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.sfContactPhone")}</label>
                 <input
                   value={sfContactPhone}
                   onChange={(e) => setSfContactPhone(e.target.value)}
@@ -3372,7 +3374,7 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfContactAddress")}</label>
+                <label className="text-xs text-[var(--jf-muted)]">{t("set.sfContactAddress")}</label>
                 <textarea
                   value={sfContactAddress}
                   onChange={(e) => setSfContactAddress(e.target.value)}
@@ -3382,7 +3384,7 @@ export default function Settings() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500" htmlFor="sf-privacy-url">{t("set.sfPrivacyUrl")}</label>
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="sf-privacy-url">{t("set.sfPrivacyUrl")}</label>
                 <input
                   id="sf-privacy-url"
                   aria-describedby="sf-privacy-url-status"
@@ -3396,7 +3398,7 @@ export default function Settings() {
                 <div id="sf-privacy-url-status">{legalUrlWarning("privacy_url")}</div>
               </div>
               <div>
-                <label className="text-xs text-slate-500" htmlFor="sf-terms-url">{t("set.sfTermsUrl")}</label>
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="sf-terms-url">{t("set.sfTermsUrl")}</label>
                 <input
                   id="sf-terms-url"
                   aria-describedby="sf-terms-url-status"
@@ -3409,7 +3411,7 @@ export default function Settings() {
                 <div id="sf-terms-url-status">{legalUrlWarning("terms_url")}</div>
               </div>
               <div>
-                <label className="text-xs text-slate-500" htmlFor="sf-refund-url">{t("set.sfRefundUrl")}</label>
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="sf-refund-url">{t("set.sfRefundUrl")}</label>
                 <input
                   id="sf-refund-url"
                   aria-describedby="sf-refund-url-status"
@@ -3424,7 +3426,7 @@ export default function Settings() {
               {/* AGENTS.md documentation-parity step 4: an inline "?" beside the
                   fields that decide the footer's links, pointing at the page that
                   states the rule (card t_e8b4f7da). */}
-              <p className="flex max-w-xl items-center gap-1.5 text-xs text-slate-500">
+              <p className="flex max-w-xl items-center gap-1.5 text-xs text-[var(--jf-muted)]">
                 {t("set.sfLegalLinkDocs")}
                 <a
                   href="/docs/workspaces#footer-legal-links"
@@ -3432,14 +3434,15 @@ export default function Settings() {
                   rel="noopener noreferrer"
                   title={t("set.sfLegalLinkDocs")}
                   aria-label={t("set.sfLegalLinkDocs")}
-                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                 >
                   ?
                 </a>
               </p>
               <div>
-                <label className="text-xs text-slate-500">{t("set.sfFooterText")}</label>
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="set-sf-footer-text">{t("set.sfFooterText")}</label>
                 <textarea
+                  id="set-sf-footer-text"
                   value={sfFooterText}
                   onChange={(e) => setSfFooterText(e.target.value)}
                   rows={2}
@@ -3452,7 +3455,7 @@ export default function Settings() {
                   because it changes what the storefront/form shows. Explicitly
                   distinct from the per-profile dashboard language on /profile. */}
               <div>
-                <label className="text-xs text-slate-500" htmlFor="sf-default-lang">
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="sf-default-lang">
                   {t("set.sfDefaultLang")}
                 </label>
                 <select
@@ -3469,13 +3472,13 @@ export default function Settings() {
                     <option key={l} value={l} {...endonymLangProps(l)}>{LANG_LABEL[l]}</option>
                   ))}
                 </select>
-                <p className="mt-1 max-w-xl text-xs text-slate-500">{t("set.sfDefaultLangHelp")}</p>
+                <p className="mt-1 max-w-xl text-xs text-[var(--jf-muted)]">{t("set.sfDefaultLangHelp")}</p>
               </div>
               {/* Issue #276: per-workspace SEO indexing toggle. */}
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.sfIndexingTitle")}</p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">
+                  <p className="mt-0.5 max-w-md text-xs text-[var(--jf-muted)]">
                     {deployment && t(deployment.selfHosted ? "set.sfIndexingHelpSelf" : "set.sfIndexingHelp")}
                   </p>
                 </div>
@@ -3493,7 +3496,7 @@ export default function Settings() {
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.sfSoundTitle")}</p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSoundHelp")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-[var(--jf-muted)]">{t("set.sfSoundHelp")}</p>
                 </div>
                 <Switch
                   checked={sfSoundEnabled}
@@ -3512,12 +3515,12 @@ export default function Settings() {
                       target="_blank"
                       rel="noopener noreferrer"
                       title={t("set.sfSpamDocs")}
-                      className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-jf-3xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                      className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-3xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                     >
                       ?
                     </a>
                   </p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.sfSpamHelp")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-[var(--jf-muted)]">{t("set.sfSpamHelp")}</p>
                 </div>
                 <Switch
                   checked={sfSpamJudgeEnabled}
@@ -3556,7 +3559,7 @@ export default function Settings() {
               <div className="flex items-start justify-between gap-4 rounded-lg border border-[var(--jf-border)] p-3">
                 <div>
                   <p className="text-sm font-medium">{t("set.lpEnabledTitle")}</p>
-                  <p className="mt-0.5 max-w-md text-xs text-slate-500">{t("set.lpEnabledHelp")}</p>
+                  <p className="mt-0.5 max-w-md text-xs text-[var(--jf-muted)]">{t("set.lpEnabledHelp")}</p>
                 </div>
                 <Switch
                   checked={lpEnabled}
@@ -3567,7 +3570,7 @@ export default function Settings() {
               {lpEnabled && (
                 <>
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpHero")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpHero")}</label>
                     <input
                       value={lpHero}
                       onChange={(e) => setLpHero(e.target.value)}
@@ -3576,7 +3579,7 @@ export default function Settings() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpSubtitle")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpSubtitle")}</label>
                     <input
                       value={lpSubtitle}
                       onChange={(e) => setLpSubtitle(e.target.value)}
@@ -3585,7 +3588,7 @@ export default function Settings() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpBody")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpBody")}</label>
                     <textarea
                       value={lpBody}
                       onChange={(e) => setLpBody(e.target.value)}
@@ -3594,7 +3597,7 @@ export default function Settings() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpImageUrl")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpImageUrl")}</label>
                     <input
                       value={lpImageUrl}
                       onChange={(e) => setLpImageUrl(e.target.value)}
@@ -3604,7 +3607,7 @@ export default function Settings() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpLogoUrl")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpLogoUrl")}</label>
                     <input
                       value={lpLogoUrl}
                       onChange={(e) => setLpLogoUrl(e.target.value)}
@@ -3617,13 +3620,13 @@ export default function Settings() {
                       the fields, instead of a silently broken storefront
                       image. */}
                   {lpUrlErr && (
-                    <p className="max-w-xl rounded-md bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
+                    <p className="max-w-xl rounded-md bg-[var(--jf-danger-bg)] px-2 py-1.5 text-xs font-medium text-[var(--jf-danger-text)]">
                       {lpUrlErr}
                     </p>
                   )}
                   <div className="flex max-w-xl gap-4">
                     <div className="flex-1">
-                      <label className="text-xs text-slate-500">{t("set.lpPrimaryColor")}</label>
+                      <label className="text-xs text-[var(--jf-muted)]">{t("set.lpPrimaryColor")}</label>
                       <div className="mt-1 flex items-center gap-2">
                         <input
                           type="color"
@@ -3639,7 +3642,7 @@ export default function Settings() {
                       </div>
                     </div>
                     <div className="flex-1">
-                      <label className="text-xs text-slate-500">{t("set.lpBackgroundColor")}</label>
+                      <label className="text-xs text-[var(--jf-muted)]">{t("set.lpBackgroundColor")}</label>
                       <div className="mt-1 flex items-center gap-2">
                         <input
                           type="color"
@@ -3657,7 +3660,7 @@ export default function Settings() {
                   </div>
                   {/* CTA buttons linking to published forms (or external). */}
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpCtas")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpCtas")}</label>
                     <div className="mt-1 space-y-2">
                       {lpCtas.map((c, i) => (
                         <div key={i} className="flex max-w-xl items-center gap-2">
@@ -3697,7 +3700,7 @@ export default function Settings() {
                   </div>
                   {/* Issue #362: published forms embedded inline on the landing page. */}
                   <div>
-                    <label className="text-xs text-slate-500">{t("set.lpForms")}</label>
+                    <label className="text-xs text-[var(--jf-muted)]">{t("set.lpForms")}</label>
                     <div className="mt-1 space-y-2">
                       {lpForms.map((c, i) => (
                         <div key={i} className="flex max-w-xl items-center gap-2">
@@ -3806,8 +3809,9 @@ export default function Settings() {
             </p>
             <div className="mt-4 max-w-xl space-y-3">
               <div>
-                <label className="text-xs text-slate-500">{t("set.currencyLabel")}</label>
+                <label className="text-xs text-[var(--jf-muted)]" htmlFor="set-currency">{t("set.currencyLabel")}</label>
                 <select
+                  id="set-currency"
                   value={currency}
                   onChange={(e) => setCurrency(e.target.value)}
                   className="jf-input mt-1"
@@ -3830,27 +3834,27 @@ export default function Settings() {
                   converted an amount; the guide now says the table is reference
                   data and points at convert_currency for an on-demand figure. */}
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-700">{t("set.currencyRates")}</h3>
+                <h3 className="text-sm font-semibold text-[var(--jf-text-secondary)]">{t("set.currencyRates")}</h3>
                 <a
                   href="/docs/workspaces#currency"
                   target="_blank"
                   rel="noopener noreferrer"
                   title={t("set.currencyDocs")}
                   aria-label={t("set.currencyDocs")}
-                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-2xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
                 >
                   ?
                 </a>
               </div>
               <p className="mt-1 text-xs text-[var(--jf-muted)]">
-                {t("set.currencyRatesHint")} <span className="text-slate-500">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
+                {t("set.currencyRatesHint")} <span className="text-[var(--jf-muted)]">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
               </p>
               {rates.length > 0 ? (
                 <div className="mt-2 grid max-h-64 grid-cols-2 gap-x-6 overflow-y-auto sm:grid-cols-3">
                   {rates.map((r) => (
-                    <div key={r.currency_code} className="flex items-center justify-between border-b border-slate-100 py-1 text-sm">
-                      <span className="font-medium text-slate-700">{r.currency_code}</span>
-                      <span className="text-slate-500">{r.rate.toFixed(4)}</span>
+                    <div key={r.currency_code} className="flex items-center justify-between border-b border-[var(--jf-border)] py-1 text-sm">
+                      <span className="font-medium text-[var(--jf-text-secondary)]">{r.currency_code}</span>
+                      <span className="text-[var(--jf-muted)]">{r.rate.toFixed(4)}</span>
                     </div>
                   ))}
                 </div>
@@ -3881,7 +3885,7 @@ export default function Settings() {
                 rel="noopener noreferrer"
                 title={t("set.affiliatesDocs")}
                 aria-label={t("set.affiliatesDocs")}
-                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-jf-2xs font-bold text-slate-600 hover:bg-[var(--jf-primary)] hover:text-white"
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--jf-neutral-fill)] text-jf-2xs font-bold text-[var(--jf-text-secondary)] hover:bg-[var(--jf-primary)] hover:text-[var(--jf-on-color)]"
               >
                 ?
               </a>
@@ -3912,7 +3916,7 @@ export default function Settings() {
                   every locale) rather than 3.2x, and 0.75x at 1024px. */}
               <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end">
                 <div className="min-w-0 sm:flex-1">
-                  <label className="text-xs text-slate-500">{t("set.affiliateCode")}</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("set.affiliateCode")}</label>
                   <input
                     value={affCode}
                     onChange={(e) => setAffCode(e.target.value)}
@@ -3921,7 +3925,7 @@ export default function Settings() {
                   />
                 </div>
                 <div className="min-w-0 sm:flex-1">
-                  <label className="text-xs text-slate-500">{t("set.affiliateName")}</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("set.affiliateName")}</label>
                   <input
                     value={affName}
                     onChange={(e) => setAffName(e.target.value)}
@@ -3930,7 +3934,7 @@ export default function Settings() {
                   />
                 </div>
                 <div className="min-w-0 sm:w-28">
-                  <label className="text-xs text-slate-500">{t("set.affiliateCommission")}</label>
+                  <label className="text-xs text-[var(--jf-muted)]">{t("set.affiliateCommission")}</label>
                   <input
                     type="number"
                     value={affCommission}
@@ -3946,20 +3950,20 @@ export default function Settings() {
                   {t("set.affiliateAdd")}
                 </button>
               </div>
-              {affErr && <p className="text-sm text-red-600">{affErr}</p>}
-              {affMsg && <p className="text-sm text-emerald-700">{affMsg}</p>}
+              {affErr && <p className="text-sm text-[var(--jf-danger-text)]">{affErr}</p>}
+              {affMsg && <p className="text-sm text-[var(--jf-success-text)]">{affMsg}</p>}
             </div>
             <div className="mt-6">
-              <h3 className="text-sm font-semibold text-slate-700">{t("set.affiliatesList")}</h3>
+              <h3 className="text-sm font-semibold text-[var(--jf-text-secondary)]">{t("set.affiliatesList")}</h3>
               {affiliates.length === 0 ? (
                 <p className="mt-2 text-sm text-[var(--jf-muted)]">{t("set.affiliatesEmpty")}</p>
               ) : (
                 <div className="mt-2 space-y-2">
                   {affiliates.map((a) => (
-                    <div key={a.id} className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
+                    <div key={a.id} className="flex items-center justify-between rounded-lg border border-[var(--jf-border)] px-3 py-2 text-sm">
                       <div>
-                        <span className="font-medium text-slate-800">{a.code}</span>
-                        {a.name && <span className="ml-2 text-slate-500">{a.name}</span>}
+                        <span className="font-medium text-[var(--jf-text)]">{a.code}</span>
+                        {a.name && <span className="ml-2 text-[var(--jf-muted)]">{a.name}</span>}
                         <span className="ml-2 text-xs text-[var(--jf-muted)]">{a.commission_pct}%</span>
                       </div>
                       <code className="max-w-[50%] truncate text-xs text-[var(--jf-primary)]">{a.referral_url}</code>

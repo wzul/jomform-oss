@@ -176,8 +176,9 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
             />
           </div>
           <div>
-            <label className="text-xs text-slate-500">{t("mem.inviteRole")}</label>
+            <label className="text-xs text-slate-500" htmlFor="mem-invite-role">{t("mem.inviteRole")}</label>
             <select
+              id="mem-invite-role"
               value={role}
               onChange={(e) => setRole(e.target.value)}
               className="jf-input mt-1 w-40"
@@ -230,6 +231,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                   disabled={m.role === "owner"}
                   onChange={(e) => changeRole(m.user_id, e.target.value)}
                   title={t("mem.changeRole")}
+                  aria-label={`${t("mem.changeRole")}: ${m.name || m.email}`}
                   className="rounded border border-[var(--jf-border)] bg-white px-2 py-1 text-xs"
                 >
                   {ROLES.map((r) => (

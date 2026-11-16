@@ -302,7 +302,7 @@ run_case() {
 # ---------------------------------------------------------------------------
 run_case "1. strip class back to flex flex-wrap" \
   "wrapped to" yes \
-  "perl -0pi -e 's/className=\"jf-tabstrip mt-4 flex gap-1 overflow-x-auto border-b border-slate-200\"/className=\"jf-tabstrip mt-4 flex flex-wrap gap-1 border-b border-slate-200\"/' $PAGE && grep -q 'flex flex-wrap gap-1 border-b' $PAGE"
+  "perl -0pi -e 's/className=\"jf-tabstrip flex gap-1 overflow-x-auto border-b border-\[var\(--jf-border\)\]\"/className=\"jf-tabstrip flex flex-wrap gap-1 border-b border-[var(--jf-border)]\"/' $PAGE && grep -q 'flex flex-wrap gap-1 border-b' $PAGE"
 
 run_case "2. the reveal disabled (RULE 6's wait must not rescue it)" \
   "not even after waiting for the reveal to land" yes \

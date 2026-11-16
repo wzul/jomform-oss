@@ -224,17 +224,21 @@ type Sale struct {
 	// Delayed capture (skip_capture) flow.
 	//
 	// CapturedAt is the moment the merchant captured the hold, and it is the
-	// field to ask "was this authorization captured?". Authorized is the legacy
-	// BOOLEAN duplicate of that fact: MarkCaptured is its ONLY writer and always
-	// sets it together with CapturedAt and status = paid.
+	// field to ask "was this authorization captured?".
 	//
-	// It therefore does not mean status = 'authorized' (which no write path
-	// produces), and the two are NOT required to agree — an uncaptured
-	// authorization has authorized = false. When they disagree, STATUS WINS:
-	// LifecycleState() returns Status, the lifecycle table reads its state
-	// through that, and its capture/release guard reads SkipCapture, CapturedAt
-	// and ChipPurchaseID — never this boolean. Pinned by
-	// internal/lifecycle's TestSaleAuthorizedFieldNeverDecidesAState.
+	// Authorized is DERIVED, not stored: the `sales.authorized` column was
+	// dropped (migration 000091) because it was a second copy of
+	// `captured_at IS NOT NULL` — MarkCaptured was its only writer and always
+	// stamped the timestamp in the same statement. saleSelect now reports it as
+	// `(captured_at IS NOT NULL) AS authorized`, so no read can see the two
+	// disagree, and the REST payload keeps the field it always had.
+	//
+	// It never means status = 'authorized' (a CHECK value no write path
+	// produces): when a legacy row's status says authorized while nothing was
+	// captured, Authorized is false. STATUS WINS — LifecycleState() returns
+	// Status, and the capture/release guard reads SkipCapture, CapturedAt and
+	// ChipPurchaseID, never this boolean. Pinned by internal/lifecycle's
+	// TestSaleAuthorizedFieldNeverDecidesAState.
 	SkipCapture bool
 	Authorized  bool
 	CapturedAt  *time.Time
@@ -312,7 +316,7 @@ const saleSelect = `SELECT id, account_id, COALESCE(form_id::text,''), ref_code,
 	platform_fee_sen, fee_model, fee_identifier,
 	refunded_sen, currency, sale_type, payment_method, status,
 	COALESCE(chip_purchase_id,''), COALESCE(chip_checkout_url,''), COALESCE(invoice_no,''),
-	skip_capture, authorized, captured_at, COALESCE(receipt_message_id,''),
+	skip_capture, (captured_at IS NOT NULL) AS authorized, captured_at, COALESCE(receipt_message_id,''),
 	is_spam, spam_reason, COALESCE(table_number,''), COALESCE(affiliate_code,''), created_at, updated_at,
 	COALESCE(subscription_product_id::text,''), COALESCE(subscription_amount_sen,0), COALESCE(subscription_period,''),
 	COALESCE(subscription_variation_id::text,''), COALESCE(shipping_detail,'{}'::jsonb)
@@ -423,8 +427,13 @@ func (s *SaleStore) AttachChipPurchase(ctx context.Context, saleID, purchaseID, 
 	return err
 }
 
-// MarkAuthorized flips an authorized (skip_capture) purchase to paid state
-// after the merchant captures; CapturedAt marks the moment.
+// MarkCaptured flips an authorized (skip_capture) purchase to paid state after
+// the merchant captures; captured_at marks the moment.
+//
+// There is no second "captured" flag to write: the legacy `authorized` BOOLEAN
+// was dropped in migration 000091, and every read derives it from this
+// timestamp (saleSelect: `(captured_at IS NOT NULL) AS authorized`). One
+// statement, one fact.
 //
 // The status it writes is the lifecycle table's `capture` target
 // (internal/lifecycle: pending/authorized → paid), and every caller has already
@@ -433,7 +442,7 @@ func (s *SaleStore) AttachChipPurchase(ctx context.Context, saleID, purchaseID, 
 // decided here.
 func (s *SaleStore) MarkCaptured(ctx context.Context, saleID string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE sales SET authorized=true, captured_at=now(), status=$2, updated_at=now() WHERE id=$1`,
+		`UPDATE sales SET captured_at=now(), status=$2, updated_at=now() WHERE id=$1`,
 		saleID, SalePaid)
 	return err
 }

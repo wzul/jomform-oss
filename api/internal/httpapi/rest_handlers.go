@@ -2246,8 +2246,12 @@ type saleRow struct {
 	Buyer       string `json:"buyer"`
 	Created     string `json:"created_at"`
 	SkipCapture bool   `json:"skip_capture"`
-	Authorized  bool   `json:"authorized"`
-	CapturedAt  string `json:"captured_at,omitempty"`
+	// Authorized is DERIVED by dbstore.saleSelect from captured_at: the stored
+	// `sales.authorized` column was dropped (migration 000091) because it was a
+	// second copy of the same fact. The wire field stays for compatibility, and
+	// it can no longer disagree with CapturedAt.
+	Authorized bool   `json:"authorized"`
+	CapturedAt string `json:"captured_at,omitempty"`
 	// EmailStatus is the most recent receipt delivery event for this sale
 	// (issue #106): "" (no event yet) | delivered | open | click | bounce |
 	// complaint. Populated when the delivery-event store is wired.

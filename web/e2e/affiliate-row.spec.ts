@@ -201,14 +201,20 @@ const ROW_PAGES: RowPage[] = [
     // explicit open step that the other rows do not: `waitFor` proves the tab
     // rendered, `openLabel` is the row's (localized) Edit button, and
     // `openSelector` is the drawer's own form, which is what gets measured.
+    //
+    // The drawer used to be found by its palette spelling (`form.bg-slate-50`).
+    // That spelling is gone — /settings paints tokens now — so the anchor is the
+    // drawer's own `data-testid`, which no colour migration can rename. Anchoring
+    // on the styling was the defect: the guard must depend on "this is the edit
+    // drawer", not on the fill that drawer happens to have.
     waitFor: 'form.mt-3 input[placeholder="https://yourapp.com/jomform-hook"]',
     openLabel: "set.webhookEdit",
-    openSelector: 'form.bg-slate-50 input[placeholder="https://yourapp.com/jomform-hook"]',
+    openSelector: '[data-testid="webhook-edit-drawer"] input[placeholder="https://yourapp.com/jomform-hook"]',
     // `set.secretKeep` is a sentence of help text, not a token: 46 characters in
     // `en` (a 307.56px run) and 12 in `zh`. It truncates in every locale by
     // design, so it answers to the "reads as empty" floor, not a full render.
     hintPlaceholderKeys: ["set.secretKeep"],
-    rowExpr: `document.querySelector('form.bg-slate-50 input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
+    rowExpr: `document.querySelector('[data-testid="webhook-edit-drawer"] input[placeholder="https://yourapp.com/jomform-hook"]').closest('div.flex')`,
     isButtonRow: false },
 ] as const;
 

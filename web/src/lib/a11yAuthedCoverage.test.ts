@@ -158,7 +158,8 @@ const AUTHED_ROUTES: { route: string; appFile: string; what: string }[] = [
     what:
       `the settings tab strip — MEASURED from src/app/settings/page.tsx: ${SETTINGS_TABS.ids} ids in ` +
       `TAB_IDS, ${SETTINGS_TABS.adminOnly} of them admin-only, so ${SETTINGS_TABS.member} on a member session ` +
-      `(card t_4d32da9a added its axe arm)`,
+      `(card t_4d32da9a added its axe arm); every one of the ${SETTINGS_TABS.ids} PANELS is walked and ` +
+      `axe-scanned with its content populated by a11y-settings-tab-panels (t_ef7d5c04)`,
   },
   {
     route: "/subscriptions",
@@ -894,3 +895,132 @@ test("the /forms document scan is an ARM in a11y-authed-pages, and its helper is
       `arm's green mean something`,
   );
 });
+
+/**
+ * `/settings`' THIRTEEN TAB PANELS must stay walked and scanned (card t_ef7d5c04).
+ *
+ * WHAT IT WAS. The route entry above is satisfied by `a11y-settings-first-run-tab.spec.ts`,
+ * whose axe arm renders the DEFAULT tab (the first tab the role filter shows) at
+ * ONE width. The page declares thirteen panels behind a tab strip; twelve of them
+ * were rendered by no spec in the family, so eight critical/serious violations
+ * across five panels (domains, webhooks, emel, storefront, currency, legal,
+ * members) shipped while `npm run a11y` was green. They were fixed by card
+ * t_1436a4aa, measured on a harness that was never committed — this rule exists
+ * so the COVERAGE lands with the fix.
+ *
+ * WHAT IT PINS, and why each half is needed:
+ *   (a) A WALK ARM exists in its own spec, titled for /settings, and it is what
+ *       calls the two helpers — an arm that stops calling `selectTab()` scans
+ *       whatever panel happens to be painted.
+ *   (b) THE SCAN IS THE GATE'S — `scanPanel()` must still run an unscoped,
+ *       unnarrowed scan (default rule set, whole document) and still carry the
+ *       non-vacuity read. A helper narrowed to a subtree or a rule subset would
+ *       silently shrink every panel walk, and the route rule above could not see
+ *       it: that spec also runs its own document scans.
+ *   (c) EVERY DECLARED TAB HAS A PANEL WITNESS — the spec's `TAB_PANEL_HEADING`
+ *       is parsed and compared with BOTH the tab list in `src/app/settings/page.tsx`
+ *       and the panel set the spec reads. A tab added to the page, or a panel
+ *       renamed, fails here by NAME instead of quietly dropping out of the walk.
+ */
+const SETTINGS_PANEL_SPEC = "a11y-settings-tab-panels.spec.ts";
+
+/** The `tab: "dict.key"` pairs of `TAB_PANEL_HEADING`, read out of the spec. */
+function panelWitnesses(src: string): Record<string, string> {
+  const decl = src.match(/const TAB_PANEL_HEADING[^=]*=\s*\{([\s\S]*?)\n\};/);
+  if (!decl) return {};
+  const out: Record<string, string> = {};
+  for (const m of decl[1].matchAll(/^ {2}([a-z][\w]*):\s*"([^"]+)"/gm)) out[m[1]] = m[2];
+  return out;
+}
+
+test("the /settings every-tab walk exists, scans the page with the gate's rule set, and covers every declared tab", () => {
+  const file = `${E2E_DIR}/${SETTINGS_PANEL_SPEC}`;
+  assert.ok(
+    existsSync(file),
+    `${SETTINGS_PANEL_SPEC} is gone — the thirteen /settings panels drop out of the a11y gate with it ` +
+      `(t_ef7d5c04: twelve of them were rendered by NO spec, and eight violations across five panels shipped green)`,
+  );
+  const src = readFileSync(file, "utf8");
+
+  // (a) the arm, and the two calls that make it a walk rather than a scan of
+  // whatever panel was painted.
+  const arms = testArms(src).filter((a) => /\/settings/.test(a.title));
+  assert.ok(
+    arms.length > 0,
+    `no arm in ${SETTINGS_PANEL_SPEC} is titled for /settings — the walk this contract exists for has no arm, or ` +
+      `its title no longer names the route. Arms found: ${JSON.stringify(
+        testArms(src).map((a) => a.title.trim().slice(0, 60)),
+      )}`,
+  );
+  assert.ok(
+    testArms(src).some((a) => /\bwalkEveryPanel\s*\(/.test(a.body)),
+    `no arm in ${SETTINGS_PANEL_SPEC} calls walkEveryPanel() — the arm that scans a panel set has to be the one ` +
+      `that walks it, or it measures whatever panel happens to be painted`,
+  );
+  // …and the walk itself both SELECTS a tab and SCANS the panel, once per
+  // declared tab. `testArms` slices a describe down to its first inner `test(`,
+  // so this half is read off the helper rather than off the arm's own body.
+  const walk = functionBody(src, "walkEveryPanel");
+  assert.ok(
+    walk,
+    `${SETTINGS_PANEL_SPEC} no longer defines walkEveryPanel() — the arms call it, so this rule cannot read the ` +
+      `walk it runs. Re-point this reader at whatever helper the arm uses now.`,
+  );
+  assert.ok(
+    /\bselectTab\s*\(/.test(walk!) && /\bscanPanel\s*\(/.test(walk!),
+    `walkEveryPanel() in ${SETTINGS_PANEL_SPEC} no longer both selects a tab and scans the panel — a walk that ` +
+      `scans without selecting measures the DEFAULT panel as many times as there are tabs, which is the gap ` +
+      `t_ef7d5c04 exists for`,
+  );
+  assert.match(
+    walk!,
+    /for\s*\(\s*const\s+\w+\s+of\s+TAB_IDS\s*\)/,
+    `walkEveryPanel() no longer iterates the page's own TAB_IDS — a hardcoded panel list stops tracking the page ` +
+      `silently, and the panels it drops are the ones no gate would see`,
+  );
+
+  // (b) the helper is still the gate's own document scan, non-vacuity included.
+  const helper = functionBody(src, "scanPanel");
+  assert.ok(
+    helper,
+    `${SETTINGS_PANEL_SPEC} no longer defines scanPanel() — the walk calls it, so this rule cannot read the scan ` +
+      `it runs. Re-point this reader at whatever helper the arm uses now.`,
+  );
+  const scans = axeScans(helper!);
+  assert.ok(
+    scans.some((s) => !s.narrowed && s.scope !== "subtree"),
+    `scanPanel() in ${SETTINGS_PANEL_SPEC} no longer runs the gate's DEFAULT rule set over the whole document or ` +
+      `its page body — the scans it contains now are ${JSON.stringify(scans)}. A scoped or narrowed helper shrinks ` +
+      `every panel in the walk, and the route rule above cannot see it.`,
+  );
+  assert.match(
+    helper!,
+    /passes\s*\.\s*length/,
+    `scanPanel() no longer asserts NON-VACUITY (it read \`passes\` before): a 0-violation reading from a scan that ` +
+      `evaluated no rule-nodes is not a clean panel`,
+  );
+
+  // (c) every tab the page declares has a panel witness in the spec.
+  const witnesses = panelWitnesses(src);
+  const keys = Object.keys(witnesses);
+  assert.ok(
+    keys.length > 0,
+    `no \`tab: "dict.key"\` witness could be parsed out of ${SETTINGS_PANEL_SPEC}'s TAB_PANEL_HEADING — re-point ` +
+      `this reader at its shape rather than deleting the rule, or "every panel was scanned" becomes a guess again`,
+  );
+  assert.deepEqual(
+    SETTINGS_TAB_IDS.filter((id) => !keys.includes(id)),
+    [],
+    `tab(s) declared in src/app/settings/page.tsx with NO panel witness in ${SETTINGS_PANEL_SPEC}: the spec walks ` +
+      `${JSON.stringify(keys)}. A tab the page offers and the walk does not read is a panel axe never scans — and ` +
+      `the spec itself throws at import when one is missing, so this is the outside half of the same rule`,
+  );
+  assert.deepEqual(
+    keys.filter((id) => !SETTINGS_TAB_IDS.includes(id)),
+    [],
+    `the walk carries a witness for tab(s) src/app/settings/page.tsx does not declare: ${JSON.stringify(
+      keys.filter((id) => !SETTINGS_TAB_IDS.includes(id)),
+    )}. Either the page dropped a tab (and the walk is walking a panel that no longer exists) or the witness is stale`,
+  );
+});
+
