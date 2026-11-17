@@ -199,9 +199,84 @@ const SECURITY_HEADERS = [
   { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 
+// ── experimental.agentUpgrade: false — the agent nudge must not red a build ───
+//
+// THE DEFECT (reproduced on this tree, 2026-11-17)
+//   A FRESH `next build` in an agent environment EXITS 1 even though the app has
+//   already built:
+//
+//     ✓ Compiled successfully … / the full 81-line route table printed …
+//     Error [SecurityFatalError]: Your version of Next.js is affected by a known
+//     security vulnerability. … This command stopped to show the upgrade
+//     recommendation. Retry the same command to continue the original task.
+//     EXIT=1
+//
+//   Re-running the SAME command within five minutes EXITS 0. So the `web` gate
+//   (`cd web && npm run build`) reports a red over a build that emitted every
+//   route, and pays a second full build to discover it was never broken.
+//   Measured in a lane worktree that hit this: first build exit 1, second exit 0,
+//   four times in a row.
+//
+// THE MECHANISM, read out of the pinned package (next 16.4.2)
+//   * `next/dist/server/config-shared.js` ships `experimental.agentUpgrade:
+//     'security'` as the DEFAULT, so this is on in every checkout here — the
+//     repo never opted in.
+//   * With that policy, `next/dist/build/index.js` requires
+//     `lib/upgrade/nudge.js`, which asks the npm advisory bulk endpoint and, when
+//     `telemetry/agent-name.js` (@vercel/detect-agent) says an AI agent is
+//     driving the process, stops the command with `SecurityFatalError`.
+//   * The stop is once-per-project-per-five-minutes BY DESIGN: `allowNudgeRetry()`
+//     only lets the command continue when a receipt under
+//     `<app>/.next/cache/next-agentic-upgrade-retries/<sha256(project,version,
+//     command,kind)>.json` is younger than `RETRY_TTL = 5 * 60 * 1000`. The
+//     receipt lives INSIDE `.next`, so every fresh worktree — and every clean
+//     build, which is what a lane does — starts without one. That is why the red
+//     is intermittent instead of constant, and why "it passes when you retry"
+//     is not a fix.
+//   * A human in a TTY gets an interactive menu instead; a NON-agent build
+//     (nothing like AI_AGENT / CLAUDECODE / CODEX_* in the environment) returns
+//     before any of this. Lane builds are agent builds, which is exactly why this
+//     symptom lands in the gate and not on a laptop.
+//
+// WHY THIS SWITCH AND NOT A RETRY IN THE GATE
+//   A retry around `scripts/preflight.sh`'s web command would pass by paying a
+//   whole second production build (~2 min of gate wall time) on every cold
+//   `.next`, and it would leave `npm run build` itself — what humans and every
+//   other tooling path run — still exiting 1. Next documents `false` as the
+//   switch for the reminder itself: "Disables upgrade reminders."
+//   (`agentUpgrade?: 'security' | 'latest' | 'experimental-future' | false` on
+//   `NextConfig`; node_modules/next/dist/docs/01-app/03-api-reference/05-config/
+//   01-next-config-js/agentUpgrade.md). There is NO environment-variable
+//   opt-out: `getRequestedUpgrade()` only ever ENABLES a policy and everything
+//   else falls back to this config value (read in `nudge.js`), so the config is
+//   the only deterministic place to say no.
+//
+// WHY DISABLING THE REMINDER KEEPS THE SECURITY SIGNAL
+//   The reminder is not a gate: it stops once, then continues with a warning,
+//   and it fires for MODERATE advisories too — on this tree the one it reported
+//   was GHSA-mfr8-8qww-v76h (moderate). This repo's enforcement for dependency
+//   CVEs is the `npmaudit` gate: `npm audit --audit-level=high` via
+//   web/scripts/npm-audit-gate.mjs, which fails the build on a HIGH/CRITICAL
+//   advisory and can only be silenced through web/npm-audit-exceptions.json —
+//   by advisory URL, with an expiry. That signal is deterministic and cannot be
+//   retried past, which the nudge cannot claim. Bumping the pinned framework
+//   version is its own decision and its own card; it does not belong in a gate
+//   fix, and a bump would only move the next nudge to whichever advisory ships
+//   after it.
+//
+// Guard: `web/src/lib/nextAgentUpgrade.test.ts` pins the value Next's OWN config
+// loader resolves (`next/dist/server/config`), not the object this file exports —
+// so a future Next that renames or drops the key (falling back to 'security')
+// reds the unit suite inside the `web` gate instead of silently re-arming this
+// defect.
 const nextConfig = {
   output: "standalone",
   agentRules: false,
+  // Switches off Next's agent upgrade REMINDER, which stops a fresh build with
+  // SecurityFatalError (exit 1) once per project per five minutes even when the
+  // build succeeded. Rationale, mechanism and the security-signal argument are
+  // in the block above; do not remove. Guard: src/lib/nextAgentUpgrade.test.ts.
+  experimental: { agentUpgrade: false },
   // Removes `x-powered-by: Next.js` from every response. See the block above.
   poweredByHeader: false,
   allowedDevOrigins: DEV_HOSTS,

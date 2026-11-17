@@ -248,12 +248,16 @@ const A11Y_SPECS = readdirSync(E2E_DIR).filter(
 );
 
 /**
- * `src` with its comments blanked out and its string/template bodies kept.
+ * `src` with its comments blanked out and its string/template/REGEX bodies kept.
  *
- * Quote state is tracked so a `//` inside a string or a regex (a URL, the
- * `/(.*)\/api\/.*$/` stubs) is not mistaken for a comment. Mis-stripping can
- * only ever REMOVE text here, which loses a visit and fails loudly — it can
- * never invent one.
+ * Literal state is tracked so a `//` inside a string or a regex (a URL, the
+ * `/(.*)\/api\/.*$/` stubs) is not mistaken for a comment, and a QUOTE inside a
+ * regex is not mistaken for a string. Mis-stripping can only ever REMOVE text
+ * here, which loses a visit and fails loudly — it can never invent one — but a
+ * desync the other way (a comment read as CODE, card t_40a45814) removes nothing
+ * and instead lets a comment's apostrophe open a phantom string, which truncates
+ * whatever structural reader comes next. Both directions are now impossible
+ * because the same literal scanner serves the stripper and the readers.
  */
 function withoutComments(src: string): string {
   let out = "";
@@ -271,24 +275,10 @@ function withoutComments(src: string): string {
       out += " ";
       continue;
     }
-    if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
-      out += c;
-      i += 1;
-      while (i < src.length && src[i] !== quote) {
-        if (src[i] === "\\") {
-          out += src[i];
-          i += 1;
-        }
-        if (i < src.length) {
-          out += src[i];
-          i += 1;
-        }
-      }
-      if (i < src.length) {
-        out += src[i];
-        i += 1;
-      }
+    if (startsLiteral(src, i)) {
+      const end = literalEnd(src, i);
+      out += src.slice(i, end);
+      i = end;
       continue;
     }
     out += c;
@@ -296,6 +286,265 @@ function withoutComments(src: string): string {
   }
   return out;
 }
+
+/** The words after which a `/` opens a REGEX literal rather than a division. */
+const REGEX_AFTER_KEYWORD = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "case",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "do",
+  "else",
+  "yield",
+  "await",
+]);
+
+/**
+ * Does a LITERAL — a `"…"`/`'…'` string, a `` `…` `` template or a `/…/` regex —
+ * start at `src[at]`?
+ *
+ * Regex vs division is the one ambiguity a lexer without a parser has to decide,
+ * and it is decided from the last significant CHARACTER before the `/`: after an
+ * identifier or a number (and after `++`/`--`) a `/` is DIVISION; after an
+ * operator, an opening bracket, `,`, `;`, `:` or a `}` it opens a regex; after an
+ * identifier that is a keyword (`return`, `typeof`, …) it also opens a regex.
+ * Guessing "regex" where the source has a division is the expensive mistake — it
+ * swallows code up to the next `/` — so anything not listed here is a division.
+ */
+function startsLiteral(src: string, at: number): boolean {
+  const c = src[at];
+  if (c === '"' || c === "'" || c === "`") return true;
+  if (c !== "/") return false;
+  if (src[at + 1] === "/" || src[at + 1] === "*") return false;
+  let i = at - 1;
+  while (i >= 0 && /\s/.test(src[i])) i--;
+  if (i < 0) return true;
+  const prev = src[i];
+  if (/[\w$]/.test(prev)) {
+    let start = i;
+    while (start > 0 && /[\w$]/.test(src[start - 1])) start--;
+    const word = src.slice(start, i + 1);
+    if (/^[0-9]/.test(word)) return false;
+    return REGEX_AFTER_KEYWORD.has(word);
+  }
+  if (prev === ")" || prev === "]" || prev === "'" || prev === '"' || prev === "`") return false;
+  if ((prev === "+" || prev === "-") && src[i - 1] === prev) return false;
+  return true;
+}
+
+/** The index just past the literal that starts at `src[at]` (`startsLiteral`
+ *  said one does). Escapes are skipped, a regex character class may carry a `/`,
+ *  and a template's `${…}` interpolation is skipped as a unit so a `}` inside it
+ *  cannot end the template early. An UNTERMINATED single-line string stops at the
+ *  newline — a stray apostrophe in JSX text or in text this scanner cannot parse
+ *  must not swallow the rest of the file. */
+function literalEnd(src: string, at: number): number {
+  const quote = src[at];
+  if (quote === "/") {
+    let i = at + 1;
+    let inClass = false;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "\n") return i;
+      if (inClass) {
+        if (c === "]") inClass = false;
+      } else if (c === "[") {
+        inClass = true;
+      } else if (c === "/") {
+        i += 1;
+        while (i < src.length && /[a-z]/i.test(src[i])) i++;
+        return i;
+      }
+      i += 1;
+    }
+    return i;
+  }
+  if (quote === "`") {
+    let i = at + 1;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "`") return i + 1;
+      if (c === "$" && src[i + 1] === "{") {
+        i += 2;
+        let depth = 1;
+        while (i < src.length && depth > 0) {
+          if (startsLiteral(src, i)) {
+            i = literalEnd(src, i);
+            continue;
+          }
+          if (src[i] === "{") depth++;
+          else if (src[i] === "}") depth--;
+          i += 1;
+        }
+        continue;
+      }
+      i += 1;
+    }
+    return i;
+  }
+  let i = at + 1;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === quote) return i + 1;
+    if (c === "\n") return i;
+    i += 1;
+  }
+  return i;
+}
+
+/**
+ * A REGEX LITERAL IS A LITERAL (card t_40a45814).
+ *
+ * WHAT IT WAS. The stripper above tracked quote state but had no regex state, so
+ * the FIRST quote inside a regex — `/…"([^"]+)"…/` in the /settings spec's own
+ * `tabIdsIn()` helper — was read as a string delimiter. From that offset on,
+ * quote state was wrong: a real `//` comment was no longer recognised, its
+ * apostrophe opened a phantom string, and `functionBody()` truncated the walk it
+ * was asked to read. Measured: ONE apostrophe added to a comment inside
+ * `walkEveryPanel` turned the /settings rule RED while `selectTab(` and
+ * `scanPanel(` were both in the function.
+ *
+ * The fixture below is that shape in miniature: a regex with quotes in it, then a
+ * function whose comment carries an apostrophe. The function must still parse.
+ */
+test("a quote inside a REGEX literal is not a string — a comment after it is still stripped and a walk still parses", () => {
+  const fixture = [
+    "function tabIdsIn(declaration: string): string[] {",
+    '  const m = SRC.match(new RegExp(`const ${declaration}[^=]*=`));',
+    '  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];',
+    "}",
+    "",
+    "async function walkEveryPanel(page: Page): Promise<void> {",
+    "  // production's rate count is pinned here",
+    "  const panel = await selectTab(page, id);",
+    "  failures.push(...(await scanPanel(page, `/settings → ${id}`)));",
+    "}",
+  ].join("\n");
+
+  // The comment is gone from the stripped text… (it is not, before the fix: the
+  // phantom string that starts inside the regex above swallows the `//`).
+  assert.ok(
+    !withoutComments(fixture).includes("rate count"),
+    "a `//` comment after a regex literal was NOT stripped — the regex's own quote desynced the quote state",
+  );
+
+  const walk = functionBody(fixture, "walkEveryPanel");
+  assert.ok(
+    walk,
+    "functionBody() could not read walkEveryPanel() out of a fixture whose only unusual feature is a regex " +
+      "with quotes in it and an apostrophe in a comment — an unparsed walk reports the panels as unwalked",
+  );
+  assert.match(walk!, /\bselectTab\s*\(/, "selectTab( is in the fixture's walk but the parsed body lost it");
+  assert.match(walk!, /\bscanPanel\s*\(/, "scanPanel( is in the fixture's walk but the parsed body lost it");
+
+  // The same desync on ONE line, where nothing else can rescue it: a regex that
+  // carries a quote, then a `//` comment. Without regex state the quote opens a
+  // phantom string that runs to the end of the line, so the comment is copied as
+  // CODE, and a later apostrophe in it is what truncates a reader.
+  const sameLine = withoutComments("const re = /\"([^\"]+)\"/g; // the strip's widths\nnext();");
+  assert.ok(
+    !sameLine.includes("strip's widths"),
+    `a // comment on the SAME line as a regex literal was not stripped (it was read as code): ` +
+      JSON.stringify(sameLine),
+  );
+  assert.ok(sameLine.includes("next();"), `the line after it was lost: ${JSON.stringify(sameLine)}`);
+  assert.ok(
+    sameLine.includes('/"([^"]+)"/g'),
+    `the regex literal itself was removed: ${JSON.stringify(sameLine)}`,
+  );
+
+  // The other direction: a `/` after an identifier is DIVISION, not a regex. A
+  // stripper that guessed "regex" there would swallow code up to the next `/`
+  // and turn a real visit into a missing one.
+  const division = withoutComments(
+    "const half = WIDTH / 2; // the strip's width\nconst cls = /[\\s/]/.test(half);",
+  );
+  assert.ok(
+    division.includes("WIDTH / 2;"),
+    `a division was read as a regex literal and its code removed: ${JSON.stringify(division)}`,
+  );
+  assert.ok(
+    !division.includes("strip's width"),
+    `the comment after a division was not stripped: ${JSON.stringify(division)}`,
+  );
+  assert.ok(
+    division.includes("/[\\s/]/"),
+    `a regex character class carrying a \`/\` was cut short: ${JSON.stringify(division)}`,
+  );
+});
+
+/**
+ * A stray apostrophe in JSX text (or in anything this scanner cannot parse as
+ * code — the /settings redirect table is read out of the pages under
+ * `src/app`) must not swallow the REST OF THE FILE. A JS single-line string
+ * cannot carry a raw newline, so an unterminated one ends at the newline; before
+ * that bound, the apostrophe in `Don't` opened a "string" that ran to EOF and
+ * every comment after it was read as code (the same shape as the regex desync
+ * above).
+ */
+test("an apostrophe in JSX text cannot swallow the rest of the file", () => {
+  const out = withoutComments("<p>Don't ship it</p>\nconst n = 1; // a note here\n");
+  assert.ok(out.includes("Don't ship it"), `the JSX text itself was removed: ${JSON.stringify(out)}`);
+  assert.ok(
+    !out.includes("a note here"),
+    `the comment after the apostrophe was read as code: ${JSON.stringify(out)}`,
+  );
+  assert.ok(out.includes("const n = 1;"), `real code after the apostrophe was removed: ${JSON.stringify(out)}`);
+});
+
+/**
+ * The same defect, measured against the REAL /settings spec: one apostrophe in
+ * one `//` comment inside `walkEveryPanel`, in memory only (this arm never edits
+ * the file on disk). The parsed body must be IDENTICAL — a word inside a comment
+ * cannot change what the walk is.
+ */
+test("an apostrophe in a // comment inside walkEveryPanel does not truncate the walk", () => {
+  const src = readFileSync(`${E2E_DIR}/${SETTINGS_PANEL_SPEC}`, "utf8");
+  const walkAt = src.search(/\bfunction\s+walkEveryPanel\s*\(/);
+  assert.ok(walkAt > 0, `${SETTINGS_PANEL_SPEC} has no walkEveryPanel() definition to mutate`);
+  const commentAt = src.indexOf("//", walkAt);
+  assert.ok(
+    commentAt > walkAt,
+    `${SETTINGS_PANEL_SPEC}'s walkEveryPanel() carries no // comment — re-point this arm at its new shape ` +
+      `rather than deleting it, or the desync it pins goes unwatched`,
+  );
+
+  const mutated = `${src.slice(0, commentAt + 2)} production's ${src.slice(commentAt + 2)}`;
+  assert.notEqual(mutated, src, "the apostrophe was not injected — this arm would be vacuous");
+
+  const plain = functionBody(src, "walkEveryPanel");
+  const walk = functionBody(mutated, "walkEveryPanel");
+  assert.ok(
+    walk,
+    "ONE apostrophe inside a // comment made functionBody() lose walkEveryPanel() entirely: a comment was " +
+      "read as code because a regex had already desynced the quote state (t_40a45814)",
+  );
+  assert.equal(
+    walk,
+    plain,
+    "a word inside a comment changed the parsed body of walkEveryPanel() — comments are being read as code",
+  );
+  assert.match(walk!, /\bselectTab\s*\(/, "the parsed walk lost selectTab(");
+  assert.match(walk!, /\bscanPanel\s*\(/, "the parsed walk lost scanPanel(");
+});
 
 /** The FIRST argument of every `goto(` call in `src`, as the source text it was
  *  written as. Reads the argument list rather than the file: the second argument
@@ -309,18 +558,12 @@ function gotoArguments(src: string): string[] {
     const open = m.index + m[0].length - 1;
     let i = open + 1;
     let depth = 0;
-    let quote: string | null = null;
     for (; i < text.length; i++) {
+      if (startsLiteral(text, i)) {
+        i = literalEnd(text, i) - 1;
+        continue;
+      }
       const c = text[i];
-      if (quote) {
-        if (c === "\\") i++;
-        else if (c === quote) quote = null;
-        continue;
-      }
-      if (c === '"' || c === "'" || c === "`") {
-        quote = c;
-        continue;
-      }
       if (c === "(") depth++;
       else if (c === ")") {
         if (depth === 0) break;
@@ -637,19 +880,13 @@ function chainScope(chain: string): ScanScope {
 function callArguments(src: string, open: number): string[] | null {
   const args: string[] = [];
   let depth = 0;
-  let quote: string | null = null;
   let start = open + 1;
   for (let i = open + 1; i < src.length; i++) {
+    if (startsLiteral(src, i)) {
+      i = literalEnd(src, i) - 1;
+      continue;
+    }
     const c = src[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-      continue;
-    }
     if (c === "(" || c === "[" || c === "{") depth++;
     else if (c === ")" || c === "]" || c === "}") {
       if (depth === 0) {
@@ -822,18 +1059,12 @@ function functionBody(src: string, name: string): string | null {
   const open = text.indexOf("{", at);
   if (open < 0) return null;
   let depth = 0;
-  let quote: string | null = null;
   for (let i = open; i < text.length; i++) {
+    if (startsLiteral(text, i)) {
+      i = literalEnd(text, i) - 1;
+      continue;
+    }
     const c = text[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-      continue;
-    }
     if (c === "{") depth++;
     else if (c === "}") {
       depth--;

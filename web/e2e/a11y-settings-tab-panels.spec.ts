@@ -255,6 +255,44 @@ const DELIVERIES = [
   },
 ];
 
+/** Production carries 27 BNM rates (measured on v1.51.0, workspace `wan`), and the
+ *  COUNT is what puts the currency panel rates box into the state this spec
+ *  exists to scan (card t_8b4297e8). This stub shipped TWO rates, which never
+ *  exceed the box `max-h-64`, so `scrollable-region-focusable` — the serious
+ *  violation the box really had at 390px — was never evaluated on it and the
+ *  arm read green over a container that is not clean in production. Keep the
+ *  list at the production population: `readCurrencyGrid` pins the rendered tile
+ *  count to it at both widths. */
+const CURRENCY_RATES = [
+  { currency_code: "USD", unit: 1, rate: 0.2128 },
+  { currency_code: "SGD", unit: 1, rate: 0.2874 },
+  { currency_code: "EUR", unit: 1, rate: 0.1965 },
+  { currency_code: "GBP", unit: 1, rate: 0.1682 },
+  { currency_code: "JPY", unit: 100, rate: 3.1874 },
+  { currency_code: "CNY", unit: 1, rate: 1.5412 },
+  { currency_code: "HKD", unit: 1, rate: 1.6612 },
+  { currency_code: "AUD", unit: 1, rate: 0.3241 },
+  { currency_code: "CAD", unit: 1, rate: 0.2903 },
+  { currency_code: "CHF", unit: 1, rate: 0.1876 },
+  { currency_code: "BND", unit: 1, rate: 0.2871 },
+  { currency_code: "AED", unit: 1, rate: 0.7813 },
+  { currency_code: "SAR", unit: 1, rate: 0.7982 },
+  { currency_code: "QAR", unit: 1, rate: 0.7746 },
+  { currency_code: "KWD", unit: 1, rate: 0.0654 },
+  { currency_code: "THB", unit: 1, rate: 7.2418 },
+  { currency_code: "IDR", unit: 1000, rate: 3.3512 },
+  { currency_code: "PHP", unit: 1, rate: 12.0841 },
+  { currency_code: "INR", unit: 1, rate: 17.7326 },
+  { currency_code: "PKR", unit: 1, rate: 59.1420 },
+  { currency_code: "BDT", unit: 1, rate: 25.6811 },
+  { currency_code: "LKR", unit: 1, rate: 65.4420 },
+  { currency_code: "NPR", unit: 1, rate: 28.3741 },
+  { currency_code: "VND", unit: 1000, rate: 5.4812 },
+  { currency_code: "KRW", unit: 100, rate: 297.4412 },
+  { currency_code: "TWD", unit: 1, rate: 6.8114 },
+  { currency_code: "NZD", unit: 1, rate: 0.3542 },
+];
+
 const BUNDLE = {
   me: ME,
   workspaces: WORKSPACES,
@@ -405,10 +443,8 @@ async function stubAPI(page: Page): Promise<void> {
   await page.route(/(.*)\/api\/rest\/currency\/rates$/, (r) =>
     r.fulfill(
       json({
-        rates: [
-          { currency_code: "USD", unit: 1, rate: 0.21 },
-          { currency_code: "SGD", unit: 1, rate: 0.29 },
-        ],
+        // Production's population, not two rows — see CURRENCY_RATES.
+        rates: CURRENCY_RATES,
         cached: false,
       }),
     ),
@@ -536,6 +572,44 @@ async function scanPanel(page: Page, what: string): Promise<string[]> {
   return blockers.map((v) => `${what}: ${v.id} (${v.impact}) × ${v.nodes.length}`);
 }
 
+/**
+ * The CURRENCY panel rates box, read out of the live DOM (card t_8b4297e8).
+ *
+ * WHY IT IS READ AT ALL. `scrollable-region-focusable` only fires on an element
+ * that really overflows, so the arm is only evidence when the stub renders the
+ * production rate count and the box is actually a scroll container at the width
+ * being walked. Measured on the pre-fix tree at 390x844 with these 27 rates: the
+ * box holds 27 tiles in TWO columns, 406px of rows inside a 256px `max-h-64`,
+ * i.e. ~150px that a keyboard user could not reach — the exact serious
+ * violation this card fixes. `tiles` is pinned to the stub at BOTH widths (a
+ * shrunk stub re-vacates the scan), and the scroll / tab-stop / name readings
+ * are pinned at 390px, where the overflow is guaranteed.
+ */
+async function readCurrencyGrid(
+  page: Page,
+): Promise<{ tiles: number; scrolls: boolean; tabStop: boolean; name: string; clientHeight: number; scrollHeight: number }> {
+  return (await page.evaluate(`(() => {
+    const panel = document.getElementById("set-panel-currency");
+    const el = panel ? panel.querySelector("[data-testid=currency-rates-grid]") : null;
+    if (!el) return { tiles: -1, scrolls: false, tabStop: false, name: "", clientHeight: 0, scrollHeight: 0 };
+    return {
+      tiles: el.children.length,
+      scrolls: el.scrollHeight > el.clientHeight + 1 && getComputedStyle(el).overflowY !== "visible",
+      tabStop: el.tabIndex >= 0,
+      name: el.getAttribute("aria-label") || "",
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight,
+    };
+  })()`)) as {
+    tiles: number;
+    scrolls: boolean;
+    tabStop: boolean;
+    name: string;
+    clientHeight: number;
+    scrollHeight: number;
+  };
+}
+
 /** Walks every declared tab at one width and scans each panel. */
 async function walkEveryPanel(page: Page, baseURL: string | undefined, width: number): Promise<void> {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
@@ -560,6 +634,84 @@ async function walkEveryPanel(page: Page, baseURL: string | undefined, width: nu
         `populated panel's controls are what the scan is for`,
     ).toBeGreaterThanOrEqual(floor.controls);
     console.log(`[/settings ${width}px] ${id}: text=${panel.text} controls=${panel.controls} heading=${JSON.stringify(panel.heading)}`);
+    // THE CURRENCY SCROLL WITNESS (card t_8b4297e8): the stub must render the
+    // rate count production carries, and at the phone width the box must really
+    // be the scroll container `scrollable-region-focusable` is about —
+    // reachable by the keyboard and announced by name. A green axe reading over
+    // a box that never overflows is the vacuity this card was filed for.
+    if (id === "currency") {
+      const grid = await readCurrencyGrid(page);
+      console.log(
+        `[/settings ${width}px] currency rates box: tiles=${grid.tiles} scrolls=${grid.scrolls} ` +
+          `client=${grid.clientHeight} scroll=${grid.scrollHeight} tabStop=${grid.tabStop} ` +
+          `name=${JSON.stringify(grid.name)}`,
+      );
+      expect(
+        grid.tiles,
+        `the currency panel rendered ${grid.tiles} rate tile(s) where the stub carries ${CURRENCY_RATES.length} — ` +
+          `the COUNT is what makes the rates box a scroll container at 390px (production carries 27), and a ` +
+          `short table leaves \`scrollable-region-focusable\` nothing to evaluate on it`,
+      ).toBe(CURRENCY_RATES.length);
+      if (width === 390) {
+        expect(
+          grid.scrolls,
+          `the currency rates box does not overflow at 390px (${grid.tiles} tiles) — with the real rate count ` +
+            `it does, and that overflow is the serious axe violation this arm exists to see`,
+        ).toBe(true);
+        expect(
+          grid.tabStop,
+          `the scrollable currency rates box has no tab stop (tabIndex < 0) — a keyboard user cannot scroll it, ` +
+            `which is exactly the \`scrollable-region-focusable\` violation (WCAG 2.1.1)`,
+        ).toBe(true);
+        expect(
+          grid.name,
+          `the scrollable currency rates box carries no accessible name (aria-label is empty) — a focusable box ` +
+            `is announced as a bare group; it must say what it holds`,
+        ).toBe(DICT["set.currencyRates"].en);
+
+        // …and it really takes focus: `tabIndex >= 0` is the ATTRIBUTE, this is the
+        // tab stop a keyboard user lands on (the same reading
+        // `e2e/a11y-scroll-regions.spec.ts` takes of the /mcp and /design boxes).
+        const focused = (await page.evaluate(`(() => {
+          const panel = document.getElementById("set-panel-currency");
+          const el = panel ? panel.querySelector("[data-testid=currency-rates-grid]") : null;
+          if (!el) return "no rates box in the currency panel";
+          el.focus();
+          return document.activeElement === el
+            ? ""
+            : "focus landed on " + (document.activeElement ? document.activeElement.tagName : "nothing");
+        })()`)) as string;
+        expect(focused, `focusing the currency rates box did not make it the active element: ${focused}`).toBe("");
+
+        // THE CONTROL, the same probe `e2e/a11y-scroll-regions.spec.ts` runs: strip
+        // the tab stop off the REAL box and require the gate scan to name
+        // `scrollable-region-focusable` on exactly that node, then put the tab stop
+        // back. Without this half a green reading could be a scan of a rule that
+        // never ran on this container — which is precisely the vacuity this card
+        // was filed for.
+        const stripped = (await page.evaluate(`(() => {
+          const panel = document.getElementById("set-panel-currency");
+          const el = panel ? panel.querySelector("[data-testid=currency-rates-grid]") : null;
+          if (!el) return "no rates box in the currency panel";
+          el.removeAttribute("tabindex");
+          return el.tabIndex === -1 ? "" : "tabIndex still " + el.tabIndex;
+        })()`)) as string;
+        expect(stripped, `the control could not strip the tab stop off the currency rates box: ${stripped}`).toBe("");
+        const scoped = blockersOf(await gateScan(page, "#set-panel-currency")).map(
+          (v) => `${v.id} (${v.impact}) × ${v.nodes.length}`,
+        );
+        expect(
+          scoped,
+          `with the tab stop removed the gate scan must name scrollable-region-focusable on the currency rates box — ` +
+            `it read ${JSON.stringify(scoped)} instead, so the clean reading above is not evidence for that rule`,
+        ).toContain("scrollable-region-focusable (serious) × 1");
+        await page.evaluate(`(() => {
+          const panel = document.getElementById("set-panel-currency");
+          const el = panel ? panel.querySelector("[data-testid=currency-rates-grid]") : null;
+          if (el) el.setAttribute("tabindex", "0");
+        })()`);
+      }
+    }
     failures.push(...(await scanPanel(page, `/settings → ${id} @${width}px`)));
   }
   expect(seen, `the walk must have read all ${TAB_IDS.length} declared panels`).toHaveLength(TAB_IDS.length);

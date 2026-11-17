@@ -3850,7 +3850,29 @@ export default function Settings() {
                 {t("set.currencyRatesHint")} <span className="text-[var(--jf-muted)]">({ratesCached ? t("set.currencyCached") : t("set.currencyFresh")})</span>
               </p>
               {rates.length > 0 ? (
-                <div className="mt-2 grid max-h-64 grid-cols-2 gap-x-6 overflow-y-auto sm:grid-cols-3">
+                /* Card t_8b4297e8: this box is a SCROLL CONTAINER at a phone
+                   width and had no tab stop. `max-h-64` (256px) caps it while
+                   the rates grid lays out two columns at 390px, so a workspace
+                   with a real BNM table (production carries 27 rates) overflows
+                   it by ~150px — and a scroll container with no focusable child
+                   cannot be scrolled from the keyboard (WCAG 2.1.1). axe 4.13.0
+                   reports `scrollable-region-focusable` (serious) on exactly
+                   this node at 390x844, and was silently green at 1440x900,
+                   where three columns fit. `tabIndex={0}` is the tab stop;
+                   `role="region"` + the dictionary name is what axe asks for,
+                   so the box is announced by what it holds rather than as a
+                   bare group. Same shape as the /mcp snippet box (card
+                   t_804040d3). e2e/a11y-settings-tab-panels.spec.ts now stubs
+                   production's rate count and reads this box at 390px.
+                   The global `:focus-visible` ring (globals.css) paints the
+                   focus state — no per-element ring needed. */
+                <div
+                  data-testid="currency-rates-grid"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={t("set.currencyRates")}
+                  className="mt-2 grid max-h-64 grid-cols-2 gap-x-6 overflow-y-auto sm:grid-cols-3"
+                >
                   {rates.map((r) => (
                     <div key={r.currency_code} className="flex items-center justify-between border-b border-[var(--jf-border)] py-1 text-sm">
                       <span className="font-medium text-[var(--jf-text-secondary)]">{r.currency_code}</span>
