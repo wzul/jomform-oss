@@ -18,7 +18,7 @@
 | Backend | Go | 1.26.x |
 | DB | PostgreSQL | 18.x (18.6) |
 | Cache/queue | Valkey (bukan Redis) | 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Storage | S3-compatible: SeaweedFS (self-host) atau R2 | `chrislusf/seaweedfs` (Apache-2.0). Image MinIO **tidak lagi boleh di-pull** (lihat Risiko) |
+| Storage | S3-compatible: RustFS (self-host) atau R2 | `rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a` (digest-pinned; tag sahaja tidak cukup) |
 | Dashboard + builder | Next.js | 16.4.2 (security release, Oct 2026 — patched for GHSA-2464-fhr4-w9xw, GHSA-p3m5-59mp-jv5r, GHSA-673q-mjm6-r5xr) |
 | UI kit | Tailwind CSS + shadcn/ui | latest |
 | MCP SDK | `github.com/modelcontextprotocol/go-sdk` | v1.7.x (official) |
@@ -135,8 +135,8 @@ audit_logs(id, account_id FK, actor, action, entity, entity_id, diff jsonb, crea
 
 ## 7. Deployment (plain server + Traefik)
 
-- `deploy/docker-compose.yml`: api · web · caddy · postgres:18 · valkey:9.1-alpine · s3 (SeaweedFS; bucket dicipta oleh API masa startup, tiada init container)
-- S3 endpoint internal sahaja (`s3:8333`); media diserve melalui route `/media/` API; volume persisten (`s3data`); Caddy satu-satunya yang publish port
+- `deploy/docker-compose.yml`: api · web · caddy · postgres:18 · valkey:9.1-alpine · rustfs (RustFS, pinned by digest; bucket dicipta oleh API masa startup, tiada init container)
+- S3 endpoint internal sahaja (`rustfs:9000`); media diserve melalui route `/media/` API; volume persisten (`rustfsdata`); Caddy satu-satunya yang publish port
 - Production vars: `DATABASE_URL`, `VALKEY_URL`, `S3_ENDPOINT/KEY/SECRET/BUCKET`, `CHIP_*` tiada global (per-account), `ENCRYPTION_KEY` (AES-GCM untuk chip_secret_key_enc)
 - Health checks: `/healthz` api, `/readyz` DB+Valkey+S3
 - Backups: `pg_dump` nightly + S3 offsite; arkib volume `/data` object store (versi objek tidak diarkibkan, hanya objek semasa)
@@ -152,7 +152,6 @@ Persekitaran sekarang: VPS IPv4 `203.0.113.11`, IPv6 `2407:3640:2318:7266::1`. C
 | A | `www` | `203.0.113.11` | Proxied |
 | A | `app` (dashboard) | `203.0.113.11` | Proxied (atau CNAME app→@) |
 | A | `api` | `203.0.113.11` | DNS-only (webhook CHIP + MCP perlu direct; pastikan TLS ok) |
-| A | `s3` | `203.0.113.11` | DNS-only (jika expose MinIO) |
 | CNAME | `f` | `@` (wildcard alternatif: `*.jomform.com`) | Proxied — form subdomain per-merchant: `<slug>.jomform.com` lebih baik: wildcard A record juga ke IP sama |
 
 Nota: wildcard `*.jomform.com` → host borang per-merchant; api & s3 DNS-only supaya webhook delivery & S3 signature tidak terganggu Cloudflare proxy. Aktifkan **DNSSEC** once deployed. IP boleh berubah bila deploy — aku sahkan semula sebelum beri arahan DNS akhir.
@@ -168,7 +167,7 @@ Nota: wildcard `*.jomform.com` → host borang per-merchant; api & s3 DNS-only s
 
 | Risiko | Mitigasi |
 |---|---|
-| Image MinIO ditarik balik dari Docker Hub (Oct 2025) | `minio/minio:latest` dan `minio/mc:latest` menjawab `denied` pada `docker manifest inspect` (measured 2026-11-03), jadi compose yang menyebutnya **gagal pada `docker compose up`** di host baharu. Ditukar kepada SeaweedFS (`chrislusf/seaweedfs`, Apache-2.0) dalam kedua-dua `deploy/vps/compose.prod.yml` dan `deploy/docker-compose.yml`; bucket dicipta oleh API. Host prod sedia ada: `deploy/vps/migrate-media.sh` (copy melalui S3 API, verify count+bytes) — lihat `deploy/HOST-SETUP.md` |
+| Object store bergerak / image tidak boleh di-pull | Object store ialah RustFS, **pinned by digest** (`rustfs/rustfs:1.0.6@sha256:ee71…`) dalam kedua-dua `deploy/vps/compose.prod.yml` dan `deploy/docker-compose.yml`; tag sahaja boleh di-repush, digest tidak. Bucket dicipta oleh API. Host sedia ada yang masih guna store lain: `deploy/vps/migrate-media.sh` (copy melalui S3 API, verify count+bytes) — lihat `deploy/HOST-SETUP.md`. `api/internal/objstore/compose_store_pin_test.go` gagalkan build kalau ada store lain atau digest hilang |
 | Valkey go client maturity | Pakai go-redis/v9 (battle-tested, RESP sama); valkey-go sebagai option kedua |
 | MCP SDK changes fast | Pin version go.mod; subscribe releases |
 | Tokenization card-only | Semua product subscription UI kena communicate "subskripsi = kad sahaja" (CHIP constraint); FPX tak boleh recurring |

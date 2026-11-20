@@ -31,7 +31,7 @@ prices, sales, refunds, analytics — without opening a dashboard.
 - Go 1.26 backend (REST + MCP server + worker)
 - PostgreSQL 18
 - Valkey 9 (cache/queue)
-- MinIO / S3-compatible object storage (Cloudflare R2 supported)
+- RustFS / S3-compatible object storage (Cloudflare R2 supported)
 - Next.js 16 dashboard + form builder
 
 ## 2. Key pages

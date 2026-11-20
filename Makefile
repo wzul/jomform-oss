@@ -29,7 +29,7 @@ tidy: ## go mod tidy
 dev: ## Run API locally (needs compose deps)
 	cd $(API_DIR) && $(GO) run ./cmd/jomform-api
 
-up: ## Start dev services (PG, Valkey, MinIO)
+up: ## Start dev services (PG, Valkey, RustFS)
 	docker compose -f deploy/docker-compose.yml up -d
 
 down: ## Stop dev services

@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# deploy/vps/migrate-media.sh — copy the media bucket off the old MinIO service
-# onto the SeaweedFS one, and PROVE the objects arrived.
+# deploy/vps/migrate-media.sh — copy the media bucket off a PREVIOUS store onto
+# the RustFS one this repo's compose runs, and PROVE the objects arrived.
 #
-# WHY THIS EXISTS. MinIO's community images were withdrawn (see the header of
-# deploy/vps/compose.prod.yml), so the production stack was moved to SeaweedFS —
-# same S3 API, different on-disk format. SeaweedFS cannot read the `miniodata`
-# volume, so "swap the image and keep the volume" silently serves an EMPTY media
-# store: every uploaded image a form still references 404s. The objects have to
-# be copied THROUGH THE S3 API, which means the old server must still be running
-# when this script runs.
+# WHY THIS EXISTS. Two object stores do not share an on-disk format (see the
+# header of deploy/vps/compose.prod.yml), so "swap the image and keep the volume"
+# silently serves an EMPTY media store: every uploaded image a form still
+# references 404s. The objects have to be copied THROUGH THE S3 API, which means
+# the previous server must still be running when this script runs.
 #
 # ORDER MATTERS, AND IT IS WHY THIS IS A SCRIPT AND NOT A PARAGRAPH:
 #
@@ -16,7 +14,7 @@
 #      archive is the fallback if anything below goes wrong;
 #   2. add S3_ACCESS_KEY / S3_SECRET_KEY to the env file (the new compose fails
 #      closed without them);
-#   3. THIS SCRIPT — it starts the new `s3` service as an EXTRA container in the
+#   3. THIS SCRIPT — it starts the new `rustfs` service as an EXTRA container in
 #      live compose project (-p), copies every object, and verifies count AND
 #      bytes on both sides. The live compose file is NOT touched, and the api
 #      keeps serving media from the old store the whole time: nothing uploads into
@@ -24,8 +22,8 @@
 #   4. only after it prints VERIFIED: install the new compose and let it recreate
 #      the api (`bootstrap-host.sh --force --apply` does both), then
 #      `docker compose up -d --remove-orphans` — the last one is what stops the
-#      old minio container;
-#   5. keep the `jomform_miniodata` volume for a while. Nothing deletes it; do
+#      old store's container;
+#   5. keep the PREVIOUS store's volume for a while. Nothing here deletes it; do
 #      not delete it by hand until the media has been exercised in the browser.
 #
 # WHY -p. `docker compose` derives the project name from the compose FILE's
@@ -44,22 +42,24 @@
 #   deploy/vps/migrate-media.sh --env-file /opt/jomform/.env            # plan
 #   deploy/vps/migrate-media.sh --env-file /opt/jomform/.env --apply    # copy
 #
-#   --apply            actually start the s3 service and copy (default: plan only)
+#   --apply            actually start the rustfs service and copy (default: plan only)
 #   --env-file FILE    credentials for BOTH stores (default /opt/jomform/.env)
 #   --project NAME     the LIVE compose project the new container joins
 #                      (default jomform). `docker compose` would otherwise derive
 #                      it from the compose file's directory and land in a project
 #                      the running stack cannot reach.
 #   --network NAME     the network both stores share (default <project>_internal)
-#   --from URL         old store endpoint (default http://minio:9000)
-#   --to URL           new store endpoint (default http://s3:8333)
+#   --from URL         the PREVIOUS store's endpoint. REQUIRED: there is no
+#                      default for a store this compose does not run.
+#   --to URL           new store endpoint (default http://rustfs:9000)
 #   --bucket NAME      bucket on both sides (default jomform-media)
-#   --from-key K / --from-secret S   old credentials
-#                      (defaults: key `jomform`, secret MINIO_ROOT_PASSWORD —
-#                      the literal pair the old compose used)
+#   --from-key K / --from-secret S   the PREVIOUS store's credentials
+#                      (defaults: key `jomform`; the secret is read from
+#                      OLD_S3_SECRET_KEY in the env file, so it never lands on a
+#                      command line — --from-secret is the override)
 #   --to-key K / --to-secret S       new credentials
 #                      (defaults: S3_ACCESS_KEY / S3_SECRET_KEY from the env file)
-#   --compose FILE     the new compose to start the s3 service from
+#   --compose FILE     the new compose to start the rustfs service from
 #                      (default deploy/vps/compose.prod.yml, i.e. this repo's)
 #   --rclone-image IMG default rclone/rclone:latest
 #   --allow-empty      allow a source bucket that holds 0 objects
@@ -74,8 +74,8 @@ ALLOW_EMPTY=0
 ENV_FILE="/opt/jomform/.env"
 PROJECT="jomform"
 NETWORK=""
-FROM_URL="http://minio:9000"
-TO_URL="http://s3:8333"
+FROM_URL=""
+TO_URL="http://rustfs:9000"
 BUCKET="jomform-media"
 FROM_KEY=""
 FROM_SECRET=""
@@ -125,17 +125,16 @@ env_get() {
 
 # ── 1. preconditions ─────────────────────────────────────────────────────────
 command -v docker >/dev/null 2>&1 || die "docker is not on PATH"
-[ -s "$COMPOSE" ] || die "no compose at $COMPOSE (the new stack is what defines the s3 service)"
+[ -s "$COMPOSE" ] || die "no compose at $COMPOSE (the new stack is what defines the rustfs service)"
 [ -r "$ENV_FILE" ] || die "cannot read the env file '$ENV_FILE' (pass --env-file)"
+[ -n "$FROM_URL" ] || die "--from is required: the PREVIOUS store's S3 endpoint (this script copies off a store the new compose does not run)"
 
-if [ -z "$FROM_SECRET" ]; then
-  FROM_SECRET="$(env_get MINIO_ROOT_PASSWORD)"
-fi
+[ -n "$FROM_SECRET" ] || FROM_SECRET="$(env_get OLD_S3_SECRET_KEY)"
 [ -n "$FROM_KEY" ] || FROM_KEY="jomform"
 [ -n "$TO_KEY" ] || TO_KEY="$(env_get S3_ACCESS_KEY)"
 [ -n "$TO_SECRET" ] || TO_SECRET="$(env_get S3_SECRET_KEY)"
 
-[ -n "$FROM_SECRET" ] || die "$ENV_FILE has no MINIO_ROOT_PASSWORD (nor S3_SECRET_KEY) — the OLD store's secret is what lets this read its objects; add it or pass --from-secret"
+[ -n "$FROM_SECRET" ] || die "$ENV_FILE has no OLD_S3_SECRET_KEY — the PREVIOUS store's secret is what lets this read its objects; add that line (the env file is 0600) or pass --from-secret"
 [ -n "$TO_KEY" ] || die "$ENV_FILE has no S3_ACCESS_KEY — the NEW store authenticates with S3_ACCESS_KEY/S3_SECRET_KEY (see deploy/vps/.env.prod.example); add them or pass --to-key"
 [ -n "$TO_SECRET" ] || die "$ENV_FILE has no S3_SECRET_KEY — add it (openssl rand -hex 32) or pass --to-secret"
 
@@ -172,7 +171,7 @@ echo
 
 if [ "$APPLY" -ne 1 ]; then
   echo "PLAN — nothing has been copied. This would:"
-  echo "  1. docker compose -p $PROJECT -f $COMPOSE up -d s3"
+  echo "  1. docker compose -p $PROJECT -f $COMPOSE up -d rustfs"
   echo "     (start the NEW store INSIDE the live project; the old one keeps serving)"
   echo "  2. rclone mkdir  to:$BUCKET                    (no-op when it exists)"
   echo "  3. rclone copy   from:$BUCKET → to:$BUCKET     (--checksum)"
@@ -187,24 +186,24 @@ fi
 # ── 3. start the new store ───────────────────────────────────────────────────
 # -p is load-bearing: without it compose derives the project from $COMPOSE's
 # directory, creates a SECOND network, and the copy cannot reach the new store.
-info "starting the s3 service in project '$PROJECT' (docker compose -p $PROJECT -f $COMPOSE up -d s3)"
-docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" up -d s3 \
-  || fail "could not start the s3 service (is the env file missing S3_ACCESS_KEY/S3_SECRET_KEY?)"
+info "starting the rustfs service in project '$PROJECT' (docker compose -p $PROJECT -f $COMPOSE up -d rustfs)"
+docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" up -d rustfs \
+  || fail "could not start the rustfs service (is the env file missing S3_ACCESS_KEY/S3_SECRET_KEY?)"
 
 # Wait for it to SERVE, not merely to exist: the healthcheck is an unsigned GET
 # answered with the S3 error document. The try count is a seam so the offline
 # harness does not spend two minutes proving that an unhealthy service stops the
 # run; 60 × 2s is the real value.
 HEALTH_TRIES="${MIGRATE_MEDIA_HEALTH_TRIES:-60}"
-info "waiting for the s3 service to become healthy"
+info "waiting for the rustfs service to become healthy"
 for _ in $(seq 1 "$HEALTH_TRIES"); do
-  state="$(docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" ps --format '{{.Health}}' s3 2>/dev/null | head -n 1 || true)"
+  state="$(docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" ps --format '{{.Health}}' rustfs 2>/dev/null | head -n 1 || true)"
   [ "$state" = "healthy" ] && break
   sleep 2
 done
 if [ "${state:-}" != "healthy" ]; then
-  docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" logs --tail 40 s3 >&2 || true
-  fail "the s3 service never reported healthy (last state: '${state:-unknown}')"
+  docker compose -p "$PROJECT" -f "$COMPOSE" --env-file "$ENV_FILE" logs --tail 40 rustfs >&2 || true
+  fail "the rustfs service never reported healthy (last state: '${state:-unknown}')"
 fi
 
 # ── 4. read both sides before copying ────────────────────────────────────────
@@ -273,13 +272,13 @@ them):
   1. install the new compose and let it recreate the api against the store this
      run just filled:
        deploy/host/bootstrap-host.sh --env-file $ENV_FILE --force --apply
-     (it also runs "compose up -d", i.e. the s3 service becomes a real project
+     (it also runs "compose up -d", i.e. the rustfs service becomes a real project
       service instead of the extra container started here)
   2. curl -fsS https://<your host>/healthz      (api healthy, S3 reachable)
   3. docker compose -p $PROJECT -f /opt/jomform/compose.yml --env-file $ENV_FILE up -d --remove-orphans
      ^ this is what STOPS the old store; until it runs, both are up
   4. load a form that already had an uploaded image: the OLD objects are the ones
      that prove the copy, so check a pre-existing image, not just a fresh upload
-  5. keep the jomform_miniodata volume. Nothing deletes it; do not delete it by
-     hand until the media has been exercised, and keep a backup until then too.
+  5. keep the PREVIOUS store's volume. Nothing here deletes it; do not delete it
+     by hand until the media has been exercised, and keep a backup until then too.
 EOF

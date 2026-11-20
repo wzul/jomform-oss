@@ -32,7 +32,7 @@ Last updated: 1 Sep 2026 (MYT)
 ## 🔜 Next (priority order)
 
 1. **Merchant-facing polish for announce**
-   - Form themes (brand colour, logo upload to MinIO, custom CSS)
+   - Form themes (brand colour, logo upload, custom CSS)
    - Public form success/failure redirect customisable per form
    - Form embed snippet (iframe + JS widget)
 2. **Webhook + integration depth**

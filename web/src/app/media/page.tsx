@@ -18,7 +18,7 @@ import { purgeNotice } from "../../lib/mediaPurge";
 // Issue #180: WordPress-media-library-style Media page. Grid of the
 // merchant's uploaded images (thumbnail + name + date + size), filterable by
 // form and source, with view/copy-URL and soft-delete (also removes the
-// object from MinIO).
+// object from the object store).
 
 type MediaItem = {
   id: string;

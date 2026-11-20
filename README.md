@@ -57,7 +57,7 @@ jomform/
 | MCP server | Official `modelcontextprotocol/go-sdk` (1.7+) — HTTP transport + OAuth, per-account API key scope |
 | DB | PostgreSQL 18.x |
 | Cache/queue | Valkey 9.1.x (`valkey/valkey:9.1-alpine`) |
-| Object storage | Any S3-compatible. Self-host: the bundled SeaweedFS. Cloud: Cloudflare R2, AWS S3 |
+| Object storage | Any S3-compatible. Self-host: the bundled RustFS (pinned by digest). Cloud: Cloudflare R2, AWS S3 |
 | Dashboard/builder | Next.js 16 (Active LTS), Tailwind, shadcn/ui |
 
 ## License

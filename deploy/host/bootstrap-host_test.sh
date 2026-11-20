@@ -8,7 +8,7 @@
 #      manual one; a dry-run that writes (or that is really `--apply` with a
 #      different name) defeats it silently.
 #   2. IT ACCEPTS AN ENV FILE THAT CANNOT WORK. A file that is world-readable
-#      leaks the DB and MinIO passwords; a file missing a key the compose reads
+#      leaks the DB and object-store passwords; a file missing a key the compose reads
 #      comes up with an EMPTY credential, which the stack reports as nothing at
 #      all. The key list is DERIVED FROM THE COMPOSE, so the case that proves this
 #      plants a key in a COPY of the compose and expects the script to name it —
@@ -279,7 +279,7 @@ run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/nope.env"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/empty.env"
 [ "$RC" -ne 0 ] && ok "empty file refused (exit=$RC)" || bad "empty file accepted"
 
-echo "case: a WORLD-READABLE env file is refused (it holds the DB/MinIO passwords)"
+echo "case: a WORLD-READABLE env file is refused (it holds the DB/object-store passwords)"
 cp "$WORK/good.env" "$WORK/loose.env"; chmod 644 "$WORK/loose.env"
 run "$WORK/bin" --root "$WORK/opt" --env-file "$WORK/loose.env"
 [ "$RC" -ne 0 ] && ok "exit code (exit=$RC)" || bad "accepted a mode-644 credential file"
@@ -312,7 +312,7 @@ if [ "${API_KEYS_N:-0}" -lt 10 ] || [ "${READ_KEYS_N:-0}" -lt 10 ]; then
 else
   ok "derived $API_KEYS_N api-service key(s) from the compose and $READ_KEYS_N name(s) read by api/ source"
 fi
-LEAKED="$(printf '%s\n' "$API_KEYS" | grep -xE 'POSTGRES_PASSWORD|MINIO_ROOT_PASSWORD|JOMFORM_API_URL' || true)"
+LEAKED="$(printf '%s\n' "$API_KEYS" | grep -xE 'POSTGRES_PASSWORD|JOMFORM_API_URL' || true)"
 [ -z "$LEAKED" ] && ok "the key set is SCOPED to the api block (no other service's env is demanded of the API)" \
   || bad "the api key set includes another service's key(s): $(printf '%s' "$LEAKED" | tr '\n' ' ')"
 # The one escape hatch, and it is deliberately empty: a key belongs here only when
@@ -488,33 +488,47 @@ WITHDRAWN_INIT="$(grep -nE '^  minio-init:' "$COMPOSE" || true)"
 [ -z "$WITHDRAWN_INIT" ] && ok "the minio-init one-shot (which needed minio/mc) is gone" \
   || bad "the prod compose still defines minio-init, whose only image is minio/mc: $WITHDRAWN_INIT"
 
-S3_IMAGE="$(awk '/^  s3:/{f=1;next} f&&/^    image:/{print $2; exit}' "$COMPOSE")"
+# digest_pinned <image> — true only when the image carries an @sha256: digest.
+digest_pinned() { case "${1:-}" in *@sha256:*) return 0 ;; *) return 1 ;; esac; }
+S3_IMAGE="$(awk '/^  rustfs:/{f=1;next} f&&/^    image:/{print $2; exit}' "$COMPOSE")"
 case "$S3_IMAGE" in
-  chrislusf/seaweedfs:*) ok "the object store is the same SeaweedFS image the self-host stack uses ($S3_IMAGE)" ;;
-  "")                    bad "the prod compose has no s3 service — the api's S3_ENDPOINT would point at nothing" ;;
-  *)                     bad "the object store image is '$S3_IMAGE' — expected chrislusf/seaweedfs:<pinned tag>" ;;
+  rustfs/rustfs:*) ok "the object store is RustFS, the same image the self-host stack uses ($S3_IMAGE)" ;;
+  "")              bad "the prod compose has no rustfs service — the api's S3_ENDPOINT would point at nothing" ;;
+  *)               bad "the object store image is '$S3_IMAGE' — expected rustfs/rustfs:<version>@sha256:<digest>" ;;
 esac
-case "$S3_IMAGE" in
-  *:latest|"") : ;;
-  *) ok "that image tag is PINNED, not floating (:latest is what made the old one silently unpullable)" ;;
-esac
+if digest_pinned "$S3_IMAGE"; then
+  ok "that image is PINNED BY DIGEST — a tag alone can be re-pushed under the data"
+else
+  bad "the object store image '$S3_IMAGE' carries no @sha256 digest — the pin is only a movable tag"
+fi
 
 echo "case: that assertion BITES — a planted withdrawn image is found"
-sed 's|^    image: chrislusf/seaweedfs:.*$|    image: minio/minio:latest|' "$COMPOSE" > "$WORK/compose.withdrawn.yml"
+sed 's|^    image: rustfs/rustfs:.*$|    image: minio/minio:latest|' "$COMPOSE" > "$WORK/compose.withdrawn.yml"
 PLANTED_WITHDRAWN="$(grep -nE '^[[:space:]]*image:[[:space:]]*(minio/|quay\.io/minio/)' "$WORK/compose.withdrawn.yml" || true)"
 [ -n "$PLANTED_WITHDRAWN" ] \
   && ok "a planted minio/minio image IS named by the check ($PLANTED_WITHDRAWN)" \
   || bad "the mutation did not apply — the assertion above would pass vacuously"
+
+echo "case: that digest assertion BITES — a tag substituted for the digest is caught"
+sed 's|^    image: rustfs/rustfs:\([0-9.]*\)@sha256:.*$|    image: rustfs/rustfs:\1|' "$COMPOSE" > "$WORK/compose.tag.yml"
+TAG_IMAGE="$(awk '/^  rustfs:/{f=1;next} f&&/^    image:/{print $2; exit}' "$WORK/compose.tag.yml")"
+[ -n "$TAG_IMAGE" ] && ok "the mutation applied (image is now '$TAG_IMAGE')" \
+  || bad "the mutation did not apply — the digest assertion above would pass vacuously"
+if digest_pinned "$TAG_IMAGE"; then
+  bad "a tag-only image ('$TAG_IMAGE') was accepted as digest-pinned"
+else
+  ok "a tag-only image ('$TAG_IMAGE') is REJECTED by the same predicate"
+fi
 
 echo "case: the api waits for the object store it provisions its bucket on"
 API_BLOCK="$(awk '/^  [A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(/:$/,"",svc); in_svc=(svc=="api"); next} in_svc {print}' "$COMPOSE")"
 if [ -z "$API_BLOCK" ]; then
   bad "could not find the api service block in the prod compose"
 else
-  S3_DEP_NEXT="$(awk '/^      s3:$/ {getline; print; exit}' <<<"$API_BLOCK")"
+  S3_DEP_NEXT="$(awk '/^      rustfs:$/ {getline; print; exit}' <<<"$API_BLOCK")"
   [ "$S3_DEP_NEXT" = "        condition: service_healthy" ] \
-    && ok "api depends_on s3 with service_healthy (a failed EnsureBucket disables uploads for the process's life)" \
-    || bad "api does not wait for a healthy s3 (found: '${S3_DEP_NEXT:-no s3 dependency}')"
+    && ok "api depends_on rustfs with service_healthy (a failed EnsureBucket disables uploads for the process's life)" \
+    || bad "api does not wait for a healthy rustfs (found: '${S3_DEP_NEXT:-no rustfs dependency}')"
 fi
 
 echo "case: docker compose ACCEPTS the prod compose with a generated env, with no warning and no null value"
@@ -562,8 +576,8 @@ has "$OUT" "PLANTED_9KEY" && ok "the message names PLANTED_9KEY exactly (not a t
 
 echo "case: the backup's object-store label names a service the prod compose DEFINES"
 # The nightly backup archives the object store's /data volume by resolving the
-# container from a compose LABEL. Rename the service (minio → s3) without
-# updating that label and the 02:17 job fails every night.
+# container from a compose LABEL. Rename the service without updating that label
+# and the 02:17 job fails every night.
 BACKUP_SCRIPT="$HERE/../backup/jomform-backup.sh"
 if [ ! -s "$BACKUP_SCRIPT" ]; then
   bad "deploy/backup/jomform-backup.sh is missing — the media archive cannot be checked"
@@ -583,9 +597,9 @@ else
       fi
     done <<<"$LABEL_SERVICES"
     [ "$MATCHED" -eq 1 ] || bad "no label in S3_SERVICE_LABELS names a service the prod compose defines (labels: $(printf '%s' "$LABEL_SERVICES" | tr '\n' ' '))"
-    has_line "$SERVICES" "minio" \
-      && bad "the prod compose still defines a 'minio' service — the label fallback cannot be proven to bite" \
-      || ok "the old 'minio' label is no longer a service here, so the label check bites on that regression"
+    has_line "$SERVICES" "s3" \
+      && bad "the prod compose still defines an 's3' service — the label check cannot be proven to bite" \
+      || ok "no service is called 's3' any more, so a label naming the old name would be caught above"
   fi
 fi
 

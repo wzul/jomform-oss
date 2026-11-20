@@ -1,27 +1,37 @@
-# JomForm production stack (Dokploy) — api + web + pg18 + valkey + S3 (SeaweedFS)
+# JomForm production stack (Dokploy) — api + web + pg18 + valkey + S3 (RustFS)
 # All images local (built on host) or pinned public images.
 #
-# WHY SEAWEEDFS AND NOT MINIO (measured 2026-11-03). MinIO's community images are
-# not published any more: `docker manifest inspect minio/minio:latest` and
-# `minio/mc:latest` both answer `denied: requested access to the resource is
-# denied` on Docker Hub, and `quay.io/minio/minio:latest` has no such manifest.
-# A stack that names them cannot be stood up on a fresh host — `docker compose
-# up` aborts at the pull, before anything starts — and the `minio-init` one-shot
-# had the same problem with `minio/mc`. SeaweedFS is Apache-2.0, publishes a
-# public image, and speaks the S3 API this stack needs (the same substitution
-# deploy/docker-compose.yml made for the self-hosted install).
+# THE OBJECT STORE IS RUSTFS, PINNED BY DIGEST (measured 2026-11-20):
+#
+#   rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
+#
+# The tag alone is not a pin — it can be re-pushed — so the digest is what this
+# file ships: a `compose pull` on a fresh host cannot move the store under the
+# data. 1.0.6 is the version verified on staging and then on production against
+# the four S3 operations this app actually performs (PutObject / GetObject /
+# DeleteObject / HeadObject), and against a real asset fetched through
+# https://jomform.com/media/... after the media copy (byte-identical).
+#
+# WHY NOT THE STORE THIS FILE USED TO NAME. The community MinIO images are no
+# longer published (source-only since Oct 2025), so `docker compose up` on a
+# compose that names them aborts at the PULL on a fresh host, before anything
+# starts — and a stack that names an image nobody can pull is not deployable.
+# Every object-store image in this file must be digest-pinned; that is enforced
+# by api/internal/objstore/compose_store_pin_test.go, not by this comment.
 #
 # THE BUCKET IS NOT PROVISIONED HERE. The API creates it at startup
-# (objstore.EnsureBucket: HeadBucket → CreateBucket → PutBucketPolicy), so
-# `minio-init` — the container that used to run `mc mb` — has nothing left to do.
+# (objstore.EnsureBucket: HeadBucket → CreateBucket → PutBucketPolicy), so the
+# one-shot `mc` init container this stack used to carry has nothing left to do.
+# RustFS needs no init container. Bucket VERSIONING IS OFF on purpose: the app
+# never calls the versioning APIs.
 #
-# THE EXISTING HOST'S MEDIA IS NOT CONVERTED BY THIS FILE. MinIO and SeaweedFS do
-# not share an on-disk format, so the `miniodata` volume is not readable by the
-# new service: the objects have to be copied through the S3 API while the old
+# THE EXISTING HOST'S MEDIA IS NOT CONVERTED BY THIS FILE. Two stores do not
+# share an on-disk format, so the previous store's volume is not readable by
+# `rustfs`: the objects have to be copied through the S3 API while the old
 # server is still running. That is deploy/vps/migrate-media.sh, and it must be
 # run BEFORE the first `up` of this file on an existing host — see
-# deploy/HOST-SETUP.md § "Moving production off MinIO". A FRESH host needs none of
-# it: there is no data, and the API creates the bucket.
+# deploy/HOST-SETUP.md § "Moving production onto RustFS". A FRESH host needs none
+# of it: there is no data, and the API creates the bucket.
 
 services:
   postgres:
@@ -58,34 +68,41 @@ services:
       retries: 12
 
   # ── object storage ────────────────────────────────────────────────────────
-  # One process: master + volume + filer + the S3 gateway on 8333. The bucket is
-  # created by the api at startup (see the header), so there is no init service.
+  # One process: the S3 API on 9000 over one local volume. The bucket is created
+  # by the api at startup (see the header), so there is no init service.
+  # INTERNAL ONLY — it is on `internal` and not on `dokploy-network`, so nothing
+  # routes to it from outside; media is served by the api's /media/ route.
   # The secrets are REQUIRED and fail closed (`:?`), so a host whose env file has
   # not been updated refuses to start instead of coming up with empty
   # credentials — which is how a half-finished migration would otherwise look.
-  s3:
-    image: chrislusf/seaweedfs:4.50
+  rustfs:
+    # PINNED BY DIGEST (see the header). The tag names the version a human
+    # verified; the digest is what ships.
+    image: rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
     restart: unless-stopped
-    # -ip.bind=0.0.0.0 so the compose network can reach it; without it the
-    # services advertise 127.0.0.1 and the api's requests land on its own
-    # loopback.
-    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     environment:
       # The S3 identity the api authenticates as. Both sides read the same two
       # values, so they cannot drift into "the bucket exists but nobody may
       # write to it".
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — see deploy/vps/.env.prod.example}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — see deploy/vps/.env.prod.example}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — see deploy/vps/.env.prod.example}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — see deploy/vps/.env.prod.example}
+      # 0.0.0.0, not 127.0.0.1: bound to loopback the api's requests would land
+      # on the api container's own loopback instead of this one.
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_VOLUMES: /data
+      # The web console is a second listener with its own auth surface. Nothing
+      # here needs it and it is not routed, so it stays off.
+      RUSTFS_CONSOLE_ENABLE: "false"
     volumes:
-      - s3data:/data
+      - rustfsdata:/data
     networks:
       - internal
     healthcheck:
       # An UNSIGNED GET / answered with the S3 error document proves the S3
       # handler is serving, not merely that a socket is open: a port check would
-      # pass while the filer is still starting, and the api would then fail its
-      # one-shot bucket provisioning and disable uploads for good.
-      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8333/ | grep -q AccessDenied"]
+      # pass while the store is still initialising, and the api would then fail
+      # its one-shot bucket provisioning and disable uploads for good.
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:9000/ | grep -q AccessDenied"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -97,7 +114,7 @@ services:
     environment:
       DATABASE_URL: postgres://jomform:${POSTGRES_PASSWORD}@postgres:5432/jomform?sslmode=disable
       VALKEY_URL: valkey://valkey:6379/0
-      S3_ENDPOINT: http://s3:8333
+      S3_ENDPOINT: http://rustfs:9000
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — see deploy/vps/.env.prod.example}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — see deploy/vps/.env.prod.example}
       S3_BUCKET: jomform-media
@@ -140,7 +157,7 @@ services:
       # SERVING when it does: a failed EnsureBucket disables the media store for
       # the life of the process (uploads answer 503), so the api must not start
       # while the store is still coming up.
-      s3:
+      rustfs:
         condition: service_healthy
     networks:
       - dokploy-network
@@ -159,10 +176,12 @@ services:
 volumes:
   pgdata:
   valkeydata:
-  # The object store's own data. NOT the old `miniodata`: that volume is MinIO's
-  # on-disk format and this server cannot read it (see the header). It is left in
-  # place, untouched, until the migration has been verified.
-  s3data:
+  # The object store's own data. NOT the volume the previous store used: that
+  # one is a different on-disk format this server cannot read (see the header).
+  # It is deliberately NOT declared here — an undeclared volume is never removed
+  # by `docker compose down -v` — so it stays in place, untouched, on the
+  # existing host until the media has been exercised through RustFS.
+  rustfsdata:
 
 networks:
   dokploy-network:

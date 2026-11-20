@@ -15,7 +15,7 @@ entry; it does **not** run out of the checkout.
 |---|---|---|
 | Postgres dump (custom format, `pg_dump -Fc`, gzipped) | `/var/backups/jomform/jomform-daily-<UTC date>.dump.gz` | `r2jomform:jomform-backup/daily/` |
 | Checksum of the dump | same path + `.sha256` | `r2jomform:jomform-backup/daily/` |
-| Object store's media volume (`/data`, tar+gzip: MinIO before the migration, SeaweedFS after) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `r2jomform:jomform-backup/daily/` |
+| Object store's media volume (RustFS's `/data`, tar+gzip) | `/var/backups/jomform/jomform-daily-<UTC date>-media.tar.gz` | `r2jomform:jomform-backup/daily/` |
 
 Retention: **7 daily**, **4 weekly** and **6 monthly** backup **sets**. One set is
 three files — the dump, its `.sha256` sidecar and the `-media.tar.gz` archive — and
@@ -73,8 +73,9 @@ cd /tmp && sha256sum -c jomform-monthly-<YYYY-MM>.dump.gz.sha256
 **Yes, deliberately.** The object store's `/data` volume holds customer-uploaded
 media. A database-only restore would leave `media` rows pointing at objects that
 no longer exist, so the nightly run archives `/data` as well. The container is
-resolved by compose label (`s3`, the SeaweedFS service; `minio` before the
-migration), so the archive follows the store that is actually running. It is
+resolved by compose label (`rustfs`, the service the shipped compose defines),
+so the archive follows the store that is actually running; a host that renamed
+the service fails loudly at 02:17 rather than archiving the wrong volume. It is
 small — a few MB today — so the cost of including it is negligible next to the
 value of a restore that actually renders the customer's pages. If a future media
 volume grows past ~1 GB, revisit this decision and record it here rather than
@@ -346,11 +347,11 @@ To restore for real, `pg_restore --no-owner` into the target database, then
 extract the media archive back into the **object store's own `/data` volume**:
 
 ```bash
-# SeaweedFS (the current service) — the volume is jomform_s3data
-tar -C /var/lib/docker/volumes/jomform_s3data/_data -xzf jomform-daily-<date>-media.tar.gz
-# an archive taken BEFORE the migration is MinIO's on-disk format: restore it
-# into jomform_miniodata, with the old compose, and copy it across with
-# deploy/vps/migrate-media.sh. The two layouts are not interchangeable.
+# RustFS (the current service) — the volume is jomform_rustfsdata
+tar -C /var/lib/docker/volumes/jomform_rustfsdata/_data -xzf jomform-daily-<date>-media.tar.gz
+# an archive taken BEFORE the move onto RustFS is in the PREVIOUS store's on-disk
+# format: restore it into that store's volume, with that store's compose, and copy
+# it across with deploy/vps/migrate-media.sh. The layouts are not interchangeable.
 ```
 
 ## How failure is made visible

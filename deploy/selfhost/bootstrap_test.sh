@@ -17,11 +17,13 @@
 #
 # WHAT ELSE IS PINNED, and why each one has a real failure behind it:
 #   * the compose must contain the WEB service. The pre-self-host compose shipped
-#     api + postgres + valkey + minio and no web at all, so a stranger could get
-#     an API and no product.
+#     api + postgres + valkey + an object store and no web at all, so a stranger
+#     could get an API and no product.
 #   * nothing but the front door may be published to the host: the API, Postgres,
-#     Valkey and MinIO are reachable only on the compose network. A published
-#     5432/6379/9000 is an unauthenticated database on the internet.
+#     Valkey and the object store are reachable only on the compose network. A
+#     published 5432/6379/9000 is an unauthenticated store on the internet.
+#   * the object store is RustFS and it is pinned by DIGEST, not only by a tag:
+#     a tag can be re-pushed under the data (card t_fc236020).
 #   * the Caddyfile's path split must match what the API actually serves
 #     (/f/, /t/, /v1/, /media/, /embed/, /oauth/, /.well-known/oauth-*, /healthz)
 #     and must NOT swallow /api/ — that is the dashboard's same-origin proxy, and
@@ -115,7 +117,7 @@ printf '%s\n' \
 	"POSTGRES_USER=jomform" \
 	"POSTGRES_PASSWORD=$(printf 'a%.0s' $(seq 1 64))" \
 	"POSTGRES_DB=jomform" \
-	"MINIO_ROOT_USER=jomform" \
+	"S3_ACCESS_KEY=jomform" \
 	"S3_SECRET_KEY=$(printf 'b%.0s' $(seq 1 64))" \
 	"ENCRYPTION_KEY=dev_only_32byte_key_change_me_pls" \
 	"APP_BASE_URL=https://forms.example.test" >"$ENVF"
@@ -316,13 +318,13 @@ SERVICES="$(grep -E '^  [a-z][a-z0-9-]*:$' "$COMPOSE" | tr -d ' :' | tr '\n' ' '
 # the defaults and images that WERE removed, and a guard that reads history as
 # behaviour would force the reason out of the file.
 COMPOSE_CODE="$(grep -vE '^[[:space:]]*#' "$COMPOSE")"
-for svc in caddy web api postgres valkey s3; do
+for svc in caddy web api postgres valkey rustfs; do
 	contains "the stack contains the $svc service" "$SERVICES" "$svc"
 done
 # Only the front door is published. Everything else on the compose network.
 PUBLISHED="$(grep -cE '^\s+- "[0-9$][^"]*:[0-9]+"' "$COMPOSE")"
 check "exactly two published host ports (Caddy's http + https)" 2 "$PUBLISHED"
-for svc in api postgres valkey s3; do
+for svc in api postgres valkey rustfs; do
 	block="$(awk -v s="  $svc:" '$0==s{f=1;next} f&&/^  [a-z]/{f=0} f' "$COMPOSE")"
 	not_contains "$svc publishes no host port" "$block" "ports:"
 done
@@ -334,9 +336,33 @@ check "every long-running service has a healthcheck" 6 "$(grep -c 'healthcheck:'
 # moving part that can only fail.
 not_contains "no one-shot bucket-init service" "$COMPOSE_CODE" "minio-init"
 contains "the api starts only once the S3 endpoint is serving" "$(awk '/^  api:/{f=1} f&&/^  postgres:/{f=0} f' "$COMPOSE")" "service_healthy"
-for gone in 'minio/minio' 'minio/mc' 'MINIO_ROOT'; do
-	not_contains "no unpullable MinIO reference ($gone)" "$COMPOSE_CODE" "$gone"
+for gone in 'minio/minio' 'minio/mc' 'MINIO_ROOT' 'chrislusf'; do
+	not_contains "no other store reference ($gone)" "$COMPOSE_CODE" "$gone"
 done
+# digest_pinned <image> — true only when the image carries an @sha256: digest.
+digest_pinned() { case "${1:-}" in *@sha256:*) return 0 ;; *) return 1 ;; esac; }
+S3_IMAGE="$(awk '/^  rustfs:/{f=1;next} f&&/^    image:/{print $2; exit}' "$COMPOSE")"
+case "$S3_IMAGE" in
+	rustfs/rustfs:*) ok "the object store is RustFS ($S3_IMAGE)" ;;
+	"")              bad "the compose has no rustfs service — the API's S3_ENDPOINT would point at nothing" ;;
+	*)               bad "the object store image is '$S3_IMAGE' — expected rustfs/rustfs:<version>@sha256:<digest>" ;;
+esac
+if digest_pinned "$S3_IMAGE"; then
+	ok "that image is pinned by DIGEST, not only by a movable tag"
+else
+	bad "the object store image '$S3_IMAGE' carries no @sha256 digest — a tag alone can be re-pushed under the data"
+fi
+# BITE: the same predicate must REFUSE a tag-only image, or the line above is a
+# decoration that would pass on anything.
+sed 's|^    image: rustfs/rustfs:.*$|    image: rustfs/rustfs:1.0.6|' "$COMPOSE" >"$SB/compose.tag.yml" 2>/dev/null || true
+TAG_IMAGE="$(awk '/^  rustfs:/{f=1;next} f&&/^    image:/{print $2; exit}' "$SB/compose.tag.yml" 2>/dev/null || true)"
+if [ -z "$TAG_IMAGE" ]; then
+	bad "the digest-bite mutation did not apply"
+elif digest_pinned "$TAG_IMAGE"; then
+	bad "a tag-only image ('$TAG_IMAGE') was accepted as digest-pinned"
+else
+	ok "a tag-only image ('$TAG_IMAGE') is REJECTED by the same assertion"
+fi
 contains "the web image is built from the repo root" "$(awk '/^  web:/{f=1} f&&/^  api:/{f=0} f' "$COMPOSE")" "context: .."
 # Next's standalone server binds to $HOSTNAME (Docker sets it to the container
 # id), so without HOSTNAME=0.0.0.0 it listens on eth0 only and a loopback

@@ -4,7 +4,7 @@ Decision date: 2026-09-01 (after VPS migration to plain-server + Traefik routing
 
 ## Context
 
-JomForm now runs on a dedicated VPS (docker compose: Postgres, Valkey, MinIO, api, web)
+JomForm now runs on a dedicated VPS (docker compose: Postgres, Valkey, RustFS, api, web)
 fronted by Traefik v3 with a file provider. Question raised: why not Caddy, since the Go API
 doesn't need a reverse proxy at all?
 

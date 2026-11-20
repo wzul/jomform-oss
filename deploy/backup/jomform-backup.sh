@@ -68,14 +68,13 @@ KEEP_WEEKLY="${JFBACKUP_KEEP_WEEKLY:-12}"
 KEEP_MONTHLY="${JFBACKUP_KEEP_MONTHLY:-18}"
 MEDIA_ENABLED="${JFBACKUP_MEDIA_ENABLED:-1}"
 PG_SERVICE_LABEL="com.docker.compose.service=postgres"
-# The object store. It is the `s3` service (SeaweedFS) since the MinIO images
-# were withdrawn, and a host that has NOT been migrated yet still runs the old
-# `minio` one — so both labels are tried and whichever container is actually
-# running is the one archived. Backing up the wrong one is not possible: the
-# volume path is resolved from the container that was found. Get this list wrong
-# and the nightly job fails loudly at 02:17 instead of quietly archiving
-# nothing, which is the direction that matters.
-S3_SERVICE_LABELS=("com.docker.compose.service=s3" "com.docker.compose.service=minio")
+# The object store. It is the `rustfs` service in the compose this repo ships.
+# A host that still runs the PREVIOUS store under a different service name is not
+# silently archived from the wrong container: this list finds nothing, and the
+# nightly job fails loudly at 02:17 instead of quietly archiving nothing — which
+# is the direction that matters. Extend this list deliberately if a host is known
+# to run the store under another name, and remove the entry when it is migrated.
+S3_SERVICE_LABELS=("com.docker.compose.service=rustfs")
 
 HOSTNAME_S="$(hostname)"
 STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"

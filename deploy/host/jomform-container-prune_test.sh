@@ -1572,7 +1572,7 @@ has "$OUT" "DRY RUN - nothing removed" "the dry run removed nothing"
 cand="$(grep -m1 'candidates: ' "$OUT" | sed 's/.*candidates: //')"
 eq "$cand" "$D_PLAIN" "the sole candidate is the plain stopped decoy"
 eq "$(priv ps -a -q | wc -l | tr -d ' ')" "4" "all four remaining decoys survived the dry run"
-if grep -qE 'jomform-(api|web|postgres|valkey|minio)-1|traefik-traefik-1' "$OUT"; then
+if grep -qE 'jomform-(api|web|postgres|valkey|rustfs)-1|traefik-traefik-1' "$OUT"; then
   bad "a LIVE STACK name appeared in the guard's output"
 else
   ok "no live stack container name appeared in the guard's output"

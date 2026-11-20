@@ -492,11 +492,23 @@ async function openSettings(page: Page, baseURL: string | undefined): Promise<vo
 }
 
 /**
- * Clicks one tab and waits (bounded) for ITS panel to be painted: the element
- * `#set-panel-<id>` visible, the first `<h2>` inside it the tab's own heading,
- * and exactly one `role="tabpanel"` in the document. Returns the read either
- * way, so a panel that never paints fails on the caller's OWN assertion with the
- * live DOM in the message instead of hanging here.
+ * Clicks one tab and waits (bounded) for ITS panel to be painted AND POPULATED:
+ * the element `#set-panel-<id>` visible, the first `<h2>` inside it the tab's own
+ * heading, exactly one `role="tabpanel"` in the document, and the panel reading
+ * at or above its `PANEL_FLOOR`. Returns the read either way, so a panel that
+ * never paints — or paints and stays empty — fails on the caller's OWN assertion
+ * with the live DOM in the message instead of hanging here.
+ *
+ * THE POPULATED HALF IS NOT REDUNDANT WITH THE CALLER'S FLOOR ASSERTION. A panel
+ * element paints as soon as its tab is selected, BEFORE the panel's own fetch has
+ * resolved (`MembersTab` renders its shell, then `Promise.all([members, invites])`
+ * fills it). Settling on paint alone therefore measures the empty/loading state
+ * whenever the fetch is slow — which is exactly what a loaded host does: measured
+ * on this arm under a merge train's three concurrent browser gates, the 390px walk
+ * read the members panel at 238 characters (floor 250) while the SAME panel read
+ * 361 at 1440px in the same run. Waiting for the floor here makes the read
+ * deterministic instead of racing the fetch; the caller's assertion still fails a
+ * panel that is GENUINELY empty, because this loop only waits, it never passes.
  */
 async function selectTab(page: Page, id: string): Promise<PanelRead> {
   const want = DICT[TAB_PANEL_HEADING[id]].en;
@@ -514,10 +526,24 @@ async function selectTab(page: Page, id: string): Promise<PanelRead> {
       panelCount: document.querySelectorAll('[role="tabpanel"]').length,
     };
   })()`;
+  const floor = PANEL_FLOOR[id];
   let last = (await page.evaluate(read)) as PanelRead & { panelCount: number };
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (last.painted && last.heading === want && last.panelCount === 1) break;
+    if (
+      last.painted &&
+      last.heading === want &&
+      last.panelCount === 1 &&
+      // …and POPULATED (card t_0e359841): a panel paints before its own fetch
+      // resolves, so settling on paint alone reads its empty/loading state under
+      // load — 238 characters on the members panel against a 250 floor, while the
+      // same panel read 361 on the other width of the same run. The floors are the
+      // population witness; waiting for them is what makes this read deterministic.
+      // The caller's assertion is unchanged and still fails a genuinely empty panel.
+      last.text >= floor.text &&
+      last.controls >= floor.controls
+    )
+      break;
     await page.waitForTimeout(100);
     last = (await page.evaluate(read)) as PanelRead & { panelCount: number };
   }

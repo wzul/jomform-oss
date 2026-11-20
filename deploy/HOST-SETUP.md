@@ -20,13 +20,15 @@ The repo now holds the production files **byte-for-byte**, and
 ## The pieces
 
 - `deploy/vps/compose.prod.yml` — the production stack, as installed. Its object
-  store is **SeaweedFS**, not MinIO: the `minio/minio` and `minio/mc` images were
-  withdrawn from Docker Hub, so a compose that names them cannot be pulled at all
-  (`docker manifest inspect` answers `denied`). The API creates its own bucket at
-  startup, so there is no bucket-init container.
-- `deploy/vps/migrate-media.sh` — the one-way copy of the media bucket from an
-  existing MinIO store onto SeaweedFS, with a count+bytes+per-object verification.
-  See § "Moving production off MinIO". A fresh host needs none of it.
+  store is **RustFS**, pinned by digest
+  (`rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a`):
+  the tag names the version, the digest is what ships, so a `compose pull` cannot
+  move the store under the data. The API creates its own bucket at startup, so
+  there is no bucket-init container, and `api/internal/objstore/compose_store_pin_test.go`
+  fails the build if either compose file names another store or drops the digest.
+- `deploy/vps/migrate-media.sh` — the one-way copy of the media bucket from a
+  PREVIOUS store onto RustFS, with a count+bytes+per-object verification. See
+  § "Moving an existing host onto RustFS". A fresh host needs none of it.
 - `deploy/vps/traefik-jomform.yml`, `traefik-docker-compose.yml` — the edge, as installed.
 - `deploy/vps/.env.prod.example` — every key the compose reads, marked as
   ACCOUNT secrets (carry over) vs HOST secrets (may be minted). The count is
@@ -127,15 +129,19 @@ drill is a first-class mode of the backup script:
 backup writes `last-run.json`; a fresh host that has not been through this step
 has an **empty database** even though every container is healthy.
 
-## Moving production off MinIO
+## Moving an existing host onto RustFS
 
-**A fresh host does not need this section.** It is for the existing production
-host, which has a `jomform_miniodata` volume full of customer media.
+**A fresh host does not need this section.** It is for a host that still serves
+media out of a volume written by a DIFFERENT store.
 
-MinIO's community images were withdrawn (see `compose.prod.yml`), and MinIO and
-SeaweedFS do **not** share an on-disk format: pointing the new service at the old
-volume serves an empty store. The objects have to be copied through the S3 API,
-which means the old server must still be running when the copy happens.
+Two stores do **not** share an on-disk format (see `compose.prod.yml`): pointing
+RustFS at the old volume serves an EMPTY store, so every image a published form
+still references 404s. The objects have to be copied through the S3 API, which
+means the old server must still be running when the copy happens.
+
+Production did exactly this on 2026-11-20: 135 objects / 14 MiB mirrored through
+the S3 API, a bucket-to-bucket comparison that printed no differences, and a real
+asset fetched through `https://jomform.com/media/…` byte-identical afterwards.
 
 Order matters:
 
@@ -143,28 +149,34 @@ Order matters:
 # 0. a fresh backup, and check it is green — the media archive is the fallback
 /usr/local/bin/jomform-backup.sh && tail -1 /var/lib/jomform-backup/last-run.json
 
-# 1. add the new credentials to the env file (the compose fails closed without
-#    them; S3_ACCESS_KEY is an identity — `jomform` — and S3_SECRET_KEY a secret):
-#      S3_ACCESS_KEY=jomform
-#      S3_SECRET_KEY=$(openssl rand -hex 32)
+# 1. add the credentials to the env file:
+#      S3_ACCESS_KEY=jomform            # the identity the new store is initialised with
+#      S3_SECRET_KEY=<the secret the new store will use>
+#      OLD_S3_SECRET_KEY=<the CURRENT store's secret>
+#    S3_ACCESS_KEY/S3_SECRET_KEY are REQUIRED by the compose, which fails closed
+#    without them. OLD_S3_SECRET_KEY is what lets the copy READ the current store
+#    (this host's env may still call it MINIO_ROOT_PASSWORD: rename it, keeping the
+#    value, so the store keeps authenticating with what its data was written under).
 
 # 2. copy the media INTO the live stack, and let it prove the copy
-#    (PLAN first, then --apply). This starts only the new `s3` service, as an
-#    extra container in the live project; the api keeps serving the old store.
-deploy/vps/migrate-media.sh --env-file /opt/jomform/.env
-deploy/vps/migrate-media.sh --env-file /opt/jomform/.env --apply
+#    (PLAN first, then --apply). --from is the CURRENT store's endpoint and has no
+#    default: this script must never guess which store it is copying off. This
+#    starts only the new `rustfs` service, as an extra container in the live
+#    project; the api keeps serving the old store.
+deploy/vps/migrate-media.sh --env-file /opt/jomform/.env --from http://old-store:9000   # the CURRENT store
+deploy/vps/migrate-media.sh --env-file /opt/jomform/.env --from http://old-store:9000 --apply
 
 # 3. only after it prints VERIFIED: install the new compose and recreate the api
 #    against the store that run just filled
 deploy/host/bootstrap-host.sh --env-file /opt/jomform/.env --force --apply
 
-# 4. and stop the old store (this is the step that removes the minio container)
+# 4. and stop the old store (this is the step that removes its container)
 docker compose -p jomform -f /opt/jomform/compose.yml --env-file /opt/jomform/.env \
   up -d --remove-orphans
 ```
 
 Do **not** install the new compose before step 2. `bootstrap-host.sh --apply` ends
-in `compose up -d`, which recreates the api against the empty `s3data` volume — every
+in `compose up -d`, which recreates the api against the empty `rustfsdata` volume — every
 already-uploaded image 404s until the copy finishes, and an upload in that window
 lands only on the new side, which makes the copy's own count comparison red forever.
 
@@ -174,16 +186,18 @@ running the repo's `deploy/vps/compose.prod.yml` from a checkout would create a 
 project (`vps`) with its own network, and the copy could not reach the store the api
 will use. `--network` defaults to `<project>_internal`, so the two agree.
 
-The script starts the new `s3` service itself, creates the bucket if it is
+The script starts the new `rustfs` service itself, creates the bucket if it is
 missing, copies with `--checksum`, and then refuses to call the run a success
 unless **object count AND total bytes agree on both sides** and rclone's
 per-object check finds every source object on the destination. It never stops or
 deletes anything: the old container keeps serving until step 4's
-`--remove-orphans`, and the `jomform_miniodata` volume is never touched — keep it
-until the media has been exercised in the browser.
+`--remove-orphans`, and the previous store's volume is never touched — this
+compose does not declare it, and `compose down -v` does not remove a volume it
+does not declare, so keep it until the media has been exercised in the browser.
 
-What the copy does **not** carry: object **versions**. `minio-init` used to run
-`mc version enable`, and the API only ever reads the current version of an
+What the copy does **not** carry: object **versions**. The one-shot init
+container this stack used to carry ran `mc version enable`, and the API only ever
+reads the current version of an
 object, so the current objects are the complete set the application uses. The
 bucket is also not re-provisioned with a public-read policy when it already
 exists (the API's `EnsureBucket` is a no-op in that case) — nothing depends on
@@ -200,22 +214,22 @@ API's startup migration (`dbstore.MigrateMediaURLs`, issue #145), which rewrites
 (`S3_PUBLIC_BASE`, here `https://jomform.com/media/`).
 
 That migration derives the prefix it replaces from the **current**
-`S3_ENDPOINT`. After step 3 installs `S3_ENDPOINT=http://s3:8333` it can no
-longer rewrite a row that still says `http://minio:9000/…` — nothing in the new
-process knows that host name any more. So the check has to run **before** step 3,
+`S3_ENDPOINT`. After step 3 installs `S3_ENDPOINT=http://rustfs:9000` it can no
+longer rewrite a row that still says the PREVIOUS store's endpoint — nothing in
+the new process knows that host name any more. So the check has to run **before** step 3,
 not after it.
 
 Checked on the production database on 2026-11-04, before this move: **0** rows in
 all three places, and stored media already reads `https://jomform.com/media/…`
 (new uploads are written with that public base, never with the internal
 endpoint). On this host the switch therefore leaves nothing behind. Run the same
-counts on the host you are moving (replace `minio:9000` with your CURRENT
-`S3_ENDPOINT`'s host if it differs); all three must be `0`:
+counts on the host you are moving (the examples use `previous-store:9000` —
+substitute the host your CURRENT `S3_ENDPOINT` names); all three must be `0`:
 
 ```sql
-select count(*) from users    where avatar_url like '%minio:9000%';
-select count(*) from forms    where logo_url   like '%minio:9000%';
-select count(*) from products where images::text like '%minio:9000%';
+select count(*) from users    where avatar_url like '%previous-store:9000%';
+select count(*) from forms    where logo_url   like '%previous-store:9000%';
+select count(*) from products where images::text like '%previous-store:9000%';
 ```
 
 If one is not `0`, rewrite it explicitly — the statements below were replayed
@@ -227,20 +241,20 @@ public base if `S3_PUBLIC_BASE` is set to something other than
 `https://jomform.com/media`:
 
 ```sql
-update users    set avatar_url = replace(avatar_url, 'http://minio:9000/jomform-media/', 'https://jomform.com/media/') where avatar_url like '%minio:9000%';
-update forms    set logo_url   = replace(logo_url,   'http://minio:9000/jomform-media/', 'https://jomform.com/media/') where logo_url like '%minio:9000%';
+update users    set avatar_url = replace(avatar_url, 'http://previous-store:9000/jomform-media/', 'https://jomform.com/media/') where avatar_url like '%previous-store:9000%';
+update forms    set logo_url   = replace(logo_url,   'http://previous-store:9000/jomform-media/', 'https://jomform.com/media/') where logo_url like '%previous-store:9000%';
 update products set images = (
-        select jsonb_agg(replace(elem, 'http://minio:9000/jomform-media/', 'https://jomform.com/media/'))
+        select jsonb_agg(replace(elem, 'http://previous-store:9000/jomform-media/', 'https://jomform.com/media/'))
         from jsonb_array_elements_text(products.images) as t(elem)
       )
- where images::text like '%minio:9000%'
+ where images::text like '%previous-store:9000%'
    and jsonb_typeof(images) = 'array';
 ```
 
 After step 3, `cmd/media-reconcile` audits the store with the new `S3_*` values
 (`-endpoint` defaults to `$S3_ENDPOINT`). It addresses any custom endpoint
-path-style, so it follows the store to `http://s3:8333` instead of asking for
-`jomform-media.s3:8333`; run it before step 4 if you want the bucket counted
+path-style, so it follows the store to `http://rustfs:9000` instead of asking for
+`jomform-media.rustfs:9000`; run it before step 4 if you want the bucket counted
 independently of `migrate-media.sh`'s own verification.
 
 Rollback after step 4 means the old compose plus the old images (still on the
@@ -257,6 +271,20 @@ deploy/vps/drift-check.sh --host root@203.0.113.10     # production
 - **DRIFT** — the script prints the diff. Fix it by installing the repo's file on
   the host (the repo is the source of truth now), or — if the host change was
   deliberate — by updating the repo file **in a PR**, so both agree again.
+  The compose pair reports DRIFT on a host that has already been moved to RustFS,
+  and that is expected rather than a bug. Measured on the production host on
+  2026-11-20: `/opt/jomform/compose.yml` runs the same digest-pinned RustFS image,
+  service name, volume and `S3_ENDPOINT` this repo declares, but it still carries
+  its old header, still declares a `miniodata:` volume, and — the difference that
+  can take the stack down — takes its credentials from `S3_ACCESS_KEY: jomform` /
+  `S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}`, while this repo's compose reads
+  `${S3_ACCESS_KEY:?…}` / `${S3_SECRET_KEY:?…}` and REFUSES to interpolate
+  without them. So **before** installing the repo file on such a host, put both
+  keys in `/opt/jomform/.env` (identity `jomform`; secret = the value already in
+  `MINIO_ROOT_PASSWORD`, so the store keeps the credentials its data was written
+  under). A host whose env holds only `MINIO_ROOT_PASSWORD` will fail closed at
+  `compose up` — by design, and exactly what the drift run is for. The install is
+  a deploy step (this runbook's procedure), never a repo edit.
   Editing the host file is how the drift happened in the first place; a host-only
   edit means the next person to read the repo is reading fiction.
 - The three pairs it checks are `/opt/jomform/compose.yml`,

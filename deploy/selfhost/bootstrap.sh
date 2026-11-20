@@ -14,7 +14,7 @@
 #   3. creates deploy/.env from deploy/.env.example (the example is the single
 #      source of the key set, so this cannot drift from the compose) and mints
 #      every secret that is still a placeholder with `openssl rand -hex 32`:
-#      the postgres password, the MinIO root password and ENCRYPTION_KEY;
+#      the postgres password, the object-store secret and ENCRYPTION_KEY;
 #   4. derives the front-door settings from that origin: SITE_ADDRESS (no port —
 #      Caddy listens on 80/443 inside its container), the published ports, and
 #      APP_ENV (https -> prod, http -> dev; a Secure session cookie is never sent

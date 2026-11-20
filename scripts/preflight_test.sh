@@ -193,6 +193,22 @@ unset PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT PREFLIGHT_HOST_LOCK_FD PREFLIGHT_
 export -n PREFLIGHT_SLOT_FD PREFLIGHT_SLOT_HOLDER PREFLIGHT_SLOT_N PREFLIGHT_SLOT_LOCK 2>/dev/null || true
 export -n PREFLIGHT_SLOT_COUNT PREFLIGHT_LOCK_WAIT 2>/dev/null || true
 export -n PREFLIGHT_HOST_LOCK_FD PREFLIGHT_HOST_MODE 2>/dev/null || true
+# THE SAME CLEAN-SHELL RULE FOR THE HOST GATE LOCK'S MODE, and this one was MEASURED
+# as a red inside a RELEASE run rather than reasoned about (card t_7e6b05cf).
+# deploy/build-and-ship.sh exports PREFLIGHT_RELEASE=1, and an invocation that inherits
+# it takes the host-wide gate lock EXCLUSIVE. This self-test is such a nested
+# invocation, so every pair of runs a check starts below is serialised by the HOST lock
+# before it can reach whatever lock that check is about. Measured on the v1.52.0
+# release tree's selftest log: check 45's sabotage leg had one run print "host-wide gate
+# lock acquired after the wait (…, mode release)" while its peer rendezvoused ALONE and
+# timed out, so the pair reported `serial` with the browser-suite lock take REMOVED —
+# the check measured the host lock and called it the suite lock. The same block, same
+# bytes, with PREFLIGHT_RELEASE unset: 3/3 green. Check 54 drives both modes EXPLICITLY
+# (it passes PREFLIGHT_RELEASE= per invocation), so nothing here needs to inherit one;
+# a lane calls preflight.sh from a CLEAN shell, and that is the shape these checks must
+# measure.
+unset PREFLIGHT_RELEASE
+export -n PREFLIGHT_RELEASE 2>/dev/null || true
 # The same reasoning for the environment the runner reads: a caller that ran the
 # whole gate with --log or a result dir set must not change what these checks key on.
 unset PREFLIGHT_LOG
@@ -4896,6 +4912,22 @@ rm -f "$RECORD_DIR/reuse-ledger.jsonl"
 #     with the lock take REPLACED BY `:` — the pre-fix behaviour, byte for byte, in the
 #     one line that matters. That leg must report OVERLAP. If it reports no overlap, this
 #     check cannot go red and proves nothing, and it says so instead of passing.
+#
+#     WHY IT RED-ED A RELEASE AND PASSED FROM A LANE (card t_7e6b05cf). deploy/
+#     build-and-ship.sh exports PREFLIGHT_RELEASE=1 and a run that inherits it takes the
+#     host-wide gate lock EXCLUSIVE, so on a release tree the two nested runs below were
+#     serialised by the HOST lock BEFORE they could reach the suite lock this check is
+#     about. Measured on the v1.52.0 tree: the sabotage leg's first run printed
+#     "host-wide gate lock acquired after the wait (…, mode release)" while its peer
+#     rendezvoused ALONE and timed out, and the pair then reported `serial` with the
+#     suite-lock take REMOVED; the tree leg's peer never printed the wait line at all.
+#     The same block on the same bytes with PREFLIGHT_RELEASE unset is 3/3 green. So:
+#     the self-test clears PREFLIGHT_RELEASE at the top (and the pair passes
+#     PREFLIGHT_RELEASE=0 itself); each stub RECORDS its rendezvous outcome, and a
+#     rendezvous that timed out is reported as NOT MEASURED instead of being read as
+#     `CANNOT GO RED`; and the tree arm names the ENVIRONMENT — an earlier host lock, or
+#     a peer that never reached the browser gates inside the bound — instead of blaming
+#     the shipping bytes with the generic "ordering cannot be attributed to the lock".
 if [ -z "${PREFLIGHT_WEBSERVER_LOCK_FILE:-}" ]; then
   bad "check 45 cannot run: PREFLIGHT_WEBSERVER_LOCK_FILE is unset, so the browser-suite lock this check is about does not exist in this shell"
 elif [ "$PREFLIGHT_WEBSERVER_LOCK_FILE" = "${PREFLIGHT_WEBSERVER_LOCK_FILE_DEFAULT:-/var/lock/jomform-preflight-webserver.lock}" ]; then
@@ -4932,6 +4964,12 @@ WS45NODE
   # wait. That last one is what makes the ordering a fact instead of a race: on a loaded
   # host the peer's start could otherwise land after the holder had already exited, and
   # the check would then be reading "no wait line" from a run that never had a peer.
+  #
+  # BOTH WAITS ARE BOUNDED AND BOTH RECORD HOW THEY ENDED (card t_7e6b05cf). A rendezvous
+  # that gives up silently turns "the two suites never coexisted" into "the pair was
+  # serialised" — a verdict about the lock drawn from a measurement that never happened,
+  # which is exactly what red-ed the v1.52.0 release tree. The outcome goes into this
+  # run's interval file, so the check can name it instead of reading `serial`.
   cat > "$ws45/base/bin/npm" <<'WS45NPM'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -4945,17 +4983,29 @@ if [ "${WS45_RENDEZVOUS:-0}" = 1 ] && [ -n "${WS45_SHARED:-}" ]; then
   [ -f "$WS45_SHARED" ] || : >"$WS45_SHARED"
   printf 'START %s\n' "$$" >>"$WS45_SHARED"
   _ws45_i=0
-  while [ "$(grep -c '^START' "$WS45_SHARED")" -lt 2 ] && [ "$_ws45_i" -lt 80 ]; do
+  _ws45_bound=$(( ${WS45_RENDEZVOUS_WAIT:-60} * 20 ))
+  while [ "$(grep -c '^START' "$WS45_SHARED")" -lt 2 ] && [ "$_ws45_i" -lt "$_ws45_bound" ]; do
     sleep 0.05
     _ws45_i=$((_ws45_i+1))
   done
+  if [ "$(grep -c '^START' "$WS45_SHARED")" -ge 2 ]; then
+    printf 'RENDEZVOUS ok %s %s\n' "$(date +%s.%N)" "$$" >>"$WS45_LOG"
+  else
+    printf 'RENDEZVOUS TIMEOUT %s %s after %ss\n' "$(date +%s.%N)" "$$" "${WS45_RENDEZVOUS_WAIT:-60}" >>"$WS45_LOG"
+  fi
 fi
 if [ -n "${WS45_RELEASE:-}" ]; then
   _ws45_r=0
-  while [ ! -f "$WS45_RELEASE" ] && [ "$_ws45_r" -lt 1200 ]; do
+  _ws45_r_bound=$(( ${WS45_RELEASE_WAIT:-60} * 20 ))
+  while [ ! -f "$WS45_RELEASE" ] && [ "$_ws45_r" -lt "$_ws45_r_bound" ]; do
     sleep 0.05
     _ws45_r=$((_ws45_r+1))
   done
+  if [ -f "$WS45_RELEASE" ]; then
+    printf 'RELEASE ok %s %s\n' "$(date +%s.%N)" "$$" >>"$WS45_LOG"
+  else
+    printf 'RELEASE TIMEOUT %s %s after %ss\n' "$(date +%s.%N)" "$$" "${WS45_RELEASE_WAIT:-60}" >>"$WS45_LOG"
+  fi
 fi
 sleep "${WS45_HOLD:-2}"
 if [ "${WS45_LINGER:-0}" -gt 0 ]; then
@@ -4998,6 +5048,12 @@ WS45NPM
   }
   ws45_pair() {  # $1 = label, $2 = the sandbox tree to run, $3 = release file ("" = none)
     local label="$1" dir="$2" release="${3:-}" i deadline
+    # HOW LONG THE HOLDER WAITS FOR ITS PEER TO REACH THE SUITE LOCK. A busy host needs
+    # time, not a verdict: the check's own deadline and the stub's release bound are both
+    # derived from this one number, so the stub can never give up BEFORE the check does —
+    # that race is how a late peer used to be read as "no wait line at all" (card
+    # t_7e6b05cf).
+    ws45_peer_wait="${WS45_PEER_WAIT:-300}"
     : >"$ws45/$label.shared"
     [ -n "$release" ] && rm -f "$release"
     for i in 1 2; do
@@ -5012,7 +5068,10 @@ WS45NPM
           PREFLIGHT_RESULT_TTL=1 \
           WS45_LOG="$ws45/$label-$i.npm" WS45_SHARED="$ws45/$label.shared" \
           WS45_RELEASE="$release" WS45_HOLD=2 WS45_LINGER="${WS45_LINGER:-0}" \
+          WS45_RELEASE_WAIT="$(( ws45_peer_wait + 30 ))" \
           WS45_RENDEZVOUS="${WS45_RENDEZVOUS:-0}" \
+          WS45_RENDEZVOUS_WAIT="${WS45_RENDEZVOUS_WAIT:-60}" \
+          PREFLIGHT_RELEASE=0 \
           ./scripts/preflight.sh --only e2e-core >"$ws45/$label-$i.log" 2>&1
         echo "EXIT=$?" >>"$ws45/$label-$i.log"
       ) &
@@ -5022,10 +5081,20 @@ WS45NPM
       # wait" is observed BEFORE the holder exits rather than hoped for. Bounded, and the
       # release happens either way, so a peer that never waits fails the assertion below
       # instead of hanging this check.
-      deadline=$(( $(date +%s) + 90 ))
+      #
+      # IT ALSO STOPS EARLY WHEN AN EARLIER LOCK IS THE SERIALISER. The runner says so in
+      # its own output ("another gate run holds the host-wide gate lock", "gate slot(s)
+      # busy"); waiting the full bound for a peer that is queued behind a DIFFERENT lock
+      # would cost a release run minutes and still end in "no wait line". Breaking here
+      # lets the pair finish and the check names the lock that did the serialising.
+      deadline=$(( $(date +%s) + ws45_peer_wait ))
       while [ "$(date +%s)" -lt "$deadline" ]; do
         if grep -q 'another playwright suite is running on this host' "$ws45/$label-1.log" ||
            grep -q 'another playwright suite is running on this host' "$ws45/$label-2.log"; then
+          break
+        fi
+        if grep -qE 'another gate run holds the host-wide gate lock|gate slot\(s\) busy' \
+             "$ws45/$label-1.log" "$ws45/$label-2.log" 2>/dev/null; then
           break
         fi
         sleep 0.1
@@ -5033,6 +5102,12 @@ WS45NPM
       : >"$release"
     fi
     wait
+  }
+  ws45_earlier_lock() {  # $@ = run logs -> the runner's own line about an EARLIER lock, or ""
+    grep -hE 'another gate run holds the host-wide gate lock|host-wide gate lock acquired after the wait|gate slot\(s\) busy|could not take the host-wide gate lock' "$@" 2>/dev/null | tr '\n' ' '
+  }
+  ws45_reached_gate() {  # $1 = a run log -> 0 when that run reached the browser gates
+    grep -qE 'holding the HOST-WIDE browser-suite lock|another playwright suite is running on this host|gate \[e2e-core\]: cd web' "$1"
   }
   ws45_pair tree "$ws45/tree" "$ws45/tree.release"
   ws45_e1="$(grep -o 'EXIT=[0-9]*' "$ws45/tree-1.log" | tail -n 1)"
@@ -5048,7 +5123,27 @@ WS45NPM
   elif [ "$ws45_v" = "overlap" ]; then
     bad "check 45 does not bite: the two sandboxed e2e runs were ALIVE AT THE SAME TIME ($ws45_v) — two playwright suites at once on one host is the defect (two runs, two ports, both proceeding) that red-ed the real gate on unrelated specs. The host-wide browser-suite lock is not serialising them"
   elif [ "$ws45_waited" -ne 1 ]; then
-    bad "check 45 — the pair was serialised but NEITHER run printed the runner's own wait line, so the ordering cannot be attributed to the lock (it could be two runs that simply happened to be scheduled one after the other): [$ws45_v]"
+    # THREE WAYS TO BE SERIAL WITHOUT A WAIT LINE, and they are not the same finding.
+    # (i) an EARLIER lock serialised the pair — the runner names it in its own output,
+    # and that is the environment, not the property; (ii) a run never reached the browser
+    # gates inside the bound — the peer never arrived, also the environment; (iii) BOTH
+    # runs reached the gates and the pair was serialised with no wait line printed — the
+    # only shape that can be a defect in the runner, and even then the check does not
+    # claim to tell it from a peer that arrived only after the holder exited. The old
+    # single message called all three "ordering cannot be attributed to the lock", which
+    # blamed the shipping bytes for a release-mode HOST lock that had nothing to do with
+    # them (card t_7e6b05cf).
+    ws45_early="$(ws45_earlier_lock "$ws45/tree-1.log" "$ws45/tree-2.log")"
+    ws45_reached=0
+    ws45_reached_gate "$ws45/tree-1.log" && ws45_reached=$((ws45_reached + 1))
+    ws45_reached_gate "$ws45/tree-2.log" && ws45_reached=$((ws45_reached + 1))
+    if [ -n "$ws45_early" ]; then
+      bad "check 45 could NOT MEASURE: the pair was serialised by an EARLIER host lock, not by the browser-suite lock this check is about — the runner said [$ws45_early]. Nothing here is a statement about the shipping bytes; the ordering is unmeasured (the suite lock was never the thing the second run was waiting for). [$ws45_v]"
+    elif [ "$ws45_reached" -ne 2 ]; then
+      bad "check 45 could NOT MEASURE: only $ws45_reached of 2 runs reached the browser gates inside ${ws45_peer_wait}s, so the peer never arrived at the suite lock and nothing was serialised by it. This is a SCHEDULING/ENVIRONMENT fact (loaded host or a prerequisite stall), not a verdict on the tree. Last line of each run: [$(tail -n 1 "$ws45/tree-1.log" 2>/dev/null) | $(tail -n 1 "$ws45/tree-2.log" 2>/dev/null)]"
+    else
+      bad "check 45 could NOT ATTRIBUTE THE ORDERING: the pair was serialised and NEITHER run printed the runner's own wait line within ${ws45_peer_wait}s, although both runs did reach the browser gates. That is EITHER a runner that serialises without announcing the wait (a defect here), OR a peer that reached the lock only AFTER the holder had exited (a scheduling fact on a loaded host) — this check does not claim to tell those apart, and it must not pass on either. [$ws45_v]"
+    fi
   else
     ok "check 45 — two SIMULTANEOUS e2e runs on one host are SERIALISED: the holder could not finish until its peer had announced the wait, both exit 0, and the two stub intervals do not overlap"
   fi
@@ -5059,10 +5154,19 @@ WS45NPM
     ws45_sv="$(ws45_overlap "$ws45/sab-1.npm" "$ws45/sab-2.npm")"
     ws45_se1="$(grep -o 'EXIT=[0-9]*' "$ws45/sab-1.log" | tail -n 1)"
     ws45_se2="$(grep -o 'EXIT=[0-9]*' "$ws45/sab-2.log" | tail -n 1)"
+    # DID THE MEASUREMENT HAPPEN? With the lock gone, the two stubs must CONCUR; the
+    # rendezvous is how they establish that, and each stub now records whether it bound.
+    # A timed-out rendezvous means the pair was serialised BEFORE the suites started, so
+    # `serial` says nothing about the suite lock — it must not be reported as "CANNOT GO
+    # RED", which is a verdict about the lock (card t_7e6b05cf: that is exactly how the
+    # v1.52.0 release run read a release-mode host lock as a failure of this check).
+    ws45_rt="$(grep -h '^RENDEZVOUS TIMEOUT' "$ws45/sab-1.npm" "$ws45/sab-2.npm" 2>/dev/null | tr '\n' ' ')"
     if [ "$ws45_sv" = "overlap" ]; then
       ok "check 45 BITES — with the suite-lock take removed from the same tree the SAME measurement reports OVERLAP ($ws45_se1 / $ws45_se2): the two suites ran at once, which is exactly what the lock above prevents"
     elif [ "$ws45_sv" = "incomplete" ]; then
       bad "check 45's sabotage leg could not measure: a stub suite recorded no interval at all ([$(grep -hE '^START|^END|stub npm' "$ws45/sab-1.npm" "$ws45/sab-2.npm" | tr '\n' ' ')]); the run output was [$ws45_se1 / $ws45_se2]"
+    elif [ -n "$ws45_rt" ]; then
+      bad "check 45's sabotage leg could NOT MEASURE: the two stub suites never coexisted — one rendezvoused ALONE and gave up [$ws45_rt], so 'serial' here is a statement about the schedule, not about the lock. Earlier-lock evidence: [$(ws45_earlier_lock "$ws45/sab-1.log" "$ws45/sab-2.log")]. Runs: [$ws45_se1 / $ws45_se2]"
     else
       bad "check 45 CANNOT GO RED: with the lock REMOVED ($ws45_se1 / $ws45_se2) the pair still reported $ws45_sv, so the property this check asserts is not what the lock does — a green above it would prove nothing"
     fi

@@ -27,11 +27,14 @@ If you would rather not run a server, the hosted service is the same software.
 | **RAM** | 2 GB minimum for the first build; 4 GB comfortable |
 | **Disk** | 10 GB to start |
 
-Measured on the clean install used for the screenshots: **six containers idle at
-about 0.31 GB of RAM in total** (api 92 MB, web 68 MB, s3 66 MB, postgres 57 MB,
+Measured on the clean install used for the screenshots, before the object store
+was switched to RustFS: **six containers idle at
+about 0.31 GB of RAM in total** (api 92 MB, web 68 MB, object store 66 MB, postgres 57 MB,
 caddy 23 MB, valkey 5 MB), and **about 1.3 GB of images** (web 222 MB, api 151 MB,
 object store 536 MB, postgres 304 MB, caddy 66 MB, valkey 45 MB). Those are the
-idle numbers. The first start compiles the Go API and the Next.js app, and that
+idle numbers and they describe the SHAPE of the stack (six containers, ~0.3 GB
+idle, the object store is the largest image); re-measure if you are sizing a host
+tightly. The first start compiles the Go API and the Next.js app, and that
 build — not the running stack — is the memory-hungry part of an install, so plan
 for at least 2 GB.
 
@@ -123,7 +126,7 @@ NAME                        SERVICE    STATUS
 jomform-api-1               api        Up (healthy)
 jomform-caddy-1             caddy      Up (healthy)
 jomform-postgres-1          postgres   Up (healthy)
-jomform-s3-1                s3         Up (healthy)
+jomform-rustfs-1            rustfs     Up (healthy)
 jomform-valkey-1            valkey     Up (healthy)
 jomform-web-1               web        Up (healthy)
 ```
@@ -142,7 +145,7 @@ curl -s https://forms.example.com/healthz
 | `api` | REST, MCP, public form pages, media |
 | `postgres` | data |
 | `valkey` | sessions, rate limits, background queue |
-| `s3` | uploaded media (an S3-compatible server) |
+| `rustfs` | uploaded media — the bundled RustFS object store, pinned by digest |
 
 If a service is `starting` rather than `(healthy)`, wait — the first start runs
 database migrations before the API reports ready. If it is `restarting`, go to
@@ -313,11 +316,11 @@ docker compose -f deploy/docker-compose.yml exec -T postgres \
 cp deploy/.env ./jomform-$(date +%F).env
 ```
 
-Uploaded media lives in the stack's `s3data` volume. Volume snapshots alongside
+Uploaded media lives in the stack's `rustfsdata` volume. Volume snapshots alongside
 the dump are enough; if you prefer a tarball:
 
 ```bash
-docker run --rm -v jomform_s3data:/data -v "$PWD":/out alpine \
+docker run --rm -v jomform_rustfsdata:/data -v "$PWD":/out alpine \
   tar czf /out/media-$(date +%F).tar.gz -C /data .
 ```
 

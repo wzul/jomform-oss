@@ -58,7 +58,7 @@ case "$MIN_AGE_H" in
 esac
 
 # The live stack. Belt and braces with the compose-label gate below.
-KEEP_NAMES=" jomform-api-1 jomform-web-1 jomform-postgres-1 jomform-valkey-1 jomform-minio-1 traefik-traefik-1 "
+KEEP_NAMES=" jomform-api-1 jomform-web-1 jomform-postgres-1 jomform-valkey-1 jomform-rustfs-1 traefik-traefik-1 "
 if [ -r "$KEEP_FILE" ]; then
   while read -r extra; do
     case "$extra" in ''|'#'*) continue;; esac

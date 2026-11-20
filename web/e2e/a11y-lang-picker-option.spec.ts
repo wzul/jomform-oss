@@ -208,15 +208,28 @@ async function mislabelled(page: Page): Promise<string[]> {
 }
 
 /**
+ * The ceiling for `/settings` to become INTERACTIVE on a loaded host (card
+ * t_1d49bb9f).
+ *
+ * A CEILING, not a target: the poll below returns on the first frame the
+ * condition holds, so a healthy page costs ~50 ms and only a page that never
+ * gets there pays it. 30s is 6× the 5s `expect.poll` default that red-ed two
+ * lanes and failed a release ship at load 16–22, and it still lands well inside
+ * this project's 240s per-test budget, so a genuinely broken page FAILS inside
+ * the suite's budget instead of being killed with no verdict.
+ */
+const SETTINGS_HYDRATION_CEILING_MS = 30_000;
+
+/**
  * Waits until the page really painted (the route is statically prerendered, so
  * the served markup is not evidence the client component ran): React's own
- * marker on the picker, the picker's five options, and the expected option text
- * in this locale. Returns the read either way so a page that never painted fails
- * on the caller's own assertion with the DOM in the message.
+ * marker on the picker, the picker's five options. Returns the read either way so
+ * a page that never painted fails on the caller's own assertion with the DOM in
+ * the message.
  */
 async function settlePicker(page: Page, selector: string): Promise<OptionRead[] | null> {
-  const deadline = Date.now() + 20_000;
   let read = await readPicker(page, selector);
+  const deadline = Date.now() + SETTINGS_HYDRATION_CEILING_MS;
   while (Date.now() < deadline) {
     const hydrated = await page.evaluate((sel) => {
       const el = document.querySelector(sel);
@@ -251,7 +264,47 @@ async function openSettings(page: Page, lang: "en" | "ar"): Promise<OptionRead[]
   // The picker is in the storefront panel, which is one click inside the strip.
   const tab = page.getByRole("tab", { name: DICT["set.tab.storefront"][lang], exact: true });
   await expect(tab, `the settings strip never rendered its ${lang} Storefront tab`).toBeVisible({ timeout: 30_000 });
+
+  // THE CLICK NEEDS REACT TO OWN THE TAB, OR IT IS DROPPED SILENTLY (card
+  // t_1d49bb9f). `/settings` is statically prerendered, so its strip is on the
+  // page — and passes Playwright's actionability checks — before the bundle has
+  // hydrated it. A click delivered in that window reaches a node with no fiber, and
+  // React's delegated handler runs NOTHING: `setTab("storefront")` never fires, the
+  // panel is never asked to mount, and no amount of waiting for the picker can
+  // produce one. Measured on the release tree `v1.52.0-4` at load 16–22: the read
+  // came back null after a full 20s, and the failure named a page defect that was
+  // not there. Hydration is the real precondition of the interaction, so it is
+  // WAITED ON (React's own marker, the same signal `e2e/settle.ts` and
+  // `a11y-profile-tabs.spec.ts` use), bounded, and named if it never happens.
+  await expect
+    .poll(
+      () =>
+        tab.evaluate((el) =>
+          Object.keys(el).some((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactProps$")),
+        ),
+      {
+        message:
+          `the ${lang} /settings tab strip never hydrated in ${SETTINGS_HYDRATION_CEILING_MS}ms — ` +
+          `a click cannot reach the Storefront tab's handler, so its panel was never asked to mount`,
+        timeout: SETTINGS_HYDRATION_CEILING_MS,
+        intervals: [50, 100, 250],
+      },
+    )
+    .toBe(true);
+
   await tab.click();
+
+  // THE PICKER'S ATTACHMENT IS THE PROOF THE CLICK LANDED. The panel is a
+  // conditional render of `activeTab`, so it mounts in the frame `setTab` commits;
+  // waiting for the element itself (rather than asserting it exists) means a slow
+  // host only costs wall time. The wait is swallowed deliberately: the caller's
+  // `expectPicker(…).not.toBeNull()` is the verdict, and it names the absence with
+  // the live DOM in hand — a genuine "this tab opens no picker" still goes RED.
+  await page
+    .locator("#sf-default-lang")
+    .waitFor({ state: "attached", timeout: SETTINGS_HYDRATION_CEILING_MS })
+    .catch(() => undefined);
+
   return settlePicker(page, "#sf-default-lang");
 }
 

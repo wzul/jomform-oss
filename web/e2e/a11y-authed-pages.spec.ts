@@ -1331,6 +1331,18 @@ const SCANNED_PATHS: string[] = [
   "/",
 ];
 
+/**
+ * The ceiling for `/post-login`'s client-side resolution (card t_1d49bb9f).
+ *
+ * A CEILING, not a target: a healthy shell leaves the placeholder in
+ * milliseconds, so only a page that never resolves pays it. 60s is 12× the 5s
+ * `expect.poll` default that red-ed two lanes and failed a release ship on a
+ * loaded host (load 16–22) — and this arm's own budget is 240s, so a genuinely
+ * stuck shell still fails INSIDE the suite's budget instead of being reported as
+ * a timeout with no verdict.
+ */
+const POST_LOGIN_REDIRECT_TIMEOUT_MS = 60_000;
+
 test.describe("a11y: the redirect shells land on a route that IS scanned", () => {
   test("/space-picker redirects to /workspace-picker, which this file scans", async ({ page }) => {
     await freshState(page);
@@ -1364,9 +1376,22 @@ test.describe("a11y: the redirect shells land on a route that IS scanned", () =>
     // The page runs the SAME post-login resolution every other auth method uses
     // and replaces the location; with one workspace and no default it lands on
     // the dashboard.
+    // A CEILING ON THE REAL CONDITION, NOT A 5-SECOND BET (card t_1d49bb9f).
+    // `expect.poll`'s default budget is 5s, which assumes `resolvePostLogin()`
+    // answers within it. On a loaded host it does not: measured 2026-11-17 on two
+    // lanes 25 minutes apart at load 16–22, `/post-login never left its placeholder
+    // … Timeout 5000ms exceeded while waiting on the predicate`, and the same red
+    // sits in the gate logs of Nov 12 and Nov 16 — older than either tree that was
+    // blamed for it. It is not an api dependency either: a failed fetch resolves to
+    // "/" by design, so the placeholder clears even with the api proxy refusing
+    // connections (the ECONNREFUSED in those logs). What runs out is the bet. The
+    // predicate below is unchanged — a shell that never leaves /post-login still
+    // goes RED, and the timeout names how long it waited.
     await expect
       .poll(async () => new URL(page.url()).pathname, {
         message: "/post-login never left its placeholder — resolvePostLogin did not resolve",
+        timeout: POST_LOGIN_REDIRECT_TIMEOUT_MS,
+        intervals: [100, 250, 500],
       })
       .not.toBe("/post-login");
     const landed = new URL(page.url()).pathname;

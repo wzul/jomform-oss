@@ -4630,7 +4630,7 @@ run host "fresh-host bootstrap + repo/host drift + media-migration self-tests (d
 selfhost_run() {
   bash "$REPO_ROOT/deploy/selfhost/bootstrap_test.sh"
 }
-run selfhost "one-command self-host path: bootstrap refuses placeholder secrets and starts a complete stack (web+api+pg+valkey+s3 behind Caddy) when it can" selfhost_run
+run selfhost "one-command self-host path: bootstrap refuses placeholder secrets and starts a complete stack (web+api+pg+valkey+rustfs behind Caddy) when it can" selfhost_run
 
 # prunewt — the worktree pruner's self-test. Same shape of gate as
 # `monitor`/`tmpkey` and for the same reason: `prune-kanban-worktrees.sh` only

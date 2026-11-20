@@ -108,7 +108,7 @@ when `JOMFORM_TEST_DATABASE_URL` is set (`api/internal/dbstore/money_invariants_
 ## 5. Running locally
 
 ```bash
-# 1. Start local deps (Postgres, Valkey, MinIO)
+# 1. Start local deps (Postgres, Valkey, RustFS)
 make up
 # 2. Run the API
 make dev

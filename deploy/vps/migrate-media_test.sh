@@ -2,8 +2,8 @@
 # deploy/vps/migrate-media_test.sh — the offline harness for migrate-media.sh.
 #
 # WHAT IT IS DEFENDING. migrate-media.sh is the only thing standing between the
-# production media bucket and a SeaweedFS store that was initialised EMPTY: the
-# two stores do not share an on-disk format, so a "successful" run that in fact
+# production media bucket and a RustFS store that was initialised EMPTY: the two
+# stores do not share an on-disk format, so a "successful" run that in fact
 # copied nothing looks exactly like a real one — the stack comes up healthy and
 # every previously-uploaded image 404s. So the harness is mostly about the
 # FAILURE directions:
@@ -26,9 +26,9 @@
 #      landed in project `vps` on `vps_internal`, not `jomform_internal`.
 #
 # `docker` and `rclone` are stubs on PATH: nothing talks to a real daemon or
-# store. The live proof (a real MinIO store → a real SeaweedFS one) is in the
-# card's evidence, not here: a harness that needs two live services is a gate
-# that gets skipped.
+# store. The live proof (a real store → a real RustFS one, 135 objects / 14 MiB,
+# bucket comparison empty) is in the card's evidence, not here: a harness that
+# needs two live services is a gate that gets skipped.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,7 +61,7 @@ setup_case() {
 
   cat >"$CASE_DIR/env" <<'EOF'
 POSTGRES_PASSWORD=pgsecret
-MINIO_ROOT_PASSWORD=oldminio-secret
+OLD_S3_SECRET_KEY=oldstore-secret
 S3_ACCESS_KEY=jomform
 S3_SECRET_KEY=newstore-secret
 EOF
@@ -161,6 +161,7 @@ run() {
   OUT="$(PATH="$STUB_BIN:$PATH" TMPDIR="$CASE_DIR/tmp" \
     env ${vars[@]+"${vars[@]}"} \
     bash "$SCRIPT" --env-file "$CASE_DIR/env" --compose "$COMPOSE" \
+      --from http://previous-store:9000 \
       --rclone-image rclone/rclone:latest "$@" 2>&1)"
   RC=$?
   set +e
@@ -174,6 +175,7 @@ check "exit code" 0 "$RC"
 has "$OUT" "PLAN — nothing has been copied" "says nothing was copied"
 has "$OUT" "rclone copy" "names the copy it WOULD do"
 has "$OUT" "docker compose -p jomform -f" "names the pinned project in the plan"
+has "$OUT" "http://rustfs:9000" "the default destination is the rustfs service on 9000"
 check "nothing at all ran (no docker, no rclone)" "" "$(cat "$CALL_LOG")"
 check "the temp config dir was cleaned up" "" "$(ls -A "$CASE_DIR/tmp")"
 
@@ -185,26 +187,26 @@ check "exit code (OUT: $OUT)" 0 "$RC"
 has "$OUT" "VERIFIED — 3 object(s) / 300 byte(s) on both sides" "prints the verified totals"
 has "$(cat "$CALL_LOG")" "rclone copy from:jomform-media to:jomform-media --checksum" "copied with --checksum"
 has "$(cat "$CALL_LOG")" "rclone check from:jomform-media to:jomform-media --size-only --one-way" "ran the per-object check"
-has "$(cat "$CALL_LOG")" "docker compose" "started the s3 service from the new compose"
-S3START="$(grep -F ' up -d s3' "$CALL_LOG" | tail -n 1)"
-has "$S3START" "-p jomform" "the 'up -d s3' call is pinned to the live project (default -p jomform)"
+has "$(cat "$CALL_LOG")" "docker compose" "started the rustfs service from the new compose"
+S3START="$(grep -F ' up -d rustfs' "$CALL_LOG" | tail -n 1)"
+has "$S3START" "-p jomform" "the 'up -d rustfs' call is pinned to the live project (default -p jomform)"
 has "$(cat "$CALL_LOG")" "--network jomform_internal" "ran rclone on the live project's network"
 has "$(cat "$CALL_LOG")" "config-mode 600" "the rclone config was 0600 while in use"
 has "$(cat "$CALL_LOG")" "config-secrets 2" "the config carried both credentials (they are not on the argv)"
-hasnt "$(cat "$CALL_LOG")" "oldminio-secret" "the old secret never appears on a command line"
-hasnt "$OUT" "oldminio-secret" "the old secret never appears in the output"
+hasnt "$(cat "$CALL_LOG")" "oldstore-secret" "the old secret never appears on a command line"
+hasnt "$OUT" "oldstore-secret" "the old secret never appears in the output"
 hasnt "$OUT" "newstore-secret" "the new secret never appears in the output"
 check "the temp config dir was cleaned up on success" "" "$(ls -A "$CASE_DIR/tmp")"
-has "$OUT" "keep the jomform_miniodata volume" "tells the operator not to delete the old volume"
+has "$OUT" "keep the PREVIOUS store's volume" "tells the operator not to delete the old volume"
 
 # ── case 2b: the project pinning follows --project, and the network with it ──
 echo "case: --project moves the container AND the rclone network together"
 setup_case
 run -- --apply --project jftest
 check "exit code (OUT: $OUT)" 0 "$RC"
-has "$(cat "$CALL_LOG")" "docker compose -p jftest" "started the s3 service in project jftest"
-S3START="$(grep -F ' up -d s3' "$CALL_LOG" | tail -n 1)"
-has "$S3START" "-p jftest" "the 'up -d s3' call follows --project"
+has "$(cat "$CALL_LOG")" "docker compose -p jftest" "started the rustfs service in project jftest"
+S3START="$(grep -F ' up -d rustfs' "$CALL_LOG" | tail -n 1)"
+has "$S3START" "-p jftest" "the 'up -d rustfs' call follows --project"
 has "$(cat "$CALL_LOG")" "--network jftest_internal" "derived the network from the project"
 hasnt "$(cat "$CALL_LOG")" "--network jomform_internal" "did not keep the default network"
 
@@ -257,11 +259,11 @@ hasnt "$(cat "$CALL_LOG")" "rclone copy" "did not copy anything"
 # ── case 7: credentials ─────────────────────────────────────────────────────
 echo "case: a missing credential is refused and NAMED"
 setup_case
-grep -v '^MINIO_ROOT_PASSWORD=' "$CASE_DIR/env" >"$CASE_DIR/env.nominio"; mv "$CASE_DIR/env.nominio" "$CASE_DIR/env"
+grep -v '^OLD_S3_SECRET_KEY=' "$CASE_DIR/env" >"$CASE_DIR/env.noold"; mv "$CASE_DIR/env.noold" "$CASE_DIR/env"
 chmod 600 "$CASE_DIR/env"
 run -- --apply
-[ "$RC" -ne 0 ] && ok "exit code non-zero (exit=$RC)" || bad "accepted an env file with no old-store secret"
-has "$OUT" "MINIO_ROOT_PASSWORD" "names the missing old-store secret"
+[ "$RC" -ne 0 ] && ok "exit code non-zero (exit=$RC)" || bad "accepted an env file with no previous-store secret"
+has "$OUT" "OLD_S3_SECRET_KEY" "names the missing previous-store secret"
 
 setup_case
 grep -v '^S3_ACCESS_KEY=' "$CASE_DIR/env" >"$CASE_DIR/env.nokey"; mv "$CASE_DIR/env.nokey" "$CASE_DIR/env"
@@ -280,7 +282,7 @@ set +e
 has "$OUT" "cannot read the env file" "names the missing env file"
 
 # ── case 8: a compose/service failure is fatal, not a warning ───────────────
-echo "case: BITE — an s3 service that never gets healthy stops the run before any copy"
+echo "case: BITE — a rustfs service that never gets healthy stops the run before any copy"
 setup_case
 run S3_HEALTH=starting MIGRATE_MEDIA_HEALTH_TRIES=1 -- --apply
 [ "$RC" -ne 0 ] && ok "exit code non-zero (exit=$RC)" || bad "copied while the new store was not serving"

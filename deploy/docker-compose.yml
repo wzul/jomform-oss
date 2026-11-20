@@ -5,22 +5,28 @@
 #   api         Go API: REST, MCP, public form pages, media
 #   postgres    data
 #   valkey      sessions, rate limits, queue
-#   s3          S3-compatible object storage (SeaweedFS), for uploaded media
+#   rustfs      S3-compatible object storage (RustFS), for uploaded media
 #
-# WHY SEAWEEDFS AND NOT MINIO. MinIO's community images are no longer published:
-# MinIO went source-only in October 2025 and deleted `minio/minio` and `minio/mc`
-# from Docker Hub in September 2026; `quay.io/minio/minio` answers anonymous
-# pulls with 401. `docker compose up` on a compose naming them now fails at PULL,
-# before anything can start, which is a broken one-command install for everyone.
-# SeaweedFS is Apache-2.0, actively maintained, publishes a public image, and
-# speaks the S3 API this stack needs (bucket create + bucket policy + object
-# PUT/GET — verified against api/internal/objstore's own client). It is the same
-# substitution other projects made for the same reason.
+# WHY RUSTFS, PINNED BY DIGEST. The object store here is
+# rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a.
+# The tag names the version; the digest is what ships, because a tag can be
+# re-pushed and the data underneath cannot follow. 1.0.6 was verified against
+# the four S3 operations this app performs (PutObject / GetObject / DeleteObject
+# / HeadObject — through api/internal/objstore's own client) and its bucket-policy
+# call. It is enforced by api/internal/objstore/compose_store_pin_test.go.
+#
+# WHY NOT THE STORE THIS FILE USED TO NAME. The community MinIO images are no
+# longer published: it went source-only in October 2025 and its images were
+# deleted from Docker Hub, so `docker compose up` on a compose naming them now
+# fails at PULL, before anything can start — a broken one-command install for
+# everyone. Any object-store image in this file must be digest-pinned; a third
+# store reappearing here is a test failure, not a review comment.
 #
 # THE BUCKET IS NOT PROVISIONED HERE. The API creates it at startup
 # (objstore.EnsureBucket: HeadBucket → CreateBucket → PutBucketPolicy, issue #79),
 # so a one-shot `mc`/init container is a moving part with nothing to do — and it
-# would need an image that no longer exists.
+# would need an image that no longer exists. RustFS needs none. Bucket versioning
+# stays OFF: the app never calls the versioning APIs.
 #
 # ── EVERY SECRET IS REQUIRED ────────────────────────────────────────────────
 # None of them has a working default: `${VAR:?message}` refuses to interpolate an
@@ -115,7 +121,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-jomform}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run deploy/selfhost/bootstrap.sh}@postgres:5432/${POSTGRES_DB:-jomform}?sslmode=disable
       VALKEY_URL: valkey://valkey:6379/0
-      S3_ENDPOINT: http://s3:8333
+      S3_ENDPOINT: http://rustfs:9000
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — run deploy/selfhost/bootstrap.sh}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — run deploy/selfhost/bootstrap.sh}
       S3_BUCKET: ${S3_BUCKET:-jomform-media}
@@ -193,7 +199,7 @@ services:
       # SERVING when it does: a failed EnsureBucket disables the media store for
       # the life of the process (uploads answer 503), so the API must not start
       # while the store is still coming up.
-      s3:
+      rustfs:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
@@ -234,29 +240,34 @@ services:
       retries: 12
 
   # ── object storage ────────────────────────────────────────────────────────
-  # One process: master + volume + filer + the S3 gateway on 8333. The bucket is
-  # created by the API at startup (see the header), so there is no init service.
-  s3:
-    image: chrislusf/seaweedfs:4.50
+  # One process: the S3 API on 9000 over one local volume. The bucket is created
+  # by the API at startup (see the header), so there is no init service.
+  rustfs:
+    # PINNED BY DIGEST (see the header). The tag names the version a human
+    # verified; the digest is what ships.
+    image: rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a
     restart: unless-stopped
-    # -ip.bind=0.0.0.0 so the compose network can reach it; without it the
-    # services advertise 127.0.0.1 and the api's requests land on its own
-    # loopback.
-    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
     environment:
       # The S3 identity the API authenticates as. Both sides read the same two
       # values, so they cannot drift into "the bucket exists but nobody may
       # write to it".
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — run deploy/selfhost/bootstrap.sh}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — run deploy/selfhost/bootstrap.sh}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required — run deploy/selfhost/bootstrap.sh}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required — run deploy/selfhost/bootstrap.sh}
+      # 0.0.0.0, not 127.0.0.1: bound to loopback the api's requests would land
+      # on the api container's own loopback instead of this one.
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_VOLUMES: /data
+      # The web console is a second listener with its own auth surface. Nothing
+      # here needs it and it is not routed, so it stays off.
+      RUSTFS_CONSOLE_ENABLE: "false"
     volumes:
-      - s3data:/data
+      - rustfsdata:/data
     healthcheck:
       # An UNSIGNED GET / answered with the S3 error document proves the S3
       # handler is serving, not merely that a socket is open: a port check would
-      # pass while the filer is still starting, and the API would then fail its
-      # one-shot bucket provisioning and disable uploads for good.
-      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8333/ | grep -q AccessDenied"]
+      # pass while the store is still initialising, and the API would then fail
+      # its one-shot bucket provisioning and disable uploads for good.
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:9000/ | grep -q AccessDenied"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -265,7 +276,7 @@ services:
 volumes:
   pgdata:
   valkeydata:
-  s3data:
+  rustfsdata:
   acmedata:
   caddydata:
   caddyconfig:
